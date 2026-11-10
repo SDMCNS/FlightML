@@ -28,9 +28,15 @@ venv/
 *.swo
 
 # FlightML Specific: Data files & proprietary Eurocontrol archives (CRITICAL - DO NOT COMMIT)
-data/
+/data/*
+!/data/airports.csv
+!/data/runways.csv
+!/data/navaids.csv
+!/data/airport-frequencies.csv
+!/data/fuel/
+!/data/fuel/weekly_jet_fuel_prices.csv
+
 *.parquet
-*.csv
 *.tsv
 *.zip
 *.tar
@@ -41,6 +47,14 @@ data/
 *.pickle
 *.duckdb
 *.duckdb.wal
+
+# Ignore all other CSV files except approved open aeronautical catalogs & EIA benchmarks
+*.csv
+!/data/airports.csv
+!/data/runways.csv
+!/data/navaids.csv
+!/data/airport-frequencies.csv
+!/data/fuel/weekly_jet_fuel_prices.csv
 
 # Generated HTML visualization maps from CLI runs
 *.html
