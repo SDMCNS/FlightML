@@ -35,7 +35,7 @@ Detailed guides and manuals are available in the [**`docs/`**](docs/index.md) di
 
 ## ⚡ What is FlightML?
 
-FlightML ingests multi-gigabyte aeronautical datasets across historical and modern Eurocontrol archives (November 2016 baseline with 697,000+ flights; October 2025 modern archive with 934,000+ flights) and couples them with historical IEM ASOS/METAR weather observations and official weekly Jet-A spot fuel prices.
+FlightML ingests multi-gigabyte aeronautical datasets across historical and modern Eurocontrol archives and couples them with historical IEM ASOS/METAR weather observations and official weekly Jet-A spot fuel prices.
 
 It provides a unified platform to:
 - **Analyze 4D Radar Trajectories**: Detect airborne holding stacks, compute path extension ratios, and export interactive maps.
