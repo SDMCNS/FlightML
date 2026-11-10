@@ -84,8 +84,8 @@ flightml summary --period 202510
 ┌─────────────────────────────┬────────────────────────────────────────────┐
 │ Metric                      │ Value                                      │
 ├─────────────────────────────┼────────────────────────────────────────────┤
-│ Total Processed Flights     │ 934,141                                    │
-│ Unique Aircraft Operators   │ 814                                        │
+│ Total Processed Flights     │ XXX,XXX                                    │
+│ Unique Aircraft Operators   │ XXX                                        │
 │ Origin Airports (ADEP)      │ 1,622                                      │
 │ Destination Airports (ADES) │ 1,631                                      │
 │ Date Coverage               │ 2025-09-29 22:15:00 to 2025-11-01 02:40:00 │
