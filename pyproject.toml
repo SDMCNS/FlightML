@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flightml"
+version = "0.1.0"
+description = "Global Airspace Network Intelligence, 4D Trajectory ML & ASOS Weather Fusion"
+readme = "README.md"
+authors = [{ name = "FlightML Engineering Team" }]
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+keywords = [
+    "aviation",
+    "air-traffic-management",
+    "trajectory",
+    "machine-learning",
+    "weather",
+    "eurocontrol",
+    "simulation",
+    "duckdb",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "duckdb>=1.0.0",
+    "pyarrow>=15.0.0",
+    "pandas>=2.0.0",
+    "shapely>=2.0.0",
+    "requests>=2.28.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "scikit-learn>=1.3.0",
+    "numpy>=1.24.0",
+    "folium>=0.14.0",
+    "streamlit>=1.30.0",
+    "streamlit-folium>=0.16.0",
+]
+
+[project.optional-dependencies]
+gnn = [
+    "torch>=2.0.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "httpx>=0.24.0",
+]
+
+[project.scripts]
+flightml = "flightml.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/flightml/flightml"
+Documentation = "https://github.com/flightml/flightml/tree/main/docs"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["flightml*"]
+
+[tool.setuptools.package-data]
+flightml = ["*.html", "*.json"]

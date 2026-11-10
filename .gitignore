@@ -1,0 +1,46 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Test & Caches
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments
+.env
+.venv/
+env/
+venv/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# FlightML Specific: Data files & proprietary Eurocontrol archives (CRITICAL - DO NOT COMMIT)
+data/
+*.parquet
+*.csv
+*.tsv
+*.zip
+*.tar
+*.gz
+*.bz2
+*.7z
+*.pkl
+*.pickle
+*.duckdb
+*.duckdb.wal
+
+# Generated HTML visualization maps from CLI runs
+*.html
