@@ -1036,9 +1036,8 @@ with tab8:
                 "Operator": s.operator,
                 "Aircraft": s.ac_type,
                 "Tail Swap Pair": f"{s.delayed_tail_reg} ⇄ {s.donor_tail_reg}",
-                "Delayed Outbound Leg": f"#{s.delayed_outbound_flight_id} (➔ {s.delayed_outbound_ades} @ {s.delayed_outbound_sched_dep[-8:-3]})",
-                "Donor Outbound Leg": f"#{s.donor_outbound_flight_id} (➔ {s.donor_outbound_ades} @ {s.donor_outbound_sched_dep[-8:-3]})",
-                "Donor Idle Slack": f"{s.donor_available_slack_min:.0f} min",
+                "Delayed Outbound Leg": f"#{s.delayed_outbound_flight_id} (➔ {s.delayed_outbound_ades} @ {s.delayed_outbound_std[-8:-3] if len(s.delayed_outbound_std) >= 8 else s.delayed_outbound_std})",
+                "Donor Outbound Leg": f"#{s.donor_outbound_flight_id} (➔ {s.donor_outbound_ades} @ {s.donor_outbound_std[-8:-3] if len(s.donor_outbound_std) >= 8 else s.donor_outbound_std})",
                 "Baseline Delay": f"{s.baseline_reactionary_delay_min:.0f} min",
                 "Post-Swap Delay": f"{s.post_swap_reactionary_delay_min:.0f} min",
                 "Net Delay Saved": f"-{s.net_delay_saved_min:.0f} min",
@@ -1075,13 +1074,13 @@ with tab8:
     if prox_rep.events:
         prox_rows = [
             {
-                "Epoch (UTC)": e.epoch_utc,
+                "Timestamp (UTC)": e.timestamp_utc,
                 "Severity": e.severity,
-                "Aircraft Pair": f"{e.operator_a} #{e.flight_id_a} ({e.ac_type_a}) ⇄ {e.operator_b} #{e.flight_id_b} ({e.ac_type_b})",
+                "Aircraft Pair": f"{e.operator_1} #{e.flight_1_id} ({e.ac_type_1}) ⇄ {e.operator_2} #{e.flight_2_id} ({e.ac_type_2})",
+                "Routes": f"{e.route_1} ⇄ {e.route_2}",
                 "Horizontal Sep": f"{e.horizontal_sep_nm:.2f} nm",
                 "Vertical Sep": f"{e.vertical_sep_ft:.0f} ft",
-                "Flight Level": f"FL{e.flight_level_a:.0f} / FL{e.flight_level_b:.0f}",
-                "Relative Closure": f"{e.relative_closure_kts:.0f} kts",
+                "Flight Level": f"FL{e.fl_1:.0f} / FL{e.fl_2:.0f}",
                 "Coordinates": f"({e.latitude:.2f}°, {e.longitude:.2f}°)",
             }
             for e in prox_rep.events
