@@ -1244,11 +1244,6 @@ with tab8:
     pe3.metric("Co-Altitude Proximity Pairs", f"{prox_rep.events_detected} pairs")
     pe4.metric("Loss-of-Sep Alerts (<3nm)", f"{prox_rep.loss_of_sep_alerts} alerts")
 
-    # Render interactive map with both 5x5 grid saturation and conflict pins
-    cs_grid_data = compute_hourly_grid_saturation(ds, hour_utc=cs_hr)
-    cs_map = create_grid_saturation_map(cs_grid_data, proximity_events=prox_rep.events)
-    st_folium(cs_map, width=1200, height=500, key=f"cs_prox_map_{selected_period}_{cs_hr}_{cs_nm}")
-
     if prox_rep.events:
         prox_rows = [
             {
@@ -1264,6 +1259,31 @@ with tab8:
             for e in prox_rep.events
         ]
         st.dataframe(pd.DataFrame(prox_rows), use_container_width=True)
+
+        map_state_key = f"show_cs_map_{selected_period}"
+        if map_state_key not in st.session_state:
+            st.session_state[map_state_key] = False
+
+        col_btn_map1, col_btn_map2 = st.columns([1, 3])
+        with col_btn_map1:
+            if not st.session_state[map_state_key]:
+                if st.button("🗺️ View Conflicts on Airspace Map", key=f"btn_open_cs_map_{selected_period}"):
+                    st.session_state[map_state_key] = True
+                    st.rerun()
+            else:
+                if st.button("✖️ Hide Conflict Map", key=f"btn_close_cs_map_{selected_period}"):
+                    st.session_state[map_state_key] = False
+                    st.rerun()
+
+        if st.session_state[map_state_key]:
+            st.caption(
+                "🔴 **Red Pins:** Loss-of-Separation Alerts (`< 3.0 nm` horiz & `< 1,000 ft` vert) | "
+                "🟠 **Orange Pins:** High-Proximity Co-Altitude Pairs (`3.0–5.0 nm` horiz & `≤ 1,000 ft` vert) "
+                "overlaid on the $5^\\circ \\times 5^\\circ$ hourly airspace complexity grid."
+            )
+            cs_grid_data = compute_hourly_grid_saturation(ds, hour_utc=cs_hr)
+            cs_map = create_grid_saturation_map(cs_grid_data, proximity_events=prox_rep.events)
+            st_folium(cs_map, width=1200, height=500, key=f"cs_prox_map_{selected_period}_{cs_hr}_{cs_nm}")
     else:
         st.info("No co-altitude pairs detected within the selected threshold at this hour. Try increasing the horizontal proximity slider or selecting peak daytime hours (08:00–17:00 UTC).")
 
