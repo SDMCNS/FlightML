@@ -1,31 +1,9 @@
 from __future__ import annotations
 
-import sys
-import importlib
 import altair as alt
 import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
-
-# Hot-reload FlightML modules in running Streamlit dev sessions
-for _mod in [
-    "flightml.eval.fuel_carbon",
-    "flightml.eval.jet_fuel_prices",
-    "flightml.data.dataset",
-    "flightml.geo.conflict_scanner",
-    "flightml.geo.rnp_navaid_analyzer",
-    "flightml.sim.tail_swap_optimizer",
-    "flightml.sim.gdp_optimizer",
-    "flightml.viz.map_builder",
-    "flightml.viz.html_exporter",
-    "flightml.eval.crco_economics",
-    "flightml.eval.surface_taxi",
-]:
-    if _mod in sys.modules:
-        try:
-            importlib.reload(sys.modules[_mod])
-        except Exception:
-            pass
 
 from flightml.data.dataset import FlightDataset
 from flightml.data.archive_ingest import list_available_periods
@@ -132,19 +110,70 @@ selected_period = st.sidebar.selectbox(
 )
 
 
+@st.cache_resource(show_spinner=False)
 def get_dataset(period: str) -> FlightDataset:
-    """Session-isolated dataset accessor preventing cross-thread DuckDB lock contention."""
-    cache_key = f"dataset_{period}"
-    if cache_key not in st.session_state:
-        st.session_state[cache_key] = FlightDataset(period=period)
-    return st.session_state[cache_key]
+    """Cached dataset accessor preventing repeated DuckDB view initialization on reruns."""
+    return FlightDataset(period=period)
 
 
+@st.cache_resource(show_spinner=False)
 def get_metar_client() -> MetarClient:
-    """Session-isolated IEM ASOS METAR client."""
-    if "metar_client" not in st.session_state:
-        st.session_state["metar_client"] = MetarClient()
-    return st.session_state["metar_client"]
+    """Cached IEM ASOS METAR client."""
+    return MetarClient()
+
+
+@st.cache_data(show_spinner=False)
+def _cached_grid_saturation(period: str, hour_utc: int):
+    return compute_hourly_grid_saturation(get_dataset(period), hour_utc=hour_utc)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_flight_navaids_rnp(period: str, flight_id: int):
+    return analyze_flight_navaids_and_rnp(get_dataset(period), int(flight_id))
+
+
+@st.cache_data(show_spinner=False)
+def _cached_world_navaids(
+    period: str,
+    min_lat: float,
+    max_lat: float,
+    min_lon: float,
+    max_lon: float,
+    nav_types_tuple: tuple[str, ...],
+    search_query: str | None,
+    limit: int,
+):
+    return query_unified_navaids(
+        get_dataset(period),
+        min_lat=min_lat,
+        max_lat=max_lat,
+        min_lon=min_lon,
+        max_lon=max_lon,
+        nav_types=list(nav_types_tuple),
+        search_query=search_query,
+        limit=limit,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _cached_tail_swaps(period: str, operator: str | None, hub_airport: str | None):
+    return optimize_hub_tail_swaps(get_dataset(period), operator=operator, hub_airport=hub_airport)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_proximity_scan(period: str, hour: int, horiz_sep_nm: float):
+    return scan_airspace_proximity_events(get_dataset(period), hour=hour, horiz_sep_nm=horiz_sep_nm)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_gdp_optimizer(period: str, target_airport: str, start_hour: int, end_hour: int, aar: int):
+    return optimize_ground_delay_program(
+        get_dataset(period),
+        target_airport=target_airport,
+        start_hour=start_hour,
+        end_hour=end_hour,
+        degraded_capacity_rate_per_hr=aar,
+    )
 
 
 def get_sample_flight_id(ds: FlightDataset) -> int:
@@ -433,7 +462,7 @@ with tab1:
             format="%02d:00 UTC",
             key=f"grid_map_hour_{selected_period}",
         )
-    grid_sat_data = compute_hourly_grid_saturation(ds, hour_utc=map_hour_utc)
+    grid_sat_data = _cached_grid_saturation(selected_period, map_hour_utc)
     with col_gm2:
         gm_c1, gm_c2, gm_c3, gm_c4 = st.columns(4)
         gm_c1.metric("Active 5°×5° Squares", f"{grid_sat_data['total_active_squares']}")
@@ -442,7 +471,13 @@ with tab1:
         gm_c4.metric("Peak Square Avg/Hr", f"{grid_sat_data['max_avg_flights_per_hour']:.1f} flts/hr")
 
     grid_map = create_grid_saturation_map(grid_sat_data)
-    st_folium(grid_map, width=1200, height=540, key=f"folium_grid_sat_{selected_period}_{map_hour_utc}")
+    st_folium(
+        grid_map,
+        width=1200,
+        height=540,
+        returned_objects=[],
+        key=f"folium_grid_sat_{selected_period}_{map_hour_utc}",
+    )
 
     with st.expander(f"📊 View 5° × 5° Square Saturation Table for {map_hour_utc:02d}:00–{map_hour_utc:02d}:59 UTC", expanded=False):
         if grid_sat_data.get("squares"):
@@ -552,7 +587,7 @@ with tab2:
         st.info(f"📍 **Active Flight:** `{ds.format_flight_label(flight)}`")
         trajs = ds.get_trajectory(int(active_flight_id))
         metrics = analyze_trajectory(trajs["actual"], trajs["planned"])
-        nav_rnp_rep = analyze_flight_navaids_and_rnp(ds, int(active_flight_id))
+        nav_rnp_rep = _cached_flight_navaids_rnp(selected_period, int(active_flight_id))
 
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Route", f"{flight['adep']} ➔ {flight['ades']}")
@@ -600,6 +635,7 @@ with tab2:
             m,
             width=1200,
             height=540,
+            returned_objects=[],
             key=f"traj_map_{selected_period}_{active_flight_id}_{int(show_route_navaids)}_{len(filtered_route_navaids)}",
         )
 
@@ -868,13 +904,13 @@ with tab_world_nav:
         )
 
     min_lat, max_lat, min_lon, max_lon, c_lat, c_lon, z_lvl = WORLD_REGIONS[wn_region]
-    world_nav_df = query_unified_navaids(
-        ds,
+    world_nav_df = _cached_world_navaids(
+        selected_period,
         min_lat=min_lat,
         max_lat=max_lat,
         min_lon=min_lon,
         max_lon=max_lon,
-        nav_types=wn_types if wn_types else ["NONE"],
+        nav_types_tuple=tuple(wn_types if wn_types else ["NONE"]),
         search_query=wn_search if wn_search else None,
         limit=wn_limit,
     )
@@ -904,6 +940,7 @@ with tab_world_nav:
         world_map,
         width=1200,
         height=560,
+        returned_objects=[],
         key=f"world_nav_map_{selected_period}_{wn_region}_{'_'.join(wn_types)}_{wn_search}_{wn_limit}",
     )
 
@@ -1268,7 +1305,13 @@ with tab7:
 
         st.subheader("🗺️ Dual-Trajectory Comparison Map (Green = Most Efficient Twin | Red = Least Efficient Twin)")
         twin_map = render_twin_comparison_map(ds, twin_comp)
-        st_folium(twin_map, width=1200, height=500, key=f"twin_map_{selected_period}_{twin_comp.fast_id}_{twin_comp.slow_id}")
+        st_folium(
+            twin_map,
+            width=1200,
+            height=500,
+            returned_objects=[],
+            key=f"twin_map_{selected_period}_{twin_comp.fast_id}_{twin_comp.slow_id}",
+        )
 
         if twin_comp.divergence_lat and twin_comp.divergence_lon:
             st.warning(
@@ -1482,8 +1525,8 @@ with tab8:
     ).strip().upper()
 
     ts_op_param = None if ts_op_choice.startswith("All") else ts_op_choice
-    ts_res = optimize_hub_tail_swaps(
-        ds,
+    ts_res = _cached_tail_swaps(
+        selected_period,
         operator=ts_op_param,
         hub_airport=ts_hub if ts_hub else None,
     )
@@ -1524,7 +1567,7 @@ with tab8:
     cs_hr = col_cs1.slider("Scan Hour (UTC)", 0, 23, 10, format="%02d:00 UTC", key=f"cs_hr_{selected_period}")
     cs_nm = col_cs2.slider("Horizontal Proximity Threshold (nm)", 2.0, 10.0, 5.0, step=0.5, key=f"cs_nm_{selected_period}")
 
-    prox_rep = scan_airspace_proximity_events(ds, hour=cs_hr, horiz_sep_nm=cs_nm)
+    prox_rep = _cached_proximity_scan(selected_period, hour=cs_hr, horiz_sep_nm=cs_nm)
     pe1, pe2, pe3, pe4 = st.columns(4)
     pe1.metric("Core Traffic Date Scanned", prox_rep.date_str)
     pe2.metric("Scan Window (UTC)", f"{prox_rep.hour_utc:02d}:00–{prox_rep.hour_utc:02d}:59")
@@ -1573,7 +1616,13 @@ with tab8:
                 hour_utc=cs_hr,
                 date_str=prox_rep.date_str,
             )
-            st_folium(cs_map, width=1200, height=500, key=f"cs_prox_map_{selected_period}_{cs_hr}_{cs_nm}")
+            st_folium(
+                cs_map,
+                width=1200,
+                height=500,
+                returned_objects=[],
+                key=f"cs_prox_map_{selected_period}_{cs_hr}_{cs_nm}",
+            )
     else:
         st.info("No co-altitude pairs detected within the selected threshold at this hour. Try increasing the horizontal proximity slider or selecting peak daytime hours (08:00–17:00 UTC).")
 
@@ -1600,12 +1649,12 @@ with tab8:
         key=f"gdp_win_{selected_period}",
     )
 
-    gdp_res = optimize_ground_delay_program(
-        ds,
+    gdp_res = _cached_gdp_optimizer(
+        selected_period,
         target_airport=gdp_apt if gdp_apt else "EGLL",
         start_hour=int(gdp_window[0]),
         end_hour=int(gdp_window[1]),
-        degraded_capacity_rate_per_hr=int(gdp_aar),
+        aar=int(gdp_aar),
     )
     g1, g2, g3, g4 = st.columns(4)
     g1.metric(
