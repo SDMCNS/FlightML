@@ -105,6 +105,11 @@ from flightml.viz.map_builder import (
     create_conflict_map,
     create_world_navaids_map,
 )
+from flightml.viz.html_exporter import (
+    generate_static_html_report,
+    REPORT_PAGE_KEYS,
+    REPORT_PAGE_TITLES,
+)
 
 __all__ = [
     "__version__",
@@ -193,4 +198,7 @@ __all__ = [
     "create_grid_saturation_map",
     "create_conflict_map",
     "create_world_navaids_map",
+    "generate_static_html_report",
+    "REPORT_PAGE_KEYS",
+    "REPORT_PAGE_TITLES",
 ]

@@ -17,6 +17,7 @@ for _mod in [
     "flightml.sim.tail_swap_optimizer",
     "flightml.sim.gdp_optimizer",
     "flightml.viz.map_builder",
+    "flightml.viz.html_exporter",
     "flightml.eval.crco_economics",
     "flightml.eval.surface_taxi",
 ]:
@@ -89,6 +90,10 @@ from flightml.viz.map_builder import (
     create_grid_saturation_map,
     create_conflict_map,
     create_world_navaids_map,
+)
+from flightml.viz.html_exporter import (
+    generate_static_html_report,
+    REPORT_PAGE_TITLES,
 )
 
 
@@ -238,6 +243,98 @@ else:
 
 st.session_state[f"active_flight_id_{selected_period}"] = active_flight_id
 
+
+def render_page_export_bar(page_key: str, widget_suffix: str) -> None:
+    """Render an inline one-click Static HTML Report generator & download button for any page."""
+    title_lbl = REPORT_PAGE_TITLES.get(page_key, "Static HTML Report")
+    state_key = f"html_export_blob_{selected_period}_{page_key}_{widget_suffix}"
+    c_exp1, c_exp2 = st.columns([1.8, 2.2])
+    with c_exp1:
+        if st.button(
+            f"📥 Prepare Static HTML Report (with Images)",
+            key=f"btn_prep_html_{selected_period}_{page_key}_{widget_suffix}",
+            help=f"Render '{title_lbl}' with embedded high-DPI Base64 PNG charts & maps into a self-contained .html file.",
+        ):
+            with st.spinner(f"Rendering static HTML report & Base64 PNG figures for {title_lbl}..."):
+                st.session_state[state_key] = generate_static_html_report(
+                    ds,
+                    page_key=page_key,
+                    flight_id=int(active_flight_id),
+                    hour_utc=int(st.session_state.get(f"grid_map_hour_{selected_period}", 10)),
+                    show_navaids=bool(st.session_state.get(f"tog_route_navaids_{selected_period}", True)),
+                    nav_type_filter=st.session_state.get(f"flt_route_navaids_{selected_period}"),
+                    world_nav_types=st.session_state.get(f"wn_types_{selected_period}"),
+                    world_region_name=str(st.session_state.get(f"wn_region_{selected_period}", "🌍 Entire World")),
+                    world_search_query=str(st.session_state.get(f"wn_search_{selected_period}", "")) or None,
+                    world_limit=int(st.session_state.get(f"wn_limit_{selected_period}", 2500)),
+                    twin_adep=str(st.session_state.get(f"t_adep_{selected_period}", "RKSI")),
+                    twin_ades=str(st.session_state.get(f"t_ades_{selected_period}", "EGLL")),
+                    twin_ac=str(st.session_state.get(f"t_ac_{selected_period}", "B77W")),
+                    rec_adep=str(st.session_state.get(f"r_adep_{selected_period}", "EGLL")),
+                    rec_ades=str(st.session_state.get(f"r_ades_{selected_period}", "KORD")),
+                    rec_op=str(st.session_state.get(f"r_op_{selected_period}", "BAW")),
+                    conflict_hour=int(st.session_state.get(f"cs_hr_{selected_period}", 10)),
+                    conflict_nm=float(st.session_state.get(f"cs_nm_{selected_period}", 5.0)),
+                    gdp_airport=str(st.session_state.get(f"gdp_apt_{selected_period}", "EGLL")),
+                    gdp_aar=int(st.session_state.get(f"gdp_aar_{selected_period}", 25)),
+                )
+    with c_exp2:
+        if state_key in st.session_state:
+            fname = f"flightml_{page_key}_{selected_period}_{active_flight_id}.html"
+            st.download_button(
+                label=f"⬇️ Download {fname} (Self-Contained HTML + PNGs)",
+                data=st.session_state[state_key],
+                file_name=fname,
+                mime="text/html",
+                key=f"dl_html_{selected_period}_{page_key}_{widget_suffix}",
+            )
+
+
+with st.sidebar.expander("📄 Export Static HTML Report (with Images)", expanded=True):
+    st.caption("Export any page (or the full executive bundle) to a standalone `.html` file with embedded high-DPI Base64 PNG charts & maps.")
+    sb_page_choice = st.selectbox(
+        "Select Page to Export",
+        options=list(REPORT_PAGE_TITLES.keys()),
+        format_func=lambda k: REPORT_PAGE_TITLES[k],
+        index=1,
+        key=f"sb_export_page_{selected_period}",
+    )
+    sb_state_key = f"sb_html_blob_{selected_period}_{sb_page_choice}"
+    if st.button("🔨 Generate Static HTML Report", key=f"btn_sb_gen_html_{selected_period}"):
+        with st.spinner(f"Building {REPORT_PAGE_TITLES[sb_page_choice]}..."):
+            st.session_state[sb_state_key] = generate_static_html_report(
+                ds,
+                page_key=sb_page_choice,
+                flight_id=int(active_flight_id),
+                hour_utc=int(st.session_state.get(f"grid_map_hour_{selected_period}", 10)),
+                show_navaids=bool(st.session_state.get(f"tog_route_navaids_{selected_period}", True)),
+                nav_type_filter=st.session_state.get(f"flt_route_navaids_{selected_period}"),
+                world_nav_types=st.session_state.get(f"wn_types_{selected_period}"),
+                world_region_name=str(st.session_state.get(f"wn_region_{selected_period}", "🌍 Entire World")),
+                world_search_query=str(st.session_state.get(f"wn_search_{selected_period}", "")) or None,
+                world_limit=int(st.session_state.get(f"wn_limit_{selected_period}", 2500)),
+                twin_adep=str(st.session_state.get(f"t_adep_{selected_period}", "RKSI")),
+                twin_ades=str(st.session_state.get(f"t_ades_{selected_period}", "EGLL")),
+                twin_ac=str(st.session_state.get(f"t_ac_{selected_period}", "B77W")),
+                rec_adep=str(st.session_state.get(f"r_adep_{selected_period}", "EGLL")),
+                rec_ades=str(st.session_state.get(f"r_ades_{selected_period}", "KORD")),
+                rec_op=str(st.session_state.get(f"r_op_{selected_period}", "BAW")),
+                conflict_hour=int(st.session_state.get(f"cs_hr_{selected_period}", 10)),
+                conflict_nm=float(st.session_state.get(f"cs_nm_{selected_period}", 5.0)),
+                gdp_airport=str(st.session_state.get(f"gdp_apt_{selected_period}", "EGLL")),
+                gdp_aar=int(st.session_state.get(f"gdp_aar_{selected_period}", 25)),
+            )
+            st.success("Report ready to download!")
+    if sb_state_key in st.session_state:
+        sb_fname = f"flightml_{sb_page_choice}_{selected_period}_{active_flight_id}.html"
+        st.download_button(
+            label=f"⬇️ Download {sb_fname}",
+            data=st.session_state[sb_state_key],
+            file_name=sb_fname,
+            mime="text/html",
+            key=f"btn_sb_dl_html_{selected_period}_{sb_page_choice}",
+        )
+
 st.sidebar.markdown(f"**Period Active:** `{selected_period}`")
 st.sidebar.markdown("---")
 st.sidebar.markdown(
@@ -279,6 +376,7 @@ st.markdown(
 
 with tab_group_perf:
     st.caption("Grouped Single-Flight Performance Views: Vertical Profile (CDO/CCO), Delay & Runway Safety Diagnostics, and Fuel/Carbon/CRCO (€) Accounting.")
+    render_page_export_bar("flight_performance_eco", "tab_perf")
     tab4, tab5, tab6 = st.tabs(
         [
             "📉 Vertical Profile: CDO & CCO",
@@ -289,6 +387,7 @@ with tab_group_perf:
 
 with tab_group_bench:
     st.caption("Grouped Corridor & City-Pair Benchmarking: Twin-Flight Efficiency Comparison and Longitudinal Recurring Series / Diurnal Bank Trends.")
+    render_page_export_bar("corridor_twin_benchmarks", "tab_bench")
     tab7, tab3 = st.tabs(
         [
             "👯 Twin-Flight Efficiency Benchmark",
@@ -298,6 +397,7 @@ with tab_group_bench:
 
 with tab_group_macro:
     st.caption("Grouped Structural & Documentation Views: Cross-Period Macro Evolution / AIRAC Diffing and Complete Methodology & KPI Reference.")
+    render_page_export_bar("macro_reference", "tab_macro")
     tab9, tab10 = st.tabs(
         [
             "📈 Macro Evolution & AIRAC Diff",
@@ -308,6 +408,7 @@ with tab_group_macro:
 # ----------------- TAB 1: Network Overview & Airspace Map -----------------
 with tab1:
     st.header(f"Global Network Status & Airspace Saturation ({selected_period})")
+    render_page_export_bar("airspace_overview", "tab1")
     stats = ds.get_summary()
 
     c1, c2, c3, c4 = st.columns(4)
@@ -444,6 +545,7 @@ with tab1:
 # ----------------- TAB 2: Trajectory Explorer -----------------
 with tab2:
     st.header("4D Trajectory, Active Route Navaids, RNP/RNAV Capability & Holding Stack Visualizer")
+    render_page_export_bar("trajectory_rnp", "tab2")
 
     flight = ds.get_flight(int(active_flight_id))
     if flight:
@@ -715,6 +817,7 @@ with tab2:
 # ----------------- TAB WORLD NAV: Global Navaids World Map Explorer -----------------
 with tab_world_nav:
     st.header("🌍 Global Radio Navaids World Map & Station Directory")
+    render_page_export_bar("global_navaids", "tab_world_nav")
     st.markdown(
         "Explore **all global terrestrial radio navigation aids** (`VOR-DME / VORTAC`, `DME / TACAN`, `VOR`, `ILS / LOC`, and `NDB`) "
         "fused across the X-Plane 1100 global navigation database and OurAirports navaid registry. "
@@ -1223,6 +1326,7 @@ with tab7:
 # ----------------- TAB 8: What-If & Stress Tests -----------------
 with tab8:
     st.header("Counterfactual Simulations, Airspace Conflict Scanner & Operations Research")
+    render_page_export_bar("what_if_stress_tests", "tab8")
 
     st.subheader("Scenario A: Turnaround Buffer Scheduling Optimization")
     st.markdown(
