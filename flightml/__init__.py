@@ -102,6 +102,7 @@ from flightml.sim.tail_swap_optimizer import (
 from flightml.viz.map_builder import (
     create_trajectory_map,
     create_grid_saturation_map,
+    create_conflict_map,
     create_world_navaids_map,
 )
 
@@ -190,5 +191,6 @@ __all__ = [
     # Viz
     "create_trajectory_map",
     "create_grid_saturation_map",
+    "create_conflict_map",
     "create_world_navaids_map",
 ]

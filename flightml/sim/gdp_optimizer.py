@@ -72,12 +72,15 @@ class GDPResult:
 
 def optimize_ground_delay_program(
     dataset: FlightDataset,
-    target_airport: str = "EGLL",
-    program_date: str = "2016-11-01",
+    target_airport: str | None = None,
+    program_date: str | None = None,
     start_hour: int = 6,
-    end_hour: int = 12,
-    degraded_capacity_rate_per_hr: int = 25,
+    end_hour: int = 14,
+    degraded_capacity_rate_per_hr: int | None = None,
     fuel_price_per_kg: float | None = None,
+    *,
+    airport_icao: str | None = None,
+    declared_aar_per_hour: int | None = None,
 ) -> GDPResult:
     """
     Ration-by-Schedule (RBS) Ground Delay Program (GDP) Optimizer.
@@ -87,9 +90,34 @@ def optimize_ground_delay_program(
     to hold flights at their origin gates rather than burning fuel in holding stacks.
     Automatically resolves the EIA weekly jet fuel spot price (in EUR) for the program date.
     """
+    resolved_airport = (airport_icao or target_airport or "EGLL").strip().upper()
+    resolved_rate = int(declared_aar_per_hour if declared_aar_per_hour is not None else (degraded_capacity_rate_per_hr if degraded_capacity_rate_per_hr is not None else 25))
+
+    # Auto-resolve busiest arrival date for the target airport if program_date is omitted or has 0 arrivals
+    if not program_date:
+        try:
+            dt_df = dataset.query(
+                """
+                SELECT substr(CAST(filed_arrival_time AS VARCHAR), 1, 10) AS dt, COUNT(*) AS cnt
+                FROM flights
+                WHERE ades = ? AND filed_arrival_time IS NOT NULL
+                GROUP BY dt
+                ORDER BY cnt DESC
+                LIMIT 1
+                """,
+                [resolved_airport],
+            )
+            if not dt_df.empty and dt_df.iloc[0]["dt"]:
+                program_date = str(dt_df.iloc[0]["dt"])
+        except Exception:
+            pass
+    if not program_date:
+        program_date = "2025-10-16" if str(getattr(dataset, "period", "")).startswith("2025") else "2016-11-11"
+
     if fuel_price_per_kg is None:
         fuel_price_per_kg = get_weekly_fuel_price(program_date, period_hint=dataset.period).price_eur_per_kg
-    target_airport = target_airport.upper()
+    target_airport = resolved_airport
+    degraded_capacity_rate_per_hr = resolved_rate
     t_start = f"{program_date} {start_hour:02d}:00:00"
     t_end = f"{program_date} {end_hour:02d}:00:00"
 

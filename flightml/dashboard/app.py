@@ -15,6 +15,7 @@ for _mod in [
     "flightml.geo.conflict_scanner",
     "flightml.geo.rnp_navaid_analyzer",
     "flightml.sim.tail_swap_optimizer",
+    "flightml.sim.gdp_optimizer",
     "flightml.viz.map_builder",
     "flightml.eval.crco_economics",
     "flightml.eval.surface_taxi",
@@ -86,6 +87,7 @@ from flightml.eval.jet_fuel_prices import get_all_weekly_fuel_prices_df
 from flightml.viz.map_builder import (
     create_trajectory_map,
     create_grid_saturation_map,
+    create_conflict_map,
     create_world_navaids_map,
 )
 
@@ -1458,12 +1460,15 @@ with tab8:
 
         if st.session_state[map_state_key]:
             st.caption(
-                "🔴 **Red Pins:** Loss-of-Separation Alerts (`< 3.0 nm` horiz & `< 1,000 ft` vert) | "
-                "🟠 **Orange Pins:** High-Proximity Co-Altitude Pairs (`3.0–5.0 nm` horiz & `≤ 1,000 ft` vert) "
-                "overlaid on the $5^\\circ \\times 5^\\circ$ hourly airspace complexity grid."
+                "🔴 **Red Pins:** Loss-of-Separation Alerts (`< 3.0 nm` horiz & `≤ 1,000 ft` vert) | "
+                "🟠 **Orange Pins:** High-Proximity Co-Altitude Pairs (`3.0–5.0 nm` horiz & `≤ 1,000 ft` vert). "
+                "Click any pin to inspect the two aircraft, routes, flight levels, and separation distances."
             )
-            cs_grid_data = compute_hourly_grid_saturation(ds, hour_utc=cs_hr)
-            cs_map = create_grid_saturation_map(cs_grid_data, proximity_events=prox_rep.events)
+            cs_map = create_conflict_map(
+                proximity_events=prox_rep.events,
+                hour_utc=cs_hr,
+                date_str=prox_rep.date_str,
+            )
             st_folium(cs_map, width=1200, height=500, key=f"cs_prox_map_{selected_period}_{cs_hr}_{cs_nm}")
     else:
         st.info("No co-altitude pairs detected within the selected threshold at this hour. Try increasing the horizontal proximity slider or selecting peak daytime hours (08:00–17:00 UTC).")
@@ -1471,21 +1476,75 @@ with tab8:
     st.divider()
     st.subheader("Scenario F: Ration-by-Schedule Ground Delay Program (GDP / ATFM Slot) Optimizer")
     st.markdown(
-        "Simulates how enforcing an Airport Arrival Rate (`AAR`) cap via ATFM Ground Delay slots shifts expensive airborne holding stacks "
-        "in the 40nm ASMA cylinder onto the departure ground at 7% idle/gate fuel burn, quantifying net fuel (`kg`), CO₂ (`kg`), and Euro (`€`) savings."
+        "Simulates how enforcing a degraded Airport Arrival Rate (`AAR`) cap via ATFM Ground Delay slots (`CTOT` / `CTA`) shifts expensive airborne holding stacks "
+        "onto the origin departure gate with engines off, quantifying net fuel (`kg`), CO₂ (`kg`), and Euro (`€`) savings."
     )
-    col_gdp1, col_gdp2 = st.columns(2)
+    col_gdp1, col_gdp2, col_gdp3 = st.columns([1.5, 2, 1.5])
     gdp_apt = col_gdp1.text_input("Arrival Hub ICAO", value="EGLL", key=f"gdp_apt_{selected_period}").strip().upper()
-    gdp_aar = col_gdp2.slider("Target Airport Arrival Rate Cap (AAR arrivals/hr)", 15, 65, 36, key=f"gdp_aar_{selected_period}")
-    if st.button("Run Ground Delay Program (GDP) Optimizer", key=f"btn_gdp_{selected_period}"):
-        gdp_res = optimize_ground_delay_program(ds, airport_icao=gdp_apt, declared_aar_per_hour=gdp_aar)
-        g1, g2, g3, g4 = st.columns(4)
-        g1.metric("Peak Unregulated Demand", f"{gdp_res.peak_hourly_unregulated_arrivals}/hr", f"Cap: {gdp_res.declared_aar_per_hour}/hr")
-        g2.metric("Slotted Flights", f"{gdp_res.slotted_flights_count} / {gdp_res.total_arrivals_analyzed}")
-        g3.metric("Airborne Holding Absorbed", f"{gdp_res.airborne_holding_saved_min:.1f} min", f"-{gdp_res.net_fuel_saved_kg:,.0f} kg Jet-A")
-        g4.metric("Net Fuel Cost Saved (€)", f"€{gdp_res.net_fuel_cost_saved_eur:,.2f} EUR", f"-{gdp_res.net_co2_saved_kg:,.0f} kg CO₂")
-        if gdp_res.hourly_slots:
-            st.dataframe(pd.DataFrame([h.__dict__ for h in gdp_res.hourly_slots]), use_container_width=True)
+    gdp_aar = col_gdp2.slider(
+        "Degraded Airport Arrival Rate Cap (AAR arrivals/hr)",
+        min_value=10,
+        max_value=55,
+        value=25,
+        key=f"gdp_aar_{selected_period}",
+    )
+    gdp_window = col_gdp3.slider(
+        "GDP Window (UTC Hours)",
+        min_value=0,
+        max_value=24,
+        value=(6, 14),
+        key=f"gdp_win_{selected_period}",
+    )
+
+    gdp_res = optimize_ground_delay_program(
+        ds,
+        target_airport=gdp_apt if gdp_apt else "EGLL",
+        start_hour=int(gdp_window[0]),
+        end_hour=int(gdp_window[1]),
+        degraded_capacity_rate_per_hr=int(gdp_aar),
+    )
+    g1, g2, g3, g4 = st.columns(4)
+    g1.metric(
+        "Regulated Arrival Window",
+        f"{gdp_res.program_start[:10]} ({gdp_window[0]:02d}:00–{gdp_window[1]:02d}:00)",
+        f"Declared AAR Cap: {gdp_res.degraded_capacity_rate_per_hr}/hr",
+    )
+    g2.metric(
+        "Flights Regulated (RBS Slots)",
+        f"{gdp_res.total_flights_regulated:,} arrivals",
+        f"Avg Slot Delay: {(gdp_res.total_ground_delay_assigned_min / gdp_res.total_flights_regulated if gdp_res.total_flights_regulated else 0.0):.1f} min",
+    )
+    g3.metric(
+        "Airborne Holding Prevented",
+        f"{gdp_res.total_airborne_delay_prevented_min:,.1f} min",
+        f"-{gdp_res.total_fuel_saved_kg:,.0f} kg Jet-A saved",
+    )
+    g4.metric(
+        "Net Fuel Cost Saved (€)",
+        f"€{gdp_res.total_fuel_cost_saved_eur:,.2f} EUR",
+        f"-{gdp_res.total_co2_saved_kg:,.0f} kg CO₂ prevented",
+    )
+
+    if gdp_res.slot_assignments:
+        slot_rows = [
+            {
+                "Flight ID": f"#{s.ectrl_id}",
+                "Operator": s.ac_operator,
+                "Origin (ADEP)": s.adep,
+                "Hub (ADES)": s.ades,
+                "Aircraft": s.ac_type,
+                "Filed ETA (UTC)": s.original_arrival_time[-8:] if len(s.original_arrival_time) >= 8 else s.original_arrival_time,
+                "Assigned CTA Slot": s.assigned_slot_time[-8:] if len(s.assigned_slot_time) >= 8 else s.assigned_slot_time,
+                "Ground Delay Assigned": f"{s.ground_delay_assigned_min:.1f} min",
+                "Holding Fuel Saved": f"{s.fuel_saved_kg:,.1f} kg",
+                "CO₂ Prevented": f"{s.co2_saved_kg:,.1f} kg",
+                "Fuel Cost Saved (€)": f"€{s.fuel_cost_saved_eur:,.2f}",
+            }
+            for s in gdp_res.slot_assignments[:60]
+        ]
+        st.dataframe(pd.DataFrame(slot_rows), use_container_width=True)
+    else:
+        st.info(f"No arrivals found for `{gdp_apt}` in the selected UTC window `{gdp_window[0]:02d}:00–{gdp_window[1]:02d}:00`.")
 
 # ----------------- TAB 9: Macro Evolution & AIRAC Diff -----------------
 with tab9:
