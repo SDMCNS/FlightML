@@ -8,6 +8,7 @@ import pandas as pd
 
 # Standard Aviation Jet-A Density: 0.804 kg/L (approx 3.043 kg per US Liquid Gallon)
 JET_A_KG_PER_GALLON = 3.043
+USD_TO_EUR_RATE = 0.925  # Standard ECB historical EUR/USD conversion (~0.925 EUR per USD)
 
 # Reference EIA / IATA Weekly Spot Prices for Kerosene-Type Jet Fuel (FOB US Gulf Coast / Rotterdam Benchmark)
 # Source: U.S. Energy Information Administration (EIA) Series EER_EPJK_PF4_RGC_DPG & IATA Fuel Price Monitor
@@ -114,6 +115,9 @@ class FuelPriceRecord:
     week_number: int
     week_start: str
     week_end: str
+    price_eur_per_gallon: float
+    price_eur_per_kg: float
+    price_eur_per_metric_ton: float
     price_usd_per_gallon: float
     price_usd_per_kg: float
     price_usd_per_metric_ton: float
@@ -124,12 +128,15 @@ class FuelPriceRecord:
 
 
 def get_all_weekly_fuel_prices_df() -> pd.DataFrame:
-    """Return historical weekly jet fuel prices DataFrame with $/gal, $/kg, and $/metric ton."""
+    """Return historical weekly jet fuel prices DataFrame with €/gal, €/kg, and €/metric ton."""
     rows = []
     for item in HISTORICAL_WEEKLY_PRICES:
-        gal_price = float(item["price_usd_per_gallon"])
-        kg_price = round(gal_price / JET_A_KG_PER_GALLON, 4)
-        ton_price = round(kg_price * 1000.0, 2)
+        gal_price_usd = float(item["price_usd_per_gallon"])
+        kg_price_usd = round(gal_price_usd / JET_A_KG_PER_GALLON, 4)
+        ton_price_usd = round(kg_price_usd * 1000.0, 2)
+        gal_price_eur = round(gal_price_usd * USD_TO_EUR_RATE, 3)
+        kg_price_eur = round(gal_price_eur / JET_A_KG_PER_GALLON, 4)
+        ton_price_eur = round(kg_price_eur * 1000.0, 2)
         rows.append({
             "period_id": item["period_id"],
             "year": item["year"],
@@ -137,9 +144,12 @@ def get_all_weekly_fuel_prices_df() -> pd.DataFrame:
             "week_label": f"{item['year']}-W{item['week_number']:02d} ({item['week_start']} to {item['week_end']})",
             "week_start": item["week_start"],
             "week_end": item["week_end"],
-            "price_usd_per_gallon": gal_price,
-            "price_usd_per_kg": kg_price,
-            "price_usd_per_metric_ton": ton_price,
+            "price_eur_per_gallon": gal_price_eur,
+            "price_eur_per_kg": kg_price_eur,
+            "price_eur_per_metric_ton": ton_price_eur,
+            "price_usd_per_gallon": gal_price_usd,
+            "price_usd_per_kg": kg_price_usd,
+            "price_usd_per_metric_ton": ton_price_usd,
             "source": item["source"],
         })
     return pd.DataFrame(rows)
@@ -150,7 +160,7 @@ def get_weekly_fuel_price(
     period_hint: str | None = None,
 ) -> FuelPriceRecord:
     """
-    Look up the exact historical average weekly jet fuel spot price for any given flight date/time.
+    Look up the exact historical average weekly jet fuel spot price (in Euros EUR) for any given flight date/time.
     Defaults to the period monthly average if the exact week falls outside bounds.
     """
     df = get_all_weekly_fuel_prices_df()
@@ -174,6 +184,9 @@ def get_weekly_fuel_price(
                 week_number=int(row["week_number"]),
                 week_start=str(row["week_start"]),
                 week_end=str(row["week_end"]),
+                price_eur_per_gallon=float(row["price_eur_per_gallon"]),
+                price_eur_per_kg=float(row["price_eur_per_kg"]),
+                price_eur_per_metric_ton=float(row["price_eur_per_metric_ton"]),
                 price_usd_per_gallon=float(row["price_usd_per_gallon"]),
                 price_usd_per_kg=float(row["price_usd_per_kg"]),
                 price_usd_per_metric_ton=float(row["price_usd_per_metric_ton"]),
@@ -184,27 +197,37 @@ def get_weekly_fuel_price(
     pid = str(period_hint or "201611")
     period_matched = df[df["period_id"] == pid]
     if not period_matched.empty:
-        avg_gal = round(float(period_matched["price_usd_per_gallon"].mean()), 3)
-        avg_kg = round(avg_gal / JET_A_KG_PER_GALLON, 4)
+        avg_gal_usd = round(float(period_matched["price_usd_per_gallon"].mean()), 3)
+        avg_kg_usd = round(avg_gal_usd / JET_A_KG_PER_GALLON, 4)
+        avg_gal_eur = round(float(period_matched["price_eur_per_gallon"].mean()), 3)
+        avg_kg_eur = round(avg_gal_eur / JET_A_KG_PER_GALLON, 4)
         return FuelPriceRecord(
             period_id=pid,
             year=int(period_matched.iloc[0]["year"]),
             week_number=0,  # Monthly composite
             week_start=str(period_matched.iloc[0]["week_start"]),
             week_end=str(period_matched.iloc[-1]["week_end"]),
-            price_usd_per_gallon=avg_gal,
-            price_usd_per_kg=avg_kg,
-            price_usd_per_metric_ton=round(avg_kg * 1000.0, 2),
+            price_eur_per_gallon=avg_gal_eur,
+            price_eur_per_kg=avg_kg_eur,
+            price_eur_per_metric_ton=round(avg_kg_eur * 1000.0, 2),
+            price_usd_per_gallon=avg_gal_usd,
+            price_usd_per_kg=avg_kg_usd,
+            price_usd_per_metric_ton=round(avg_kg_usd * 1000.0, 2),
             source=f"EIA Monthly Average ({pid})",
         )
 
     # Global safe default
+    gal_eur = round(2.20 * USD_TO_EUR_RATE, 3)
+    kg_eur = round(gal_eur / JET_A_KG_PER_GALLON, 4)
     return FuelPriceRecord(
         period_id="default",
         year=2024,
         week_number=0,
         week_start="N/A",
         week_end="N/A",
+        price_eur_per_gallon=gal_eur,
+        price_eur_per_kg=kg_eur,
+        price_eur_per_metric_ton=round(kg_eur * 1000.0, 2),
         price_usd_per_gallon=2.20,
         price_usd_per_kg=round(2.20 / JET_A_KG_PER_GALLON, 4),
         price_usd_per_metric_ton=round((2.20 / JET_A_KG_PER_GALLON) * 1000.0, 2),

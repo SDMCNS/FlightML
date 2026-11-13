@@ -134,21 +134,22 @@ def test_fuel_prices_endpoints():
     assert res.status_code == 200
     prices = res.json()
     assert len(prices) >= 10
-    assert prices[0]["price_usd_per_gallon"] > 1.0
-    assert prices[0]["price_usd_per_kg"] > 0.3
+    assert prices[0]["price_eur_per_gallon"] > 1.0
+    assert prices[0]["price_eur_per_kg"] > 0.3
 
     # Filtered by period
     res_p = client.get("/api/v1/fuel/prices?period=201611")
     assert res_p.status_code == 200
     assert len(res_p.json()) == 5
 
-    # Flight fuel impact endpoint
+    # Flight fuel impact endpoint (in EUR)
     res_f = client.get("/api/v1/flights/202007026/fuel?period=201611")
     assert res_f.status_code == 200
     f_data = res_f.json()
     assert f_data["ectrl_id"] == 202007026
-    assert f_data["fuel_price_usd_per_gallon"] == 1.368
-    assert f_data["fuel_price_usd_per_kg"] == 0.4496
+    assert f_data["fuel_price_eur_per_gallon"] == 1.265
+    assert f_data["fuel_price_eur_per_kg"] == 0.4157
+    assert f_data["estimated_excess_fuel_cost_eur"] > 0
     assert "2016-W44" in f_data["fuel_price_week"]
 
 

@@ -34,6 +34,7 @@ class TwinFlightComparison:
     air_time_penalty_min: float
     excess_fuel_burned_kg: float
     excess_co2_kg: float
+    excess_fuel_cost_eur: float
     excess_fuel_cost_usd: float
     divergence_lat: float | None
     divergence_lon: float | None
@@ -64,7 +65,7 @@ class TwinFlightComparison:
                 "excess_fuel_burned_kg": round(self.excess_fuel_burned_kg, 1),
                 "excess_co2_kg": round(self.excess_co2_kg, 1),
                 "excess_co2_metric_tons": round(self.excess_co2_kg / 1000.0, 2),
-                "excess_cost_usd": round(self.excess_fuel_cost_usd, 2),
+                "excess_cost_eur": round(self.excess_fuel_cost_eur, 2),
             },
             "divergence_point": {
                 "lat": round(self.divergence_lat, 3) if self.divergence_lat else None,
@@ -83,10 +84,10 @@ def compare_twin_flights(
     """
     Compare and contrast the most and least efficient flights of identical complexity
     (same origin, destination, and aircraft type).
-    Automatically resolves the EIA weekly jet fuel spot price for the dataset period.
+    Automatically resolves the EIA weekly jet fuel spot price (in EUR) for the dataset period.
     """
     if fuel_price_per_kg is None:
-        fuel_price_per_kg = get_weekly_fuel_price(None, period_hint=dataset.period).price_usd_per_kg
+        fuel_price_per_kg = get_weekly_fuel_price(None, period_hint=dataset.period).price_eur_per_kg
     adep = adep.upper()
     ades = ades.upper()
     ac_type = ac_type.upper()
@@ -163,6 +164,7 @@ def compare_twin_flights(
         air_time_penalty_min=float(slow_row["actual_air_time_min"]) - float(fast_row["actual_air_time_min"]),
         excess_fuel_burned_kg=excess_fuel,
         excess_co2_kg=excess_co2,
+        excess_fuel_cost_eur=excess_cost,
         excess_fuel_cost_usd=excess_cost,
         divergence_lat=div_lat,
         divergence_lon=div_lon,

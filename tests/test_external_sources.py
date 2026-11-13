@@ -64,3 +64,4 @@ def test_dataset_external_views_and_lookups() -> None:
         aua_df = ds.get_flight_aua_traversals(291262109)
         assert not aua_df.empty
         assert "aua_type" in aua_df.columns
+

@@ -1,6 +1,6 @@
 # Quickstart Guide 🚀
 
-This guide walks you through setting up **FlightML**, installing dependencies, ingesting data, launching the interactive simulation dashboard, and running your first analytical workflows.
+This guide walks you through setting up **FlightML**, installing dependencies, configuring datasets, launching the 10-tab interactive simulation workbench, and running your first analytical workflows.
 
 ---
 
@@ -11,8 +11,8 @@ This guide walks you through setting up **FlightML**, installing dependencies, i
 >
 > To access or download raw historical datasets, researchers and organizations **must have an approved user account on Eurocontrol's OneSky Online portal** ([https://www.eurocontrol.int/](https://www.eurocontrol.int/)) with institutional access granted to the **Demand Data Repository (DDR)** under Eurocontrol's Data Dissemination Policy and standard Research Agreement.
 >
-> **Data Privacy & Redaction Policy**:
-> In accordance with Eurocontrol data dissemination terms, operational commercial confidentiality, and GDPR requirements, **specific flight identifiers, physical aircraft tail registrations, and operational callsigns in this documentation and example snippets have been anonymized / redacted (e.g., `29126XXXX`, `N686XX`, `BAWXXXX`)** to prevent disclosing sensitive airline operational data.
+> **Synthetic Example Outputs Policy**:
+> In accordance with Eurocontrol data dissemination terms, commercial confidentiality, and GDPR requirements, **all sample output tables, flight identifiers (e.g., `900104215`), aircraft tail registrations (e.g., `G-SYNA`, `EI-SYNB`), and aggregate statistics shown in this documentation are realistic synthetic records** generated to illustrate table schemas and platform capabilities without exposing proprietary archive rows.
 
 ---
 
@@ -27,19 +27,13 @@ This guide walks you through setting up **FlightML**, installing dependencies, i
 
 ## 📦 Installation
 
-### Standard Installation
-
-Clone the repository and install FlightML in editable mode:
-
 ```bash
-git clone https://github.com/flightml/flightml.git
+git clone https://github.com/SDMCNS/FlightML.git
 cd FlightML
 pip install -e .
 ```
 
-### Optional Dependencies
-
-FlightML provides optional extras for Graph Neural Networks (GNN) and development/testing tools:
+### Optional Extras
 
 ```bash
 # Install GNN capabilities (PyTorch)
@@ -47,116 +41,58 @@ pip install -e ".[gnn]"
 
 # Install development & testing tools (pytest, httpx)
 pip install -e ".[dev]"
-
-# Install all extras
-pip install -e ".[gnn,dev]"
-```
-
-Verify your installation:
-
-```bash
-flightml --help
 ```
 
 ---
 
 ## 📂 Data Setup & Directory Layout
 
-FlightML organizes its data assets under a centralized `data/` directory.
+FlightML organizes its data assets under `data/` (git-ignored for proprietary archives) and `flightml/data/` (bundled open reference catalogs):
 
-```
+```text
 data/
-├── archive/                      # Raw or downloaded Eurocontrol archive zips
-│   ├── 201611.zip                # November 2016 baseline archive
-│   └── 202510.zip                # October 2025 modern archive
+├── archive/                              # Raw Eurocontrol archive zips (user-provided)
+│   ├── 201611.zip                        # November 2016 baseline archive
+│   └── 202510.zip                        # October 2025 modern archive
+├── external/                             # Auto-compiled Parquet reference catalogs
+│   ├── openap_aircraft.parquet           # OpenAP aircraft MTOW, drag & fuel models
+│   ├── icao_edb_emissions.parquet        # ICAO EDB v32B LTO engine emission indices
+│   ├── crco_unit_rates.parquet           # Eurocontrol CRCO national unit rates (€)
+│   ├── nav_waypoints.parquet             # 86,280 global 5-letter RNAV fixes
+│   └── nav_navaids.parquet               # 17,090 global VOR/DME/ILS navaids
 ├── fuel/
-│   ├── weekly_jet_fuel_prices.parquet  # Historical weekly spot prices (EIA / IATA)
-│   └── weekly_jet_fuel_prices.csv
-├── weather/                      # Cached ASOS/METAR weather observations
-├── 201611/                       # Ingested Parquet tables for period 201611
-│   ├── flights.parquet           # Flight header & metadata records
-│   ├── trajectories.parquet      # 4D trajectory coordinates & flight levels
-│   ├── airports.parquet          # Aerodrome layouts & runway configurations
-│   ├── firs.parquet              # European FIR airspace boundaries
-│   └── metadata.json             # AIRAC cycle and schema metadata
-└── 202510/                       # Ingested Parquet tables for period 202510
-    ├── flights.parquet
-    ├── trajectories.parquet
-    ├── airports.parquet
-    ├── firs.parquet
-    └── metadata.json
-```
-
-### Ingesting Eurocontrol Archives
-
-To ingest a new monthly Eurocontrol archive zip file:
-
-```bash
-# Ingest an archive file
-flightml ingest-archive data/archive/202510.zip
-
-# List all available ingested periods
-flightml list-periods
-```
-
-Output:
-```
-Available FlightML Data Periods:
-- 202510 [MODERN] (AIRAC Cycle 2510, ~XXXk flights)
-- 201611 [HISTORICAL] (AIRAC Cycle 1611, ~XXXk flights)
+│   └── weekly_jet_fuel_prices.csv        # Weekly Jet-A spot prices converted to Euros (€)
+└── 202510/                               # Ingested Parquet tables per period
+    ├── flights.parquet                   # Flight headers, delays & tail numbers
+    ├── trajectory_actual.parquet         # 4D actual radar coordinates & flight levels
+    ├── trajectory_planned.parquet        # 4D filed flight plan coordinates
+    ├── flight_firs_actual.parquet        # En-route FIR & TAXI_OUT traversals
+    └── flight_auas_actual.parquet        # Granular ATC Unit Airspace (TMA/CTA/UTA) traversals
 ```
 
 ---
 
-## 🖥️ Launching the Interactive Dashboard
-
-Launch the browser-based simulation and analytics dashboard:
+## 🖥️ Launching the Interactive Workbench
 
 ```bash
 flightml dashboard
 ```
 
-The dashboard will open automatically at **`http://localhost:8501`** and features **9 dedicated analytics tabs**:
-
-1. **🌐 Network Overview**: Live metrics, busiest airports, delay heatmaps, and FIR sector saturation.
-2. **✈️ 4D Trajectory & Holdings**: Flight-level trajectory viewer, airborne holding loop detection, sector dwell inefficiency, and unblocked Leaflet maps.
-3. **📅 Recurring Flight Series**: Multi-day tracking of recurring flight pairs, departure time-of-day (diurnal) distribution, and delay volatility.
-4. **📉 CDO Continuous Descent**: Descent profile visualization, level-off staircases, CDO compliance scoring, and descent fuel waste.
-5. **🔍 Delay Diagnostics Lab**: Multi-factor root-cause attribution (reactionary rotation, holding, runway crosswinds, weather ceiling) with actionable ATC recommendations.
-6. **🌱 Fuel, Carbon & Costs**: Dynamic weekly Jet-A spot fuel pricing, fuel burn calculations, CO2 emissions, and financial penalty breakdown.
-7. **👥 Twin-Flight Benchmarking**: Side-by-side comparison of the most and least efficient flights on identical city pairs and aircraft types.
-8. **⚡ What-If & Airline Stress Tests**:
-   - **Scenario A**: Multi-operator turnaround buffer expansion (+5m to +25m) side-by-side curve.
-   - **Scenario B**: Ground Delay Program (GDP) Ration-by-Schedule slot rationing under severe weather.
-   - **Scenario C**: Multi-operator fleet shock stress test (+15m to +90m delay contagion).
-9. **📈 Macro Evolution & AIRAC Diff**: Period-over-period macro traffic growth, airline market share shifts, fleet modernization, and AIRAC cycle airspace configuration diffing.
+Opens at **`http://localhost:8501`** featuring **10 interactive tabs**:
+1. **🌐 Network Overview & Airspace Map**: Interactive **$5^\circ \times 5^\circ$ European Airspace Hourly Saturation & Complexity Map** (period average by hour of day `00:00`–`23:00 UTC`), FIR & AUA (`TMA`/`CTA`/`UTA`) saturation, `KPI02 ATOT` surface taxi delays, and VHF radio occupancy.
+2. **🗺️ 4D Trajectory & Holdings**: Flight-level 4D trajectory viewer, `KPI04 KEP` / `KPI05 KEA` / `KPI08 ASMA` / `KPI19` scorecard, `FRA` vs. ATS airway snapping, and FIR/AUA sector dwell tables.
+3. **📅 Recurring Series & Diurnal Trends**: Multi-day tracking of recurring flight pairs and diurnal departure bank congestion curves.
+4. **📉 Vertical Profile: CDO & CCO**: Descent `CDO` and Climb `CCO` level-off detection, vertical profile charts, and network-wide `KPI19` cruise level-capping corridors.
+5. **🩺 Delay & Runway Diagnostics**: Multi-factor delay root-cause attribution and arrival runway braking action, density altitude, and stopping safety margins.
+6. **🌱 Fuel, Carbon & Route Charges (`€`)**: OpenAP excess fuel burn, `TAXI_OUT` ICAO EDB v32B idle emissions ($\text{NO}_x, \text{CO}, \text{nvPM}$), Eurocontrol CRCO fees (`€`), upper-air contrail `ISSR` forcing, and Corridor CRCO Route-Charge vs. Fuel Burn trade-offs.
+7. **👯 Twin-Flight Benchmark**: Side-by-side comparison and interactive **Dual-Trajectory Map** (`Green` vs. `Red`) with lateral divergence pinpointing.
+8. **🔮 What-If & Stress Tests**: Turnaround buffer curves, runway crosswind collapse, fleet shock contagion, network-wide **Hub Tail-Swap Recovery (`Tail A ⇄ Tail B`)**, **4D Co-Altitude Conflict & Saturation Map**, and **Ration-by-Schedule GDP Optimizer (`€`)**.
+9. **📈 Macro Evolution & AIRAC Diff**: Period-over-period traffic growth, `FRA` directness evolution, European weather-delay correlation, and AIRAC cycle diffing.
+10. **📖 Methodology & KPI Reference**: Complete in-app documentation of all ICAO GANP, Eurocontrol PRU, CRCO, OpenAP, and operations research formulas.
 
 ---
 
-## 🌐 Launching the REST API
-
-FlightML includes a high-performance FastAPI service:
-
-```bash
-# Start the API server on port 8000
-flightml serve --port 8000
-```
-
-- **API Base URL**: `http://localhost:8000/api/v1`
-- **Interactive Swagger Documentation**: `http://localhost:8000/docs`
-- **Redoc Documentation**: `http://localhost:8000/redoc`
-
-Test the API via curl:
-
-```bash
-curl http://localhost:8000/api/v1/summary
-```
-
----
-
-## ⚡ First Steps with the CLI
-
-Here are a few quick commands to test your setup, complete with expected terminal outputs (with operational flight IDs and callsigns redacted with `XXXX` for compliance):
+## ⚡ First Steps with the CLI (Synthetic Sample Outputs)
 
 ### 1. View Dataset Summary
 ```bash
@@ -164,98 +100,64 @@ flightml summary --period 202510
 ```
 
 ```text
-                       ✈️  FlightML Dataset Overview                        
+                       ✈️  FlightML Dataset Overview (Synthetic Sample)
 ┌─────────────────────────────┬────────────────────────────────────────────┐
 │ Metric                      │ Value                                      │
 ├─────────────────────────────┼────────────────────────────────────────────┤
-│ Total Processed Flights     │ 9XX,XXX                                    │
-│ Unique Aircraft Operators   │ 8XX                                        │
-│ Origin Airports (ADEP)      │ 1,622                                      │
-│ Destination Airports (ADES) │ 1,631                                      │
-│ Date Coverage               │ 2025-09-29 22:15:00 to 2025-11-01 02:40:00 │
-│ Mean Departure Delay        │ 4.36 min                                   │
-│ Mean Arrival Delay          │ 4.16 min                                   │
+│ Total Processed Flights     │ 842,500                                    │
+│ Unique Aircraft Operators   │ 740                                        │
+│ Origin Airports (ADEP)      │ 1,580                                      │
+│ Destination Airports (ADES) │ 1,595                                      │
+│ Date Coverage               │ 2025-10-01 00:00:00 to 2025-10-31 23:59:00 │
+│ Mean Departure Delay        │ 5.12 min                                   │
+│ Mean Arrival Delay          │ 4.85 min                                   │
 │ Airports Catalog            │ 86,336                                     │
 │ Runways Catalog             │ 48,405                                     │
 │ FIR Airspaces Catalog       │ 170                                        │
 └─────────────────────────────┴────────────────────────────────────────────┘
 ```
 
-### 2. Search Flights on a City Pair
+### 2. Search Flights on a Corridor
 ```bash
 flightml search-flights --period 202510 --adep EGLL --ades KORD --limit 3
 ```
 
 ```text
-               Flight Search Results (Period: 202510, 3 matches)               
+          Flight Search Results (Period: 202510, Synthetic Sample)
 ┌──────────────────────────────────┬──────────┬───────┬───────────┬───────────┐
 │ Flight Label & Metadata          │ Distance │    FL │ Dep Delay │ Arr Delay │
 ├──────────────────────────────────┼──────────┼───────┼───────────┼───────────┤
-│ EGLL ➔ KORD (2025-10-01 07:23)   │  3517 nm │ FL320 │       -7m │       -1m │
-│ [XXX B763 N686XX] ... Flight ID: │          │       │           │           │
-│ 29127XXXX                        │          │       │           │           │
-│ EGLL ➔ KORD (2025-10-01 08:09)   │  3597 nm │ FL340 │       -6m │       -2m │
-│ [YYY B789 N848XX] ... Flight ID: │          │       │           │           │
-│ 29127XXXX                        │          │       │           │           │
-│ EGLL ➔ KORD (2025-10-01 10:17)   │  3521 nm │ FL320 │      +12m │      +10m │
-│ [ZZZ B763 N657XX] ... Flight ID: │          │       │           │           │
-│ 29127XXXX                        │          │       │           │           │
+│ EGLL ➔ KORD (2025-10-03 08:15)   │  3495 nm │ FL360 │       -4m │       -2m │
+│ [SYN B77W G-SYNA] ... Flight ID: │          │       │           │           │
+│ 900104215                        │          │       │           │           │
+│ EGLL ➔ KORD (2025-10-03 10:40)   │  3542 nm │ FL340 │       +8m │      +11m │
+│ [SYN B789 G-SYNB] ... Flight ID: │          │       │           │           │
+│ 900108492                        │          │       │           │           │
+│ EGLL ➔ KORD (2025-10-03 14:20)   │  3510 nm │ FL350 │       +2m │       +0m │
+│ [SYN A359 G-SYNC] ... Flight ID: │          │       │           │           │
+│ 900112640                        │          │       │           │           │
 └──────────────────────────────────┴──────────┴───────┴───────────┴───────────┘
 ```
 
-### 3. Calculate Fuel Burn & Weekly Spot Price Financial Penalty
+### 3. Calculate Fuel Burn & Weekly Spot Price Penalty in Euros (`€`)
 ```bash
-flightml fuel-impact 29126XXXX --period 202510
+flightml fuel-impact 900104215 --period 202510
 ```
 
 ```text
-Environmental & Fuel Impact: ECTRL 29126XXXX (B772) - Period 202510
+Environmental & Fuel Impact: ECTRL 900104215 (B77W) - Period 202510 (Synthetic)
                       Fuel & Carbon Inefficiency Analysis                      
 ┌────────────────────────────┬────────────────────────────────────────────────┐
 │ Metric                     │ Value                                          │
 ├────────────────────────────┼────────────────────────────────────────────────┤
-│ Excess Distance Flown      │ 16.9 nm                                        │
-│ Terminal Holding Duration  │ 0.0 min                                        │
-│ Holding Stack Fuel Burned  │ 0.0 kg                                         │
-│ Route Detour Fuel Burned   │ 232.2 kg                                       │
-│ Total Excess Fuel Burned   │ 232.2 kg                                       │
-│ Total Excess CO₂ Emitted   │ 733.8 kg (0.73 metric tons)                    │
-│ Weekly Jet Fuel Price      │ $2.112/gal ($0.6941/kg)                        │
-│ Price Week & Benchmark     │ 2025-W40 (2025-09-29 to 2025-10-05) [EIA       │
-│                            │ Weekly Spot Price (USGC/IATA)]                 │
-│ Estimated Excess Fuel Cost │ $161.18 USD                                    │
+│ Excess Distance Flown      │ 24.0 nm                                        │
+│ Terminal Holding Duration  │ 4.5 min                                        │
+│ Holding Stack Fuel Burned  │ 315.0 kg                                       │
+│ Route Detour Fuel Burned   │ 288.0 kg                                       │
+│ Total Excess Fuel Burned   │ 603.0 kg                                       │
+│ Total Excess CO₂ Emitted   │ 1,905.5 kg (1.91 metric tons)                  │
+│ Weekly Jet Fuel Price (€)  │ €1.954/gal (€0.6421/kg)                        │
+│ Price Week & Benchmark     │ 2025-W40 [EIA / IATA Platts Converted to EUR]  │
+│ Estimated Excess Fuel Cost │ €387.19 EUR                                    │
 └────────────────────────────┴────────────────────────────────────────────────┘
 ```
-
----
-
-## 🐍 First Steps in Python
-
-Create a Python script `demo.py`:
-
-```python
-import flightml as fml
-
-# Initialize connection to the modern dataset period
-ds = fml.FlightDataset(period="202510")
-
-# Fetch summary
-summary = ds.get_summary()
-print(f"Airports: {summary['total_airports']:,} | Flights: {summary['total_flights']:,}")
-
-# Look up an anonymized flight by Eurocontrol ID
-flight = ds.get_flight(29126XXXX)
-print(f"Flight: {flight['operator']} {flight['callsign']} ({flight['adep']} -> {flight['ades']})")
-
-# Evaluate fuel burn and weekly jet fuel pricing
-impact = fml.compute_flight_fuel_and_emissions(ds, 29126XXXX)
-print(f"Fuel: {impact.total_fuel_kg:,.1f} kg (${impact.total_fuel_cost_usd:,.2f})")
-print(f"Price Benchmark: ${impact.fuel_price_usd_per_gallon:.3f}/gal (Week: {impact.fuel_price_week})")
-```
-
-Run it:
-
-```bash
-python demo.py
-```
-

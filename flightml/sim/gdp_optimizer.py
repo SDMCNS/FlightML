@@ -23,7 +23,8 @@ class SlotAssignment:
     airborne_holding_saved_min: float
     fuel_saved_kg: float
     co2_saved_kg: float
-    fuel_cost_saved_usd: float
+    fuel_cost_saved_eur: float
+    fuel_cost_saved_usd: float = 0.0
 
 
 @dataclass
@@ -37,8 +38,9 @@ class GDPResult:
     total_airborne_delay_prevented_min: float
     total_fuel_saved_kg: float
     total_co2_saved_kg: float
-    total_fuel_cost_saved_usd: float
-    slot_assignments: list[SlotAssignment]
+    total_fuel_cost_saved_eur: float
+    total_fuel_cost_saved_usd: float = 0.0
+    slot_assignments: list[SlotAssignment] = None  # type: ignore
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -51,7 +53,7 @@ class GDPResult:
             "total_airborne_delay_prevented_min": round(self.total_airborne_delay_prevented_min, 1),
             "total_fuel_saved_kg": round(self.total_fuel_saved_kg, 1),
             "total_co2_saved_kg": round(self.total_co2_saved_kg, 1),
-            "total_fuel_cost_saved_usd": round(self.total_fuel_cost_saved_usd, 2),
+            "total_fuel_cost_saved_eur": round(self.total_fuel_cost_saved_eur, 2),
             "sample_assignments": [
                 {
                     "ectrl_id": s.ectrl_id,
@@ -63,7 +65,7 @@ class GDPResult:
                     "ground_delay_min": round(s.ground_delay_assigned_min, 1),
                     "fuel_saved_kg": round(s.fuel_saved_kg, 1),
                 }
-                for s in self.slot_assignments[:10]
+                for s in (self.slot_assignments or [])[:10]
             ],
         }
 
@@ -83,10 +85,10 @@ def optimize_ground_delay_program(
     When an airport's acceptance rate (AAR) collapses due to fog/winds, this algorithm
     assigns Controlled Times of Arrival (CTA) and Calculated Take-Off Times (CTOT)
     to hold flights at their origin gates rather than burning fuel in holding stacks.
-    Automatically resolves the EIA weekly jet fuel spot price for the program date.
+    Automatically resolves the EIA weekly jet fuel spot price (in EUR) for the program date.
     """
     if fuel_price_per_kg is None:
-        fuel_price_per_kg = get_weekly_fuel_price(program_date, period_hint=dataset.period).price_usd_per_kg
+        fuel_price_per_kg = get_weekly_fuel_price(program_date, period_hint=dataset.period).price_eur_per_kg
     target_airport = target_airport.upper()
     t_start = f"{program_date} {start_hour:02d}:00:00"
     t_end = f"{program_date} {end_hour:02d}:00:00"
@@ -118,6 +120,7 @@ def optimize_ground_delay_program(
             total_airborne_delay_prevented_min=0.0,
             total_fuel_saved_kg=0.0,
             total_co2_saved_kg=0.0,
+            total_fuel_cost_saved_eur=0.0,
             total_fuel_cost_saved_usd=0.0,
             slot_assignments=[],
         )
@@ -150,7 +153,7 @@ def optimize_ground_delay_program(
         # Fuel burned on ground at gate with engines off = 0 kg!
         holding_fuel_prevented_kg = (delay_min / 60.0) * (fuel_flow * 0.85)
         co2_saved_kg = holding_fuel_prevented_kg * CO2_FACTOR
-        cost_saved_usd = holding_fuel_prevented_kg * fuel_price_per_kg
+        cost_saved_eur = holding_fuel_prevented_kg * fuel_price_per_kg
 
         assignments.append(
             SlotAssignment(
@@ -165,7 +168,8 @@ def optimize_ground_delay_program(
                 airborne_holding_saved_min=delay_min,
                 fuel_saved_kg=holding_fuel_prevented_kg,
                 co2_saved_kg=co2_saved_kg,
-                fuel_cost_saved_usd=cost_saved_usd,
+                fuel_cost_saved_eur=cost_saved_eur,
+                fuel_cost_saved_usd=cost_saved_eur,
             )
         )
 
@@ -188,6 +192,7 @@ def optimize_ground_delay_program(
         total_airborne_delay_prevented_min=total_ground_delay,
         total_fuel_saved_kg=total_fuel_saved,
         total_co2_saved_kg=total_co2_saved,
+        total_fuel_cost_saved_eur=total_cost_saved,
         total_fuel_cost_saved_usd=total_cost_saved,
         slot_assignments=assignments,
     )

@@ -5,7 +5,7 @@
 [![DuckDB Powered](https://img.shields.io/badge/Storage-DuckDB%20%2B%20Apache%20Parquet-orange.svg)](https://duckdb.org/)
 [![Documentation](https://img.shields.io/badge/Docs-Complete%20Guide-green.svg)](docs/index.md)
 
-**A high-performance Python machine learning library, interactive simulation platform, REST API, and CLI for Global Airspace Network Intelligence, 4D Trajectory Analytics, and ASOS/METAR Weather Fusion.**
+**A high-performance Python aviation intelligence library, interactive simulation workbench, REST API, and CLI for Global Airspace Network Analytics, 4D Trajectory Physics, Environmental & Eurocontrol CRCO Cost Accounting (`€ EUR`), and Prescriptive Operations Research.**
 
 ---
 
@@ -16,45 +16,40 @@
 >
 > To access or download raw historical datasets, researchers and organizations **must have an approved user account on Eurocontrol's OneSky Online portal** ([https://www.eurocontrol.int/](https://www.eurocontrol.int/)) with institutional access granted to the **Demand Data Repository (DDR)** under Eurocontrol's Data Dissemination Policy and standard Research Agreement.
 >
-> **Data Privacy & Redaction Policy**:
-> In accordance with Eurocontrol data dissemination terms, operational commercial confidentiality, and GDPR requirements, **specific flight identifiers, physical aircraft tail registrations, and operational callsigns in this documentation and example snippets have been anonymized / redacted (e.g., `29126XXXX`, `N686XX`, `BAWXXXX`)** to prevent disclosing sensitive airline operational data.
+> **Synthetic Example Outputs Policy**:
+> In accordance with Eurocontrol data dissemination terms, commercial confidentiality, and GDPR requirements, **all sample output tables, flight identifiers (e.g., `900104215`), aircraft tail registrations (e.g., `G-SYNA`, `EI-SYNB`), and aggregate statistics shown in this documentation are realistic synthetic records** generated to illustrate table schemas and platform capabilities without exposing proprietary archive rows.
 
 ---
 
-## 📖 Complete Documentation
+## 📖 Documentation Suite
 
-Detailed guides and manuals are available in the [**`docs/`**](docs/index.md) directory:
+Detailed manuals and developer guides are located in the [**`docs/`**](docs/index.md) directory:
 
-- 🚀 [**Quickstart Guide**](docs/quickstart.md): Installation, OneSky data setup, dashboard launching, and first steps.
+- 🚀 [**Quickstart Guide**](docs/quickstart.md): Installation, dataset directory layout, dashboard launch, and first steps.
 - 🐍 [**Python Library Guide**](docs/library_guide.md): Developer guide with complete Python code recipes for all modules.
-- 💻 [**CLI Reference Manual**](docs/cli_reference.md): Exhaustive guide for all 32 `flightml` terminal commands and sample outputs.
-- 🌐 [**REST API Reference**](docs/rest_api.md): Full FastAPI endpoints catalog, request/response schemas, and Swagger docs.
-- 🏛️ [**Architecture & Methodology**](docs/architecture.md): Columnar DuckDB execution, BADA fuel burn physics, and weather fusion.
-- 🔭 [**Future Roadmap & Research Capabilities**](docs/future_roadmap.md): Audit of untapped data assets (`Flight_AUAs`, `TAXI_OUT`, `UIR`, `navaids`, `frequencies`) and next-generation ATM, climate, and AI roadmap.
-- 🗺️ [**FlightML v2.0 Implementation Plan (`v2_plan.md`)**](docs/v2_plan.md): Executable 6-sprint engineering blueprint, rationale, and external data acquisition catalog.
+- 💻 [**CLI Reference Manual**](docs/cli_reference.md): Exhaustive guide for all 45+ `flightml` terminal commands and synthetic sample outputs.
+- 🌐 [**REST API Reference**](docs/rest_api.md): Complete FastAPI endpoints catalog, request/response schemas, and Swagger docs.
+- 🏛️ [**Architecture & Methodology**](docs/architecture.md): DuckDB columnar execution, ICAO GANP & Eurocontrol PRU formulas, OpenAP & ICAO EDB v32B physics, Eurocontrol CRCO charges (`€`), and operations research models.
 
 ---
 
-## ⚡ What is FlightML?
+## ✨ Platform Capabilities
 
-FlightML ingests multi-gigabyte aeronautical datasets across historical and modern Eurocontrol archives and couples them with historical IEM ASOS/METAR weather observations and official weekly Jet-A spot fuel prices.
+FlightML fuses multi-gigabyte 4D trajectories, global aeronautical navigation databases (**86,280 5-letter RNAV waypoints**, **17,090 VHF navaids**, **48,405 runways**, **30,192 VHF radio frequencies**), aircraft performance models (**OpenAP** & **ICAO Engine Emissions Databank v32B**), **Eurocontrol CRCO en-route unit rates (`€`)**, and historical **IEM ASOS/METAR & Open-Meteo ERA5 upper-air meteorology**:
 
-It provides a unified platform to:
-- **Analyze 4D Radar Trajectories**: Detect airborne holding stacks, compute path extension ratios, and export interactive maps.
-- **Audit Fuel & Carbon Inefficiency**: Compute aerodynamic fuel burn and financial costs based on official weekly spot prices from the **U.S. EIA Series `EER_EPJK_PF4_RGC_DPG`** and **IATA Platts ARA** benchmarks.
-- **Evaluate Continuous Descent Operations (CDO)**: Detect stepped staircase level-offs during arrival and quantify excess descent fuel waste.
-- **Benchmark Twin Flights**: Pair identical city pairs and aircraft types (e.g. `RKSI` $\to$ `EGLL` on `B77W`) to quantify detour divergence and fuel waste.
-- **Analyze Longitudinal Recurring Series**: Track daily performance and evaluate departure time-of-day (diurnal) congestion patterns.
-- **Map FIR Airspace Saturation**: Identify European en-route sector chokepoints and measure flight-level dwell inefficiency.
-- **Stress-Test Airline Resilience**: Injects operational delay shocks (+15m to +90m) into airline turnaround schedules to generate fleet fragility curves.
-- **Optimize Ground Delay Programs (GDP)**: Run Ration-by-Schedule (RBS) slot allocation during severe weather/fog capacity collapses.
+- **🗺️ $5^\circ \times 5^\circ$ Hourly Airspace Saturation & 4D Conflict Maps**: Period-averaged hourly flight density, peak traffic load, vertical climb/descent share, Dynamic Complexity Index, and 1-minute interpolated 4D co-altitude proximity detection (`< 5 nm` / `< 1,000 ft`).
+- **📏 ICAO GANP & Eurocontrol PRU KPI Suite**: Complete implementation of **KPI02** (Additional Taxi-Out Time `ATOT`), **KPI04** (`KEP` Filed En-Route Extension), **KPI05** (`KEA` Actual En-Route Extension & Tactical ATC Attribution), **KPI08** (40 nm `ASMA` Terminal Transit Time), **KPI17** (Continuous Climb Operations `CCO`), and **KPI19** (Continuous Descent Operations `CDO` & Cruise Level-Capping).
+- **🛣️ Free Route Airspace (`FRA`) & VHF Comms Workload**: Snaps 4D trajectories against published ATS airways and 5-letter fixes to quantify `FRA / DCT` directness vs. fixed airway adherence, and models ATC controller-pilot VHF voice channel occupancy (`%`).
+- **🌱 OpenAP Fuel Burn, ICAO EDB v32B LTO Emissions & Contrail Physics**: Quantifies trajectory detour fuel waste, terminal holding penalties, ground taxi queue $\text{NO}_x / \text{CO} / \text{HC} / \text{nvPM}$ soot emissions, and **Schmidt-Appleman persistent contrail (`ISSR`)** radiative forcing (`CO₂e`).
+- **💶 Eurocontrol CRCO Route Charges & Weekly Jet-A Spot Pricing (`€ EUR`)**: Computes exact FIR-by-FIR Service Units (`SU`) and en-route navigation fees (`€`), weekly EIA/Platts Jet-A spot fuel costs in Euros (`€`), and Corridor Route-Charge Avoidance vs. Fuel Burn trade-offs.
+- **🔮 Prescriptive Operations Research & Stress Testing**: Includes **Network-Wide Hub Tail-Swap Recovery (`Tail A ⇄ Tail B`)**, **Ration-by-Schedule Ground Delay Program (`GDP` / ATFM Slot) Optimization**, **Turnaround Buffer Sensitivity**, **Runway Braking & Crosswind Collapse**, and **Multi-Operator Fleet Shock Contagion Curves**.
 
 ---
 
 ## 📦 Installation
 
 ```bash
-git clone https://github.com/flightml/flightml.git
+git clone https://github.com/SDMCNS/FlightML.git
 cd FlightML
 pip install -e .
 ```
@@ -71,9 +66,9 @@ pip install -e ".[dev]"
 
 ---
 
-## 🖥️ CLI Snippets & Terminal Outputs
+## 🖥️ Synthetic CLI Output Examples
 
-FlightML formats terminal output using Rich tables and color-coded status badges. Below are representative snippets with operational fields redacted (`XXXX`).
+Below are representative terminal outputs illustrating FlightML's Rich tables using **synthetic sample data** (all costs in **Euros `€`**).
 
 ### 1. Global Dataset Summary (`flightml summary`)
 
@@ -82,17 +77,17 @@ flightml summary --period 202510
 ```
 
 ```text
-                       ✈️  FlightML Dataset Overview                        
+                       ✈️  FlightML Dataset Overview (Synthetic Sample)
 ┌─────────────────────────────┬────────────────────────────────────────────┐
 │ Metric                      │ Value                                      │
 ├─────────────────────────────┼────────────────────────────────────────────┤
-│ Total Processed Flights     │ XXX,XXX                                    │
-│ Unique Aircraft Operators   │ XXX                                        │
-│ Origin Airports (ADEP)      │ 1,622                                      │
-│ Destination Airports (ADES) │ 1,631                                      │
-│ Date Coverage               │ 2025-09-29 22:15:00 to 2025-11-01 02:40:00 │
-│ Mean Departure Delay        │ 4.36 min                                   │
-│ Mean Arrival Delay          │ 4.16 min                                   │
+│ Total Processed Flights     │ 842,500                                    │
+│ Unique Aircraft Operators   │ 740                                        │
+│ Origin Airports (ADEP)      │ 1,580                                      │
+│ Destination Airports (ADES) │ 1,595                                      │
+│ Date Coverage               │ 2025-10-01 00:00:00 to 2025-10-31 23:59:00 │
+│ Mean Departure Delay        │ 5.12 min                                   │
+│ Mean Arrival Delay          │ 4.85 min                                   │
 │ Airports Catalog            │ 86,336                                     │
 │ Runways Catalog             │ 48,405                                     │
 │ FIR Airspaces Catalog       │ 170                                        │
@@ -101,186 +96,140 @@ flightml summary --period 202510
 
 ---
 
-### 2. Multi-Criteria Flight Search (`flightml search-flights`)
+### 2. ICAO GANP & Eurocontrol PRU Scorecard (`flightml pru-kpis`)
 
 ```bash
-flightml search-flights --period 202510 --adep EGLL --ades KORD --limit 3
+flightml pru-kpis 900104215 --period 202510
 ```
 
 ```text
-               Flight Search Results (Period: 202510, 3 matches)               
-┌──────────────────────────────────┬──────────┬───────┬───────────┬───────────┐
-│ Flight Label & Metadata          │ Distance │    FL │ Dep Delay │ Arr Delay │
-├──────────────────────────────────┼──────────┼───────┼───────────┼───────────┤
-│ EGLL ➔ KORD (2025-10-01 07:23)  │  3517 nm │ FL320 │       -7m │       -1m │
-│ [XXX B763 N686XX] ... Flight ID: │          │       │           │           │
-│ 29127XXXX                        │          │       │           │           │
-│ EGLL ➔ KORD (2025-10-01 08:09)  │  3597 nm │ FL340 │       -6m │       -2m │
-│ [YYY B789 N848XX] ... Flight ID: │          │       │           │           │
-│ 29127XXXX                        │          │       │           │           │
-│ EGLL ➔ KORD (2025-10-01 10:17)  │  3521 nm │ FL320 │      +12m │      +10m │
-│ [ZZZ B763 N657XX] ... Flight ID: │          │       │           │           │
-│ 29127XXXX                        │          │       │           │           │
-└──────────────────────────────────┴──────────┴───────┴───────────┴───────────┘
+     📏 ICAO GANP & Eurocontrol PRU Scorecard: ECTRL 900104215 (Synthetic)
+┌──────────────────────────────────┬───────────────────────────────────────────┐
+│ Indicator                        │ Value & Operational Verdict               │
+├──────────────────────────────────┼───────────────────────────────────────────┤
+│ Route & Aircraft                 │ EGLL ➔ LIRF (SYN A320, Reg: G-SYNA)       │
+│ Great-Circle O-D Distance        │ 780.4 nm                                  │
+│ KPI04 (KEP Filed Extension >40nm)│ 4.18% (Filed En-Route: 731.2 nm)          │
+│ KPI05 (KEA Actual Extension >40n)│ 2.64% (Actual En-Route: 720.4 nm)         │
+│ Tactical ATC Delta (KEA - KEP)   │ -1.54% (-10.8 nm — ATC_TACTICAL_SHORTCUT) │
+│ KPI08 ASMA (40nm Terminal Time)  │ 19.4 min (+3.2 min additional vs p20)     │
+│ KPI19 Cruise Flight Level        │ Max FL350 vs Req FL370 (CAPPED -20 FL)    │
+│ Cruise Level-Cap Fuel Penalty    │ +58.4 kg Jet-A (+184.5 kg CO₂)            │
+└──────────────────────────────────┴───────────────────────────────────────────┘
 ```
 
 ---
 
-### 3. Fuel Burn, Spot Pricing & Carbon Assessment (`flightml fuel-impact`)
+### 3. Fuel Burn, Eurocontrol CRCO Charges & LTO Emissions (`flightml crco-cost` & `flightml taxi-out`)
 
 ```bash
-flightml fuel-impact 29126XXXX --period 202510
+flightml crco-cost 900104215 --period 202510
 ```
 
 ```text
-Environmental & Fuel Impact: ECTRL 29126XXXX (B772) - Period 202510
-                      Fuel & Carbon Inefficiency Analysis                      
+   💶 Eurocontrol CRCO Route Charges & Direct Operating Cost: ECTRL 900104215
 ┌────────────────────────────┬────────────────────────────────────────────────┐
-│ Metric                     │ Value                                          │
+│ Metric                     │ Value (EUR €)                                  │
 ├────────────────────────────┼────────────────────────────────────────────────┤
-│ Excess Distance Flown      │ 16.9 nm                                        │
-│ Terminal Holding Duration  │ 0.0 min                                        │
-│ Holding Stack Fuel Burned  │ 0.0 kg                                         │
-│ Route Detour Fuel Burned   │ 232.2 kg                                       │
-│ Total Excess Fuel Burned   │ 232.2 kg                                       │
-│ Total Excess CO₂ Emitted   │ 733.8 kg (0.73 metric tons)                    │
-│ Weekly Jet Fuel Price      │ $2.112/gal ($0.6941/kg)                        │
-│ Price Week & Benchmark     │ 2025-W40 (2025-09-29 to 2025-10-05) [EIA       │
-│                            │ Weekly Spot Price (USGC/IATA)]                 │
-│ Estimated Excess Fuel Cost │ $161.18 USD                                    │
+│ Aircraft Type & MTOW       │ A320 (78.0 metric tons | Weight Factor: 1.249) │
+│ Total CRCO Service Units   │ 18.04 SU (1,444.5 km across 3 FIRs)            │
+│ Actual CRCO En-Route Fee   │ €1,584.20 EUR (Filed: €1,612.80 EUR)           │
+│ Estimated Total Jet-A Fuel │ 4,620.0 kg (€2,966.50 EUR @ €0.6421/kg)        │
+│ Excess Detour & Hold Cost  │ €142.80 EUR (222.4 kg excess Jet-A)            │
+│ Total Direct Route Cost    │ €4,550.70 EUR (34.8% CRCO share)               │
 └────────────────────────────┴────────────────────────────────────────────────┘
 ```
 
 ---
 
-### 4. Continuous Descent Operations (CDO) Scoring (`flightml cdo-descent`)
+### 4. Prescriptive Hub Tail-Swap Recovery (`flightml tail-swaps`)
 
 ```bash
-flightml cdo-descent 29126XXXX --period 202510
+flightml tail-swaps --period 202510
 ```
 
 ```text
-Continuous Descent Operations (CDO) Report: ECTRL 29126XXXX
-Route: KORD ➔ EGLL | Aircraft: B772 | Cruise FL: 390
-CDO Compliance Score: 94.1% | Total Descent Time: 45.0 min
-Level-Off Inefficiencies: 1 events (2.7 min un-optimized level flight)
-Excess Descent Fuel Burn: 192.9 kg Jet-A | Excess CO₂: 609.5 kg
-
-             Detected Descent Level-Off & Altitude Reversal Events             
-┌────────────┬────────────┬─────────────┬──────────┬────────────┬─────────────┐
-│ Event Type │ Start UTC  │ End UTC     │ Duration │      Level │ Location    │
-├────────────┼────────────┼─────────────┼──────────┼────────────┼─────────────┤
-│ LEVEL_OFF  │ XX:XX:37   │ XX:XX:17    │  2.7 min │      FL140 │ 51.XX°,     │
-│            │            │             │          │            │ -1.XX°      │
-└────────────┴────────────┴─────────────┴──────────┴────────────┴─────────────┘
+        🔄 Prescriptive Hub Tail-Swap Recovery Schedule (Synthetic Sample)
+┌────────────┬──────┬──────┬──────┬───────────────────┬────────────┬───────────┬─────────────┐
+│ Date       │ Hub  │ Oper │ AC   │ Tail Swap Pair    │ Base Delay │ Post-Swap │ Saved (€)   │
+├────────────┼──────┼──────┼──────┼───────────────────┼────────────┼───────────┼─────────────┤
+│ 2025-10-04 │ EGSS │ SYN  │ B738 │ EI-SYNA ⇄ EI-SYNB │    118 min │     0 min │ €10,384 EUR │
+│ 2025-10-09 │ EGLL │ SYN  │ A320 │ G-SYNC  ⇄ G-SYND  │     84 min │     6 min │  €6,864 EUR │
+│ 2025-10-14 │ EDDF │ SYN  │ A321 │ D-SYNE  ⇄ D-SYNF  │     72 min │     0 min │  €6,336 EUR │
+└────────────┴──────┴──────┴──────┴───────────────────┴────────────┴───────────┴─────────────┘
 ```
 
 ---
 
-### 5. European FIR Airspace Saturation (`flightml fir-saturation`)
+### 5. 4D Co-Altitude Airspace Proximity & Complexity Scan (`flightml airspace-conflicts`)
 
 ```bash
-flightml fir-saturation --period 202510 --threshold 40 --limit 3
+flightml airspace-conflicts --period 202510 --hour 10 --sep-nm 5.0
 ```
 
 ```text
-   🌐 European FIR Sector Saturation (Period: 202510, Threshold: ≥40 flt/hr)   
-┌─────────┬──────────┬──────────┬───────────┬──────────┬───────────┬──────────┐
-│         │    Total │     Peak │       Avg │    Dwell │           │ Saturat… │
-│ FIR ID  │ Travers… │  Flts/Hr │   Flts/Hr │    (min) │ Hours ≥40 │        % │
-├─────────┼──────────┼──────────┼───────────┼──────────┼───────────┼──────────┤
-│ LTBBFIR │  159,166 │      328 │     210.3 │     22.1 │       747 │    98.7% │
-│ LBSRFIR │  116,038 │      283 │     153.3 │     18.9 │       746 │    98.5% │
-│ LTAAFIR │  121,562 │      235 │     161.0 │     52.7 │       746 │    98.8% │
-└─────────┴──────────┴──────────┴───────────┴──────────┴───────────┴──────────┘
+    ⚠️ 4D Co-Altitude Airspace Proximity Scan (10:00–10:59 UTC, Synthetic Sample)
+┌──────────┬───────────────────────────┬───────────────────────────┬──────────┬──────────┬──────────────┐
+│ Epoch    │ Severity                  │ Aircraft Pair             │ Horiz    │ Vert     │ Coordinates  │
+├──────────┼───────────────────────────┼───────────────────────────┼──────────┼──────────┼──────────────┤
+│ 10:15:00 │ LOSS_OF_SEPARATION_ALERT  │ SYN #900104215 ⇄ SYN #908 │  2.14 nm │   200 ft │ 51.24°, 1.85°│
+│ 10:30:00 │ HIGH_PROXIMITY            │ SYN #900112640 ⇄ SYN #914 │  3.82 nm │   400 ft │ 48.92°, 2.41°│
+│ 10:45:00 │ HIGH_PROXIMITY            │ SYN #900119004 ⇄ SYN #921 │  4.45 nm │   600 ft │ 50.11°, 8.68°│
+└──────────┴───────────────────────────┴───────────────────────────┴──────────┴──────────┴──────────────┘
 ```
 
 ---
 
-## 🐍 Python Library Quickstart
+## 🖥️ Interactive Simulation Workbench (`flightml dashboard`)
 
-FlightML is designed to be easily embedded into Python pipelines, notebooks, and applications:
-
-```python
-import flightml as fml
-
-# 1. Connect to the ingested dataset (period '202510')
-ds = fml.FlightDataset(period="202510")
-print(f"Dataset contains {ds.total_flights:,} flights.")
-
-# 2. Search flights with multi-criteria business filtering
-flights = ds.search_flights(
-    adep="EGLL",
-    ades="KORD",
-    operator="BAW",
-    limit=5
-)
-# Returns DataFrame with human-readable labels:
-# ectrl_id, flight_label, actual_distance_nm, flt_duration_min
-
-# 3. Dynamic weekly fuel pricing and emissions computation
-impact = fml.compute_flight_fuel_and_emissions(ds, ectrl_id=29126XXXX)
-print(f"Total Fuel: {impact.total_fuel_kg:,.1f} kg (${impact.total_fuel_cost_usd:,.2f})")
-print(f"Weekly Spot Price: ${impact.fuel_price_usd_per_gallon:.3f}/gal ({impact.fuel_price_week})")
-
-# 4. Continuous Descent Operations (CDO) descent scoring
-cdo = fml.analyze_cdo_descent(ds, ectrl_id=29126XXXX)
-print(f"CDO Compliance Score: {cdo.cdo_compliance_score:.1f}% (Level-offs: {cdo.level_off_count})")
-
-# 5. Twin flight efficiency comparison
-twins = fml.compare_twin_flights(ds, adep="RKSI", ades="EGLL", ac_type="B77W")
-print(f"Detour Delta: +{twins.detour_delta_nm:.0f} nm | Excess Fuel: +{twins.excess_fuel_kg:,.0f} kg")
-```
-
----
-
-## 🖥️ Interactive Simulation Dashboard
-
-Launch the browser-based simulation platform with a single command:
+Launch the 10-tab Streamlit simulation workbench:
 
 ```bash
 flightml dashboard
 ```
 
-Opens at **`http://localhost:8501`** featuring **9 interactive tabs**:
-1. 🌐 **Network Overview**: Busiest airports, delay heatmaps, and FIR saturation.
-2. ✈️ **4D Trajectory & Holdings**: Trajectory inspector, holding stacks, and unblocked Leaflet maps.
-3. 📅 **Recurring Flight Series**: Corridor tracking, diurnal departure distribution, and delay volatility.
-4. 📉 **CDO Continuous Descent**: Descent profiles, level-off staircases, and fuel waste.
-5. 🔍 **Delay Diagnostics Lab**: Multi-factor root-cause attribution (rotation, holding, wind, ceiling).
-6. 🌱 **Fuel, Carbon & Costs**: Weekly EIA spot fuel prices, emissions, and holding penalty.
-7. 👥 **Twin-Flight Benchmarking**: Side-by-side efficiency benchmarking on identical routes.
-8. ⚡ **What-If & Airline Stress Tests**: Multi-operator turnaround buffer curves and fleet shock stress tests.
-9. 📈 **Macro Evolution & AIRAC Diff**: Traffic growth YoY/MoM, airline market share, and AIRAC diffing.
+Opens at **`http://localhost:8501`** with **10 interactive tabs**:
+1. 🌐 **Network Overview & Airspace Map**: Interactive **$5^\circ \times 5^\circ$ European Airspace Hourly Saturation & Complexity Map** (period average by hour of day `00:00`–`23:00 UTC`), FIR & AUA (`TMA`/`CTA`/`UTA`) saturation, `KPI02 ATOT` surface taxi delays, and VHF radio occupancy.
+2. 🗺️ **4D Trajectory & Holdings**: Single-flight 4D radar track vs. filed plan map, `KPI04 KEP` / `KPI05 KEA` / `KPI08 ASMA` / `KPI19` scorecard, `FRA` vs. ATS airway snapping, and FIR/AUA sector dwell tables.
+3. 📅 **Recurring Series & Diurnal Trends**: Longitudinal day-over-day route tracking and diurnal departure bank congestion curves.
+4. 📉 **Vertical Profile: CDO & CCO**: Descent `CDO` and Climb `CCO` level-off detection, vertical profile charts, and network-wide `KPI19` cruise level-capping corridors.
+5. 🩺 **Delay & Runway Diagnostics**: Multi-factor delay root-cause attribution and arrival runway braking action, density altitude, and stopping safety margins.
+6. 🌱 **Fuel, Carbon & Route Charges (`€`)**: OpenAP excess fuel burn, `TAXI_OUT` ICAO EDB v32B idle emissions ($\text{NO}_x, \text{CO}, \text{nvPM}$), Eurocontrol CRCO fees (`€`), upper-air contrail `ISSR` forcing, and Corridor CRCO Route-Charge vs. Fuel Burn trade-offs.
+7. 👯 **Twin-Flight Benchmark**: Side-by-side comparison and interactive **Dual-Trajectory Map** (`Green` vs. `Red`) with lateral divergence pinpointing.
+8. 🔮 **What-If & Stress Tests**:
+   - **Scenario A**: Multi-Operator Turnaround Buffer Sensitivity (`+5m` to `+25m`)
+   - **Scenario B**: Adverse Weather & Runway Crosswind Capacity Collapse
+   - **Scenario C**: Multi-Operator Fleet Operational Shock Contagion Curves (`+15m` to `+90m`)
+   - **Scenario D**: Network-Wide Prescriptive Hub Tail-Swap Recovery Optimizer (`Tail A ⇄ Tail B`, `€`)
+   - **Scenario E**: 4D Co-Altitude Airspace Proximity & $5^\circ \times 5^\circ$ Complexity Map Scanner
+   - **Scenario F**: Ration-by-Schedule Ground Delay Program (`GDP` / ATFM Slot) Optimizer (`€`)
+9. 📈 **Macro Evolution & AIRAC Diff**: Period-over-period traffic growth, `FRA` directness evolution, European weather-delay correlation, and AIRAC cycle airway/FIR diffing.
+10. 📖 **Methodology & KPI Reference**: Comprehensive in-app mathematical reference for every KPI, physics model, and optimization algorithm.
 
 ---
 
 ## 🌐 REST API Service
-
-Launch the FastAPI web service:
 
 ```bash
 flightml serve --port 8000
 ```
 
 - **Base URL**: `http://localhost:8000/api/v1`
-- **Interactive Swagger Documentation**: `http://localhost:8000/docs`
+- **Interactive Swagger UI**: `http://localhost:8000/docs`
 - **Redoc Documentation**: `http://localhost:8000/redoc`
 
 ---
 
 ## 🧪 Testing
 
-Run the test suite with `pytest`:
-
 ```bash
 pytest tests -v
 ```
 
-All 37 unit and integration tests pass cleanly.
+All 56 unit and integration tests pass cleanly.
 
 ---
 
 ## 📄 License
 
-FlightML software code is licensed under the Apache License 2.0. Note that access to third-party aeronautical datasets remains subject to Eurocontrol's data dissemination terms and agreements.
+FlightML software code is licensed under the Apache License 2.0. Access to third-party aeronautical datasets remains subject to Eurocontrol's data dissemination terms and agreements.

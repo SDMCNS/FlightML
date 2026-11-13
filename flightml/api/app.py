@@ -16,7 +16,32 @@ from flightml.models.reactionary_delay import ReactionaryDelayAnalyzer
 from flightml.models.airline_stress import stress_test_airline
 from flightml.viz.map_builder import create_trajectory_map
 from flightml.eval.macro_comparison import compare_aviation_periods
-from flightml.eval.cdo_analyzer import analyze_cdo_descent
+from flightml.eval.cdo_analyzer import (
+    analyze_cdo_descent,
+    analyze_cco_climb,
+    analyze_vertical_profile_efficiency,
+)
+from flightml.eval.pru_kpis import (
+    compute_flight_pru_kpis,
+    analyze_network_level_capping,
+)
+from flightml.geo.fra_analyzer import (
+    analyze_flight_fra_adherence,
+    compare_fra_evolution,
+)
+from flightml.features.radio_workload import estimate_airport_and_sector_radio_workload
+from flightml.eval.crco_economics import (
+    compute_flight_crco_charges,
+    detect_route_charge_avoidance,
+)
+from flightml.geo.conflict_scanner import (
+    scan_airspace_proximity_events,
+    compute_sector_complexity_index,
+    compute_hourly_grid_saturation,
+)
+from flightml.weather.runway_safety import assess_flight_runway_safety
+from flightml.eval.contrail_climate import analyze_flight_wind_and_contrails
+from flightml.sim.tail_swap_optimizer import optimize_hub_tail_swaps
 from flightml.eval.flight_twins import compare_twin_flights
 from flightml.eval.diagnostics import diagnose_flight_bottlenecks
 from flightml.data.archive_ingest import list_available_periods
@@ -26,6 +51,14 @@ from flightml.eval.recurring_series import analyze_recurring_flight_series
 from flightml.features.fir_saturation import (
     calculate_fir_hourly_saturation,
     calculate_flight_fir_dwell_inefficiency,
+)
+from flightml.features.aua_saturation import (
+    calculate_aua_hourly_saturation,
+    calculate_flight_aua_dwell_inefficiency,
+)
+from flightml.eval.surface_taxi import (
+    analyze_airport_taxi_out_performance,
+    analyze_flight_taxi_out,
 )
 from flightml.eval.fuel_carbon import compute_flight_fuel_and_emissions
 from flightml.eval.jet_fuel_prices import (
@@ -357,7 +390,7 @@ def get_flight_fir_dwell(
 def get_fuel_prices(
     period: str | None = Query(default=None, description="Optional period ID (201611, 202510)"),
 ) -> list[dict[str, Any]]:
-    """Retrieve official weekly jet fuel spot prices (EIA / IATA benchmark) in $/gal, $/kg, and $/metric ton."""
+    """Retrieve official weekly jet fuel spot prices (EIA / IATA benchmark) in €/gal, €/kg, and €/metric ton."""
     df = get_all_weekly_fuel_prices_df()
     if period:
         df = df[df["period_id"] == period.strip()]
@@ -368,9 +401,9 @@ def get_fuel_prices(
 def get_flight_fuel_impact(
     ectrl_id: int,
     period: str = Query(default="201611", description="Eurocontrol period (e.g. 201611, 202510)"),
-    price_per_kg: float | None = Query(default=None, description="Optional manual fuel price override in USD/kg"),
+    price_per_kg: float | None = Query(default=None, description="Optional manual fuel price override in EUR/kg"),
 ) -> dict[str, Any]:
-    """Calculate excess fuel burn, CO2 emissions, and financial penalty with weekly EIA fuel spot price lookup."""
+    """Calculate excess fuel burn, CO2 emissions, and Euro (€) financial penalty with weekly EIA fuel spot price lookup."""
     ds = FlightDataset(period=period)
     try:
         impact = compute_flight_fuel_and_emissions(ds, ectrl_id=ectrl_id, fuel_price_per_kg=price_per_kg)
@@ -462,3 +495,247 @@ def get_airac_diff_endpoint(
         return report.to_dict()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/aua/saturation")
+def get_aua_saturation_endpoint(
+    period: str = Query(default="202510", description="Eurocontrol period (e.g. 202510)"),
+    aua_type: str | None = Query(default=None, description="Optional AUA type filter: TMA, CTA, UTA"),
+    aua_id: str | None = Query(default=None, description="Optional AUA ID filter (e.g. EGTTCTA, EYVITMA)"),
+    date: str | None = Query(default=None, description="Optional Date YYYY-MM-DD"),
+    threshold: int = Query(default=30, ge=1, le=1000, description="Hourly flight saturation threshold"),
+    top_n: int = Query(default=15, ge=1, le=100),
+) -> dict[str, Any]:
+    """Calculate hourly ATC Unit Airspace (TMA, CTA, UTA) saturation and sector congestion."""
+    ds = FlightDataset(period=period)
+    return calculate_aua_hourly_saturation(
+        ds,
+        aua_type=aua_type,
+        aua_id=aua_id,
+        date_str=date,
+        threshold_flights_per_hr=threshold,
+        top_n=top_n,
+    )
+
+
+@app.get("/api/v1/flights/{ectrl_id}/aua-dwell")
+def get_flight_aua_dwell_endpoint(
+    ectrl_id: int,
+    period: str = Query(default="202510", description="Data period ID"),
+) -> dict[str, Any]:
+    """Assess sector-by-sector ATC Unit Airspace (TMA, CTA, UTA) dwell efficiency for a single flight."""
+    ds = FlightDataset(period=period)
+    res = calculate_flight_aua_dwell_inefficiency(ds, ectrl_id=ectrl_id)
+    if not res.get("has_data") and "no aua traversal" in res.get("message", "").lower():
+        raise HTTPException(status_code=404, detail=res.get("message"))
+    return res
+
+
+@app.get("/api/v1/surface/taxi-out")
+def get_airport_taxi_out_endpoint(
+    airport: str | None = Query(default=None, description="Optional Airport ICAO (e.g. EGLL, LFPG)"),
+    date: str | None = Query(default=None, description="Optional Date YYYY-MM-DD"),
+    period: str = Query(default="202510", description="Eurocontrol period (e.g. 202510)"),
+    min_flights: int = Query(default=50, ge=1, le=5000),
+    top_n: int = Query(default=20, ge=1, le=100),
+) -> dict[str, Any]:
+    """Compute ICAO KPI02 Additional Taxi-Out Time (ATOT), UTOT baselines, and LTO idle emissions across airports."""
+    ds = FlightDataset(period=period)
+    return analyze_airport_taxi_out_performance(
+        ds, airport_icao=airport, date_str=date, min_flights=min_flights, top_n=top_n
+    )
+
+
+@app.get("/api/v1/flights/{ectrl_id}/taxi-out")
+def get_flight_taxi_out_endpoint(
+    ectrl_id: int,
+    period: str = Query(default="202510", description="Data period ID"),
+) -> dict[str, Any]:
+    """Evaluate single-flight surface taxi-out queue delay (ICAO KPI02 ATOT) and ICAO EDB v32B idle emissions."""
+    ds = FlightDataset(period=period)
+    rep = analyze_flight_taxi_out(ds, ectrl_id=ectrl_id)
+    if not rep:
+        raise HTTPException(status_code=404, detail=f"TAXI_OUT record not found for flight {ectrl_id}")
+    return rep.to_dict()
+
+
+@app.get("/api/v1/flights/{ectrl_id}/pru-kpis")
+def get_flight_pru_kpis_endpoint(
+    ectrl_id: int,
+    period: str = Query(default="202510", description="Data period ID"),
+) -> dict[str, Any]:
+    """Compute ICAO GANP & Eurocontrol PRU Scorecard (KPI04 KEP, KPI05 KEA, KPI08 ASMA, KPI19 Level-Capping)."""
+    ds = FlightDataset(period=period)
+    sc = compute_flight_pru_kpis(ds, ectrl_id=ectrl_id)
+    if not sc:
+        raise HTTPException(status_code=404, detail=f"Flight {ectrl_id} not found in period {period}")
+    return sc.to_dict()
+
+
+@app.get("/api/v1/flights/{ectrl_id}/cco")
+def get_flight_cco_endpoint(
+    ectrl_id: int,
+    period: str = Query(default="202510", description="Data period ID"),
+) -> dict[str, Any]:
+    """Analyze Continuous Climb Operations (KPI17 CCO) and departure climb level-offs."""
+    ds = FlightDataset(period=period)
+    rep = analyze_cco_climb(ds, ectrl_id=ectrl_id)
+    if not rep:
+        raise HTTPException(status_code=404, detail=f"CCO climb profile not found for flight {ectrl_id}")
+    return rep.to_dict()
+
+
+@app.get("/api/v1/flights/{ectrl_id}/vertical-profile")
+def get_flight_vertical_profile_endpoint(
+    ectrl_id: int,
+    period: str = Query(default="202510", description="Data period ID"),
+) -> dict[str, Any]:
+    """Unified 3-phase vertical flight efficiency scorecard (CCO + Cruise Level-Capping + CDO)."""
+    ds = FlightDataset(period=period)
+    res = analyze_vertical_profile_efficiency(ds, ectrl_id=ectrl_id)
+    if not res:
+        raise HTTPException(status_code=404, detail=f"Vertical profile not found for flight {ectrl_id}")
+    return res
+
+
+@app.get("/api/v1/pru/level-capping")
+def get_network_level_capping_endpoint(
+    period: str = Query(default="202510", description="Data period ID"),
+    operator: str | None = Query(default=None, description="Optional airline operator ICAO"),
+    min_distance_nm: float = Query(default=250.0, ge=50.0),
+    top_n: int = Query(default=15, ge=1, le=100),
+) -> dict[str, Any]:
+    """Scan the network for KPI19 Cruise Flight-Level Capping (actual max FL restricted >=2,000 ft below Requested FL)."""
+    ds = FlightDataset(period=period)
+    return analyze_network_level_capping(ds, operator=operator, min_distance_nm=min_distance_nm, top_n=top_n)
+
+
+@app.get("/api/v1/flights/{ectrl_id}/fra")
+def get_flight_fra_endpoint(
+    ectrl_id: int,
+    period: str = Query(default="202510", description="Data period ID"),
+    snap_tolerance_nm: float = Query(default=2.5, ge=0.5, le=15.0),
+) -> dict[str, Any]:
+    """Snap 4D waypoints to ATS airways, 5-letter RNAV fixes, and radio navaids to compute Free Route Airspace (FRA) directness."""
+    ds = FlightDataset(period=period)
+    rep = analyze_flight_fra_adherence(ds, ectrl_id=ectrl_id, snap_tolerance_nm=snap_tolerance_nm)
+    if not rep:
+        raise HTTPException(status_code=404, detail=f"Flight {ectrl_id} not found in period {period}")
+    return rep.to_dict()
+
+
+@app.get("/api/v1/fra/evolution")
+def get_fra_evolution_endpoint(
+    p1: str = Query(default="201611", description="Baseline period ID"),
+    p2: str = Query(default="202510", description="Comparison period ID"),
+    sample_flights: int = Query(default=300, ge=50, le=2000),
+) -> dict[str, Any]:
+    """Compare Free Route Airspace (FRA) adoption between two historical Eurocontrol periods."""
+    return compare_fra_evolution(period1=p1, period2=p2, sample_flights=sample_flights)
+
+
+@app.get("/api/v1/airports/{ident}/radio-workload")
+def get_airport_radio_workload_endpoint(
+    ident: str,
+    date: str | None = Query(default=None, description="Optional Date YYYY-MM-DD"),
+    period: str = Query(default="202510", description="Data period ID"),
+) -> dict[str, Any]:
+    """Estimate ATC Controller-Pilot VHF radio frequency workload and voice channel occupancy (%)."""
+    ds = FlightDataset(period=period)
+    return estimate_airport_and_sector_radio_workload(ds, airport_icao=ident, date_str=date)
+
+
+@app.get("/api/v1/flights/{ectrl_id}/crco-cost")
+def get_flight_crco_cost_endpoint(
+    ectrl_id: int,
+    period: str = Query(default="202510", description="Data period ID"),
+) -> dict[str, Any]:
+    """Compute Eurocontrol CRCO En-Route Navigation Charges (EUR) and Total Direct Operating Cost (EUR)."""
+    ds = FlightDataset(period=period)
+    rep = compute_flight_crco_charges(ds, ectrl_id=ectrl_id)
+    if not rep:
+        raise HTTPException(status_code=404, detail=f"Flight {ectrl_id} not found in period {period}")
+    return rep.to_dict()
+
+
+@app.get("/api/v1/economics/route-avoidance")
+def get_route_charge_avoidance_endpoint(
+    adep: str = Query(..., description="Origin airport ICAO"),
+    ades: str = Query(..., description="Destination airport ICAO"),
+    ac_type: str | None = Query(default=None, description="Optional aircraft type ICAO"),
+    period: str = Query(default="202510", description="Data period ID"),
+    limit: int = Query(default=25, ge=5, le=100),
+) -> dict[str, Any]:
+    """Compare CRCO route charges vs. fuel burn on a city pair to flag Route-Charge Avoidance detours."""
+    ds = FlightDataset(period=period)
+    return detect_route_charge_avoidance(ds, adep=adep, ades=ades, ac_type=ac_type, limit=limit)
+
+
+@app.get("/api/v1/airspace/conflicts")
+def get_airspace_conflicts_endpoint(
+    date: str | None = Query(default=None, description="Date YYYY-MM-DD"),
+    hour: int = Query(default=10, ge=0, le=23, description="UTC hour"),
+    horiz_sep_nm: float = Query(default=5.0, ge=1.0, le=25.0),
+    vert_sep_fl: float = Query(default=10.0, ge=5.0, le=40.0),
+    period: str = Query(default="202510", description="Data period ID"),
+    limit: int = Query(default=25, ge=1, le=100),
+) -> dict[str, Any]:
+    """Scan 4D trajectories for co-altitude aircraft proximity events and airspace complexity."""
+    ds = FlightDataset(period=period)
+    rep = scan_airspace_proximity_events(
+        ds, date_str=date, hour=hour, horiz_sep_nm=horiz_sep_nm, vert_sep_fl=vert_sep_fl, limit=limit
+    )
+    comp = compute_sector_complexity_index(ds, date_str=rep.date_str, hour=hour)
+    return {
+        "proximity_report": rep.to_dict(),
+        "sector_complexity": comp,
+    }
+
+
+@app.get("/api/v1/flights/{ectrl_id}/runway-safety")
+def get_flight_runway_safety_endpoint(
+    ectrl_id: int,
+    period: str = Query(default="202510", description="Data period ID"),
+) -> dict[str, Any]:
+    """Assess arrival runway braking action, density altitude, crosswind limits, and landing distance safety margin."""
+    ds = FlightDataset(period=period)
+    rep = assess_flight_runway_safety(ds, metar_client=None, ectrl_id=ectrl_id, fetch_live_metar=False)
+    if not rep:
+        raise HTTPException(status_code=404, detail=f"Flight {ectrl_id} not found in period {period}")
+    return rep.to_dict()
+
+
+@app.get("/api/v1/flights/{ectrl_id}/contrails")
+def get_flight_contrails_endpoint(
+    ectrl_id: int,
+    period: str = Query(default="202510", description="Data period ID"),
+) -> dict[str, Any]:
+    """Evaluate upper-air wind-optimal routing (TAS vs GS) and persistent contrail ISSR formation & avoidance."""
+    ds = FlightDataset(period=period)
+    rep = analyze_flight_wind_and_contrails(ds, ectrl_id=ectrl_id)
+    if not rep:
+        raise HTTPException(status_code=404, detail=f"Flight {ectrl_id} not found in period {period}")
+    return rep.to_dict()
+
+
+@app.get("/api/v1/airspace/grid-saturation")
+def get_airspace_grid_saturation_endpoint(
+    hour: int = Query(default=10, ge=0, le=23, description="UTC hour of day (0-23) averaged across the period"),
+    period: str = Query(default="202510", description="Data period ID"),
+) -> dict[str, Any]:
+    """Compute average hourly flight density and complexity per 5° x 5° geographic square across the period."""
+    ds = FlightDataset(period=period)
+    return compute_hourly_grid_saturation(ds, hour_utc=hour)
+
+
+@app.get("/api/v1/sim/tail-swaps")
+def get_tail_swaps_endpoint(
+    operator: str | None = Query(default=None, description="Optional airline ICAO code (omit for network-wide scan)"),
+    airport: str | None = Query(default=None, description="Optional hub airport ICAO"),
+    date: str | None = Query(default=None, description="Optional date YYYY-MM-DD"),
+    period: str = Query(default="202510", description="Data period ID"),
+) -> dict[str, Any]:
+    """Prescriptive AI optimizer recommending same-type aircraft tail swaps at hubs to absorb reactionary delays."""
+    ds = FlightDataset(period=period)
+    res = optimize_hub_tail_swaps(ds, operator=operator, hub_airport=airport, date_str=date)
+    return res.to_dict()

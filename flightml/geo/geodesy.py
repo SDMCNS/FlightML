@@ -50,3 +50,19 @@ def cross_track_distance_nm(
     d_xt = math.asin(math.sin(d13) * math.sin(theta13 - theta12))
     return d_xt * EARTH_RADIUS_NM
 
+
+haversine_nm = haversine_distance_nm
+
+
+def haversine_vectorized_nm(lat1, lon1, lat2, lon2):
+    """Vectorized NumPy great-circle distance in nautical miles."""
+    import numpy as np
+
+    phi1 = np.radians(lat1)
+    phi2 = np.radians(lat2)
+    dphi = np.radians(lat2 - lat1)
+    dlambda = np.radians(lon2 - lon1)
+    a = np.sin(dphi / 2.0) ** 2 + np.cos(phi1) * np.cos(phi2) * np.sin(dlambda / 2.0) ** 2
+    return EARTH_RADIUS_NM * 2.0 * np.arctan2(np.sqrt(a), np.sqrt(np.maximum(0.0, 1.0 - a)))
+
+

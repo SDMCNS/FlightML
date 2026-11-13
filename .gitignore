@@ -47,6 +47,8 @@ venv/
 *.pickle
 *.duckdb
 *.duckdb.wal
+*.sqlite
+*.db
 
 # Ignore all other CSV files except approved open aeronautical catalogs, OpenAP & EIA benchmarks
 *.csv

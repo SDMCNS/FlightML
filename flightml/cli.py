@@ -26,7 +26,31 @@ from flightml.sim.what_if import simulate_turnaround_mitigation, simulate_runway
 from flightml.sim.gdp_optimizer import optimize_ground_delay_program
 from flightml.viz.map_builder import create_trajectory_map
 from flightml.eval.macro_comparison import compare_aviation_periods
-from flightml.eval.cdo_analyzer import analyze_cdo_descent
+from flightml.eval.cdo_analyzer import (
+    analyze_cdo_descent,
+    analyze_cco_climb,
+    analyze_vertical_profile_efficiency,
+)
+from flightml.eval.pru_kpis import (
+    compute_flight_pru_kpis,
+    analyze_network_level_capping,
+)
+from flightml.geo.fra_analyzer import (
+    analyze_flight_fra_adherence,
+    compare_fra_evolution,
+)
+from flightml.features.radio_workload import estimate_airport_and_sector_radio_workload
+from flightml.eval.crco_economics import (
+    compute_flight_crco_charges,
+    detect_route_charge_avoidance,
+)
+from flightml.geo.conflict_scanner import (
+    scan_airspace_proximity_events,
+    compute_sector_complexity_index,
+)
+from flightml.weather.runway_safety import assess_flight_runway_safety
+from flightml.eval.contrail_climate import analyze_flight_wind_and_contrails
+from flightml.sim.tail_swap_optimizer import optimize_hub_tail_swaps
 from flightml.data.archive_ingest import EurocontrolArchiveIngestor, list_available_periods
 from flightml.weather.network_weather_impact import analyze_network_weather_impact
 from flightml.geo.airac_diff import compare_airac_cycles
@@ -34,6 +58,14 @@ from flightml.eval.recurring_series import analyze_recurring_flight_series
 from flightml.features.fir_saturation import (
     calculate_fir_hourly_saturation,
     calculate_flight_fir_dwell_inefficiency,
+)
+from flightml.features.aua_saturation import (
+    calculate_aua_hourly_saturation,
+    calculate_flight_aua_dwell_inefficiency,
+)
+from flightml.eval.surface_taxi import (
+    analyze_airport_taxi_out_performance,
+    analyze_flight_taxi_out,
 )
 from flightml.eval.jet_fuel_prices import (
     get_all_weekly_fuel_prices_df,
@@ -444,9 +476,9 @@ def predict_delay_cmd(
 def fuel_impact_cmd(
     ectrl_id: int = typer.Argument(..., help="ECTRL ID of the flight to evaluate"),
     period: str = typer.Option("201611", "--period", "-P", help="Eurocontrol dataset period (e.g. 201611, 202510)"),
-    price_per_kg: float | None = typer.Option(None, "--price", "-p", help="Fuel price per kg in USD (defaults to official EIA weekly spot price for flight date)"),
+    price_per_kg: float | None = typer.Option(None, "--price", "-p", help="Fuel price per kg in EUR (defaults to official EIA weekly spot price in EUR for flight date)"),
 ) -> None:
-    """Calculate excess fuel burn, CO2 emissions, and financial penalty from holdings and detour."""
+    """Calculate excess fuel burn, CO2 emissions, and Euro (€) financial penalty from holdings and detour."""
     ds = FlightDataset(period=period)
     with console.status("[cyan]Computing flight trajectory fuel burn and carbon metrics..."):
         impact = compute_flight_fuel_and_emissions(ds, ectrl_id, fuel_price_per_kg=price_per_kg)
@@ -462,9 +494,9 @@ def fuel_impact_cmd(
     table.add_row("Route Detour Fuel Burned", f"{impact.excess_routing_fuel_kg:.1f} kg")
     table.add_row("Total Excess Fuel Burned", f"[bold red]{impact.total_excess_fuel_kg:,.1f} kg[/bold red]")
     table.add_row("Total Excess CO₂ Emitted", f"[bold red]{impact.excess_co2_kg:,.1f} kg ({impact.excess_co2_kg/1000.0:.2f} metric tons)[/bold red]")
-    table.add_row("Weekly Jet Fuel Price", f"${impact.fuel_price_usd_per_gallon:.3f}/gal (${impact.fuel_price_usd_per_kg:.4f}/kg)")
+    table.add_row("Weekly Jet Fuel Price", f"€{impact.fuel_price_eur_per_gallon:.3f}/gal (€{impact.fuel_price_eur_per_kg:.4f}/kg)")
     table.add_row("Price Week & Benchmark", f"{impact.fuel_price_week} [{impact.fuel_price_source}]")
-    table.add_row("Estimated Excess Fuel Cost", f"[bold yellow]${impact.estimated_excess_fuel_cost_usd:,.2f} USD[/bold yellow]")
+    table.add_row("Estimated Excess Fuel Cost", f"[bold yellow]€{impact.estimated_excess_fuel_cost_eur:,.2f} EUR[/bold yellow]")
 
     console.print(table)
 
@@ -473,27 +505,27 @@ def fuel_impact_cmd(
 def fuel_prices_cmd(
     period: str | None = typer.Option(None, "--period", "-P", help="Filter by Eurocontrol period (e.g. 201611, 202510)"),
 ) -> None:
-    """Display official EIA / IATA historical weekly jet fuel spot prices across dataset periods."""
+    """Display official EIA / IATA historical weekly jet fuel spot prices (in Euros EUR) across dataset periods."""
     df = get_all_weekly_fuel_prices_df()
     if period:
         df = df[df["period_id"] == period.strip()]
 
-    title = f"⛽ Weekly Aviation Jet Fuel Spot Prices (Source: EIA / IATA Benchmark)"
+    title = f"⛽ Weekly Aviation Jet Fuel Spot Prices in Euros (Source: EIA / IATA Benchmark)"
     table = Table(title=title, header_style="bold magenta")
     table.add_column("Period", style="cyan", justify="center")
     table.add_column("Week Range", style="bold white")
-    table.add_column("Price ($/gal)", justify="right", style="bold green")
-    table.add_column("Price ($/kg)", justify="right", style="yellow")
-    table.add_column("Price ($/metric ton)", justify="right", style="bold yellow")
+    table.add_column("Price (€/gal)", justify="right", style="bold green")
+    table.add_column("Price (€/kg)", justify="right", style="yellow")
+    table.add_column("Price (€/metric ton)", justify="right", style="bold yellow")
     table.add_column("Benchmark Source", style="dim")
 
     for _, row in df.iterrows():
         table.add_row(
             str(row["period_id"]),
             f"{row['year']}-W{int(row['week_number']):02d} ({row['week_start']} ➔ {row['week_end']})",
-            f"${row['price_usd_per_gallon']:.3f}",
-            f"${row['price_usd_per_kg']:.4f}",
-            f"${row['price_usd_per_metric_ton']:,.2f}",
+            f"€{row['price_eur_per_gallon']:.3f}",
+            f"€{row['price_eur_per_kg']:.4f}",
+            f"€{row['price_eur_per_metric_ton']:,.2f}",
             str(row["source"]),
         )
     console.print(table)
@@ -537,7 +569,7 @@ def gdp_cmd(
     start_hour: int = typer.Option(6, "--start", help="Program start hour (0-23)"),
     end_hour: int = typer.Option(12, "--end", help="Program end hour (0-23)"),
     rate: int = typer.Option(25, "--rate", "-r", help="Degraded arrival capacity rate (movements / hr)"),
-    price: float = typer.Option(0.85, "--price", "-p", help="Fuel price per kg in USD"),
+    price: float | None = typer.Option(None, "--price", "-p", help="Fuel price per kg in EUR"),
 ) -> None:
     """Run Ration-by-Schedule (RBS) Ground Delay Program (GDP) optimization to prevent airborne holdings."""
     ds = FlightDataset()
@@ -562,7 +594,7 @@ def gdp_cmd(
     table.add_row("Airborne Holding Delay Prevented", f"[bold green]{res.total_airborne_delay_prevented_min:,.1f} min[/bold green]")
     table.add_row("Total Jet-A Fuel Saved", f"[bold green]{res.total_fuel_saved_kg:,.1f} kg ({res.total_fuel_saved_kg/1000.0:,.1f} metric tons)[/bold green]")
     table.add_row("Total CO₂ Emissions Prevented", f"[bold green]{res.total_co2_saved_kg:,.1f} kg ({res.total_co2_saved_kg/1000.0:,.1f} metric tons)[/bold green]")
-    table.add_row("Direct Fuel Cost Saved", f"[bold yellow]${res.total_fuel_cost_saved_usd:,.2f} USD[/bold yellow]")
+    table.add_row("Direct Fuel Cost Saved", f"[bold yellow]€{res.total_fuel_cost_saved_eur:,.2f} EUR[/bold yellow]")
 
     console.print(table)
 
@@ -622,7 +654,7 @@ def compare_twins_cmd(
     table.add_row("Extension Ratio (KEA)", f"{comp.fast_extension_ratio:.3f}x", f"{comp.slow_extension_ratio:.3f}x", f"+{comp.slow_extension_ratio - comp.fast_extension_ratio:.3f}x")
     table.add_row("Fuel Burned", f"{comp.fast_fuel_kg:,.1f} kg", f"{comp.slow_fuel_kg:,.1f} kg", f"+{comp.excess_fuel_burned_kg:,.1f} kg")
     table.add_row("CO₂ Emitted", f"{comp.fast_fuel_kg*3.16/1000:,.1f} tons", f"{comp.slow_fuel_kg*3.16/1000:,.1f} tons", f"+{comp.excess_co2_kg/1000:,.1f} tons")
-    table.add_row("Excess Fuel Cost", "$0.00", f"${comp.excess_fuel_cost_usd:,.2f}", f"${comp.excess_fuel_cost_usd:,.2f} USD")
+    table.add_row("Excess Fuel Cost", "€0.00", f"€{comp.excess_fuel_cost_eur:,.2f}", f"€{comp.excess_fuel_cost_eur:,.2f} EUR")
 
     console.print(table)
 
@@ -1205,6 +1237,730 @@ def nearest_waypoints_cmd(
             f"{r['distance_nm']:.2f} nm",
         )
     console.print(table)
+
+
+@app.command("aua-saturation")
+def aua_saturation_cmd(
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period (e.g. 202510)"),
+    aua_type: str | None = typer.Option(None, "--type", "-k", help="Filter AUA type: TMA, CTA, UTA"),
+    aua_id: str | None = typer.Option(None, "--aua", help="Specific AUA ID filter (e.g. EGTTCTA, EYVITMA)"),
+    date: str | None = typer.Option(None, "--date", "-d", help="Filter by specific date (YYYY-MM-DD)"),
+    threshold: int = typer.Option(30, "--threshold", "-t", help="Hourly flight saturation threshold"),
+    top_n: int = typer.Option(15, "--limit", "-n", help="Top N saturated AUAs"),
+) -> None:
+    """Analyze hourly ATC Unit Airspace (TMA, CTA, UTA) saturation and sector congestion."""
+    with console.status(f"[cyan]Calculating ATC Unit Airspace (AUA) saturation for period {period}..."):
+        ds = FlightDataset(period=period)
+        res = calculate_aua_hourly_saturation(
+            ds,
+            aua_type=aua_type,
+            aua_id=aua_id,
+            date_str=date,
+            threshold_flights_per_hr=threshold,
+            top_n=top_n,
+        )
+
+    if not res.get("has_data"):
+        console.print(f"[yellow]{res.get('message')}[/yellow]")
+        return
+
+    type_label = f" [{aua_type.upper()}]" if aua_type else " [TMA/CTA/UTA]"
+    table = Table(
+        title=f"📡 European ATC Unit Airspace (AUA) Saturation{type_label} (Period: {period}, ≥{threshold} flt/hr)",
+        header_style="bold magenta",
+    )
+    table.add_column("AUA ID", style="bold cyan", justify="left")
+    table.add_column("Type", style="yellow", justify="center")
+    table.add_column("Total Traversals", justify="right")
+    table.add_column("Peak Flts/Hr", justify="right", style="bold red")
+    table.add_column("Avg Flts/Hr", justify="right")
+    table.add_column("Avg Dwell (min)", justify="right")
+    table.add_column(f"Hours ≥{threshold}", justify="right", style="yellow")
+    table.add_column("Saturation %", justify="right", style="bold green")
+
+    for row in res["top_saturated_auas"]:
+        sat_pct = f"{row['saturation_pct']:.1f}%"
+        color = "red" if row["saturation_pct"] > 75 else "yellow" if row["saturation_pct"] > 40 else "green"
+        table.add_row(
+            str(row["aua_id"]),
+            str(row["aua_type"]),
+            f"{int(row['total_traversals']):,}",
+            str(row["peak_hourly_flights"]),
+            f"{row['avg_hourly_flights']:.1f}",
+            f"{row['avg_dwell_min']:.1f}",
+            str(row["hours_over_capacity"]),
+            f"[{color}]{sat_pct}[/{color}]",
+        )
+    console.print(table)
+
+
+@app.command("flight-aua-dwell")
+def flight_aua_dwell_cmd(
+    ectrl_id: int = typer.Argument(..., help="Eurocontrol Flight ID"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period (e.g. 202510)"),
+) -> None:
+    """Assess sector-by-sector ATC Unit Airspace (TMA, CTA, UTA) dwell efficiency for a single flight."""
+    with console.status(f"[cyan]Evaluating AUA (TMA/CTA/UTA) traversals for flight {ectrl_id}..."):
+        ds = FlightDataset(period=period)
+        res = calculate_flight_aua_dwell_inefficiency(ds, ectrl_id=ectrl_id)
+
+    if not res.get("has_data"):
+        console.print(f"[yellow]{res.get('message')}[/yellow]")
+        return
+
+    console.print(
+        f"\n[bold green]ATC Unit Airspace (AUA) Dwell Report:[/bold green] Flight {ectrl_id} "
+        f"([cyan]{res.get('adep')}[/cyan] ➔ [cyan]{res.get('ades')}[/cyan], {res.get('ac_type')})"
+    )
+    console.print(
+        f"Total Actual AUA Dwell: {res['total_actual_aua_min']:.1f} min | "
+        f"Filed AUA Dwell: {res['total_filed_aua_min']:.1f} min | "
+        f"Net Delta: [bold]{res['net_aua_dwell_delta_min']:+.1f} min[/bold]"
+    )
+    console.print(
+        f"TMA (Terminal) Dwell Delta: [yellow]{res['tma_dwell_delta_min']:+.1f} min[/yellow] | "
+        f"CTA/UTA (En-Route) Dwell Delta: [cyan]{res['enroute_cta_uta_dwell_delta_min']:+.1f} min[/cyan]\n"
+    )
+
+    table = Table(title="Traversed ATC Unit Airspaces (TMA / CTA / UTA)", header_style="bold magenta")
+    table.add_column("Seq", justify="right", style="cyan")
+    table.add_column("AUA ID", style="bold white")
+    table.add_column("Type", style="yellow")
+    table.add_column("Actual Entry ➔ Exit", style="dim")
+    table.add_column("Act Dwell", justify="right")
+    table.add_column("Fld Dwell", justify="right")
+    table.add_column("Delta (min)", justify="right")
+    table.add_column("Status", justify="left")
+
+    for s in res["sectors"]:
+        delta_val = s["dwell_diff_min"]
+        delta_str = f"{delta_val:+.1f}" if delta_val is not None else "N/A"
+        color = (
+            "red"
+            if s["status"] == "HOLDING_OR_VECTORING"
+            else "green"
+            if s["status"] == "DIRECT_SHORTCUT"
+            else "white"
+        )
+        fld_d = f"{s['filed_dwell_min']:.1f}m" if s["filed_dwell_min"] is not None else "N/A"
+        entry_exit = f"{s['actual_entry'][11:16]} ➔ {s['actual_exit'][11:16]}"
+        table.add_row(
+            str(s["seq_num"]),
+            s["aua_id"],
+            s["aua_type"],
+            entry_exit,
+            f"{s['actual_dwell_min']:.1f}m",
+            fld_d,
+            f"[{color}]{delta_str}[/{color}]",
+            f"[{color}]{s['status']}[/{color}]",
+        )
+    console.print(table)
+
+
+@app.command("taxi-out")
+def taxi_out_cmd(
+    airport: str | None = typer.Option(None, "--airport", "-a", help="Optional airport ICAO filter (e.g. EGLL, LFPG)"),
+    date: str | None = typer.Option(None, "--date", "-d", help="Optional date filter (YYYY-MM-DD)"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period (e.g. 202510)"),
+    min_flights: int = typer.Option(50, "--min-flights", help="Minimum departures required to include airport"),
+    limit: int = typer.Option(15, "--limit", "-n", help="Top N airports by Additional Taxi-Out Time (ATOT)"),
+) -> None:
+    """Compute ICAO KPI02 Additional Taxi-Out Time (ATOT), UTOT baselines, and LTO idle emissions across airports."""
+    with console.status(f"[cyan]Analyzing surface taxi-out performance & ICAO KPI02 ATOT (Period: {period})..."):
+        ds = FlightDataset(period=period)
+        res = analyze_airport_taxi_out_performance(
+            ds, airport_icao=airport, date_str=date, min_flights=min_flights, top_n=limit
+        )
+
+    if not res.get("has_data"):
+        console.print(f"[yellow]{res.get('message')}[/yellow]")
+        return
+
+    table = Table(
+        title=f"🛞 Airport Surface Movement & ICAO KPI02 Additional Taxi-Out Time (ATOT) — Period {period}",
+        header_style="bold magenta",
+    )
+    table.add_column("Airport", style="bold cyan")
+    table.add_column("Deps", justify="right")
+    table.add_column("UTOT (p20)", justify="right", style="green")
+    table.add_column("Actual Taxi", justify="right")
+    table.add_column("KPI02 ATOT", justify="right", style="bold red")
+    table.add_column("p95 Taxi", justify="right", style="yellow")
+    table.add_column("Excess Queue Hrs", justify="right")
+    table.add_column("Excess Fuel (t)", justify="right", style="yellow")
+    table.add_column("Excess CO₂ (t)", justify="right", style="bold red")
+    table.add_column("NOx / CO (kg)", justify="right", style="dim")
+
+    for r in res["airports"]:
+        table.add_row(
+            str(r["adep"]),
+            f"{int(r['departures']):,}",
+            f"{r['unimpeded_utot_min']:.1f}m",
+            f"{r['avg_actual_taxi_min']:.1f}m",
+            f"+{r['avg_additional_atot_min']:.1f}m",
+            f"{r['p95_taxi_out_min']:.1f}m",
+            f"{r['total_excess_taxi_hours']:,.1f}h",
+            f"{r['excess_taxi_fuel_kg'] / 1000.0:,.1f}t",
+            f"{r['excess_taxi_co2_kg'] / 1000.0:,.1f}t",
+            f"{r['excess_nox_kg']:,.0f} / {r['excess_co_kg']:,.0f}",
+        )
+    console.print(table)
+
+
+@app.command("flight-taxi-out")
+def flight_taxi_out_cmd(
+    ectrl_id: int = typer.Argument(..., help="Eurocontrol Flight ID"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period (e.g. 202510)"),
+) -> None:
+    """Evaluate single-flight surface taxi-out queue delay (ICAO KPI02 ATOT) and ICAO EDB v32B idle emissions."""
+    with console.status(f"[cyan]Evaluating surface taxi-out & LTO idle emissions for flight {ectrl_id}..."):
+        ds = FlightDataset(period=period)
+        rep = analyze_flight_taxi_out(ds, ectrl_id=ectrl_id)
+
+    if not rep:
+        console.print(f"[yellow]No TAXI_OUT record found for flight {ectrl_id} in period {period}.[/yellow]")
+        return
+
+    table = Table(
+        title=f"🛞 Single-Flight Surface Taxi-Out & ICAO EDB Idle Emissions — Flight {rep.ectrl_id} ({rep.adep} ➔ {rep.ades})",
+        header_style="bold magenta",
+    )
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="green")
+
+    table.add_row("Aircraft & Default Engine", f"{rep.ac_type} (Wake {rep.wake_category}) — {rep.default_engine}")
+    table.add_row("Off-Block ➔ Takeoff (UTC)", f"{rep.off_block_time} ➔ {rep.takeoff_time}")
+    table.add_row("Actual vs Filed Taxi-Out", f"{rep.actual_taxi_out_min:.1f} min (Filed: {rep.filed_taxi_out_min:.1f} min, Δ {rep.filed_vs_actual_delta_min:+.1f} min)")
+    table.add_row("Unimpeded Baseline (UTOT p20)", f"{rep.unimpeded_utot_min:.1f} min at {rep.adep}")
+    table.add_row("ICAO KPI02 Additional Taxi-Out (ATOT)", f"[bold red]+{rep.additional_atot_min:.1f} min[/bold red] ({rep.congestion_status})")
+    table.add_row("7% Thrust Idle + APU Fuel Rate", f"{rep.idle_fuel_rate_kg_min:.2f} kg/min")
+    table.add_row("Total Surface Taxi Fuel Burn", f"{rep.total_taxi_fuel_kg:,.1f} kg")
+    table.add_row("Excess Queue Fuel & CO₂ (ATOT)", f"[bold yellow]{rep.excess_atot_fuel_kg:,.1f} kg Jet-A[/bold yellow] ({rep.excess_co2_kg:,.1f} kg CO₂)")
+    table.add_row("Excess LTO Gaseous Emissions", f"NOx: {rep.excess_nox_g:,.1f} g | CO: {rep.excess_co_g:,.1f} g | HC: {rep.excess_hc_g:,.1f} g")
+    table.add_row("Excess LTO nvPM Soot Mass", f"{rep.excess_nvpm_mg:,.1f} mg")
+    table.add_row("Estimated Excess Queue Fuel Cost", f"[bold yellow]€{rep.excess_fuel_cost_eur:,.2f} EUR[/bold yellow] (@ €{rep.fuel_price_eur_per_gallon:.3f}/gal)")
+
+    console.print(table)
+
+
+@app.command("pru-scorecard")
+def pru_scorecard_cmd(
+    ectrl_id: int = typer.Argument(..., help="Eurocontrol Flight ID"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period (e.g. 201611, 202510)"),
+) -> None:
+    """Compute ICAO GANP & Eurocontrol PRU Scorecard (KPI04 KEP, KPI05 KEA, KPI08 ASMA, KPI19 Level-Capping)."""
+    with console.status(f"[cyan]Computing ICAO GANP / Eurocontrol PRU Scorecard for flight {ectrl_id}..."):
+        ds = FlightDataset(period=period)
+        sc = compute_flight_pru_kpis(ds, ectrl_id=ectrl_id)
+
+    if not sc:
+        console.print(f"[red]Flight {ectrl_id} not found in period {period}[/red]")
+        raise typer.Exit(code=1)
+
+    table = Table(
+        title=f"📏 ICAO GANP & Eurocontrol PRU Performance Scorecard — Flight {sc.ectrl_id} ({sc.adep} ➔ {sc.ades}, {sc.ac_type})",
+        header_style="bold magenta",
+    )
+    table.add_column("PRU / ICAO KPI", style="cyan")
+    table.add_column("Measured Value", style="bold green")
+    table.add_column("Operational Interpretation", style="yellow")
+
+    table.add_row(
+        "Great-Circle O&D vs Achieved En-Route",
+        f"{sc.great_circle_od_nm:.1f} nm O&D | {sc.enroute_achieved_dist_nm:.1f} nm (>40nm)",
+        "40 nm origin/destination cylinders clipped",
+    )
+    table.add_row(
+        "KPI04 (KEP — Filed En-Route Inefficiency)",
+        f"{sc.kpi04_kep_pct:.2f}% ({sc.enroute_filed_dist_nm:.1f} nm)",
+        "Flight plan route design vs achieved distance",
+    )
+    table.add_row(
+        "KPI05 (KEA — Actual En-Route Inefficiency)",
+        f"{sc.kpi05_kea_pct:.2f}% ({sc.enroute_actual_dist_nm:.1f} nm)",
+        sc.enroute_routing_verdict,
+    )
+    table.add_row(
+        "Tactical ATC Shortcut / Vectoring (KEA - KEP)",
+        f"{sc.tactical_kea_minus_kep_pct:+.2f}% ({sc.tactical_distance_delta_nm:+.1f} nm)",
+        "Direct shortcut (<0) vs tactical vectoring (>0)",
+    )
+    table.add_row(
+        "KPI08 (ASMA 40nm Arrival Transit / Additional)",
+        f"{sc.asma_40nm_actual_min:.1f} min (Add: +{sc.kpi08_asma_40nm_additional_min:.1f} min)",
+        f"Unimpeded baseline: {sc.asma_40nm_unimpeded_min:.1f}m | 100nm: {sc.asma_100nm_actual_min:.1f}m",
+    )
+    table.add_row(
+        "KPI19 (Cruise Level-Capping: Req vs Max FL)",
+        f"FL{sc.requested_fl:.0f} req vs FL{sc.max_actual_fl:.0f} act (Δ -{sc.level_cap_delta_fl:.0f} FL)",
+        f"Capped: {sc.is_level_capped} | Excess Fuel: +{sc.level_cap_excess_fuel_kg:.1f} kg",
+    )
+    table.add_row(
+        "Lower FIR vs Upper UIR/UTA Dwell Split",
+        f"Lower FIR: {sc.lower_fir_dwell_min:.1f}m | Upper UIR: {sc.upper_uir_dwell_min:.1f}m",
+        f"Arrival TMA ({sc.arrival_tma_id or 'N/A'}): {sc.arrival_tma_dwell_min or 0.0:.1f}m",
+    )
+    console.print(table)
+
+
+@app.command("cco-climb")
+def cco_climb_cmd(
+    ectrl_id: int = typer.Argument(..., help="Eurocontrol Flight ID"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period (e.g. 201611, 202510)"),
+) -> None:
+    """Analyze Continuous Climb Operations (KPI17 CCO), departure SID level-offs, and climb fuel penalty."""
+    with console.status(f"[cyan]Analyzing CCO departure climb profile for Flight {ectrl_id}..."):
+        ds = FlightDataset(period=period)
+        rep = analyze_cco_climb(ds, ectrl_id=ectrl_id)
+
+    if not rep:
+        console.print(f"[red]Climb profile not found for flight {ectrl_id}[/red]")
+        raise typer.Exit(code=1)
+
+    score_color = "green" if rep.cco_compliance_score >= 85 else "yellow" if rep.cco_compliance_score >= 60 else "red"
+    console.print(
+        f"\n[bold green]Continuous Climb Operations (KPI17 CCO) Report:[/bold green] Flight [cyan]{rep.ectrl_id}[/cyan] "
+        f"({rep.adep} ➔ {rep.ades}, {rep.ac_type})"
+    )
+    console.print(
+        f"CCO Compliance Score: [{score_color} bold]{rep.cco_compliance_score:.1f}%[/{score_color} bold] | "
+        f"Total Climb Time to FL{rep.cruise_flight_level:.0f}: {rep.total_climb_duration_min:.1f} min"
+    )
+    console.print(
+        f"Climb Level-Offs: [bold red]{rep.inefficiency_events_count} events[/bold red] ({rep.total_level_off_min:.1f} min) | "
+        f"Excess Climb Fuel: [bold yellow]{rep.excess_fuel_burned_kg:.1f} kg[/bold yellow] ({rep.excess_co2_kg:.1f} kg CO₂)\n"
+    )
+
+    if rep.inefficiency_events:
+        table = Table(title="Detected Departure Climb Level-Off Events", header_style="bold magenta")
+        table.add_column("Event Type", style="bold red")
+        table.add_column("Start Time (UTC)")
+        table.add_column("End Time (UTC)")
+        table.add_column("Duration", justify="right", style="yellow")
+        table.add_column("Flight Level", justify="right", style="cyan")
+        table.add_column("Coordinates")
+        for ev in rep.inefficiency_events:
+            table.add_row(
+                ev.event_type,
+                ev.start_time,
+                ev.end_time,
+                f"{ev.duration_min:.1f} min",
+                f"FL{ev.flight_level:.0f}",
+                f"{ev.latitude:.2f}°, {ev.longitude:.2f}°",
+            )
+        console.print(table)
+
+
+@app.command("level-capping")
+def level_capping_cmd(
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period (e.g. 201611, 202510)"),
+    operator: str | None = typer.Option(None, "--operator", "-op", help="Optional airline ICAO filter"),
+    min_dist: float = typer.Option(250.0, "--min-dist", help="Minimum flight distance in nm"),
+    limit: int = typer.Option(12, "--limit", "-n", help="Top N corridors by level-capped flights"),
+) -> None:
+    """Scan the network for KPI19 Cruise Flight-Level Capping (actual peak FL restricted ≥2,000 ft below Requested FL)."""
+    with console.status(f"[cyan]Scanning period {period} for KPI19 Cruise Level-Capping..."):
+        ds = FlightDataset(period=period)
+        res = analyze_network_level_capping(ds, operator=operator, min_distance_nm=min_dist, top_n=limit)
+
+    console.print(
+        f"\n[bold green]KPI19 Cruise Flight-Level Capping Summary ({period}):[/bold green] "
+        f"Analyzed: [white]{res['analyzed_flights']:,}[/white] | "
+        f"Level-Capped (≥20 FL deficit): [bold red]{res['level_capped_flights']:,} ({res['level_capped_pct']:.2f}%)[/bold red] | "
+        f"Mean FL Deficit: [yellow]-{res['mean_fl_deficit']:.1f} FL[/yellow]\n"
+    )
+
+    table = Table(title=f"Top Level-Capped Corridors (Period {period})", header_style="bold magenta")
+    table.add_column("Corridor", style="bold cyan")
+    table.add_column("Total Flts", justify="right")
+    table.add_column("Capped Flts", justify="right", style="bold red")
+    table.add_column("Capped %", justify="right", style="yellow")
+    table.add_column("Avg Req FL", justify="right")
+    table.add_column("Avg Act Max FL", justify="right", style="green")
+    table.add_column("Avg Deficit", justify="right", style="red")
+
+    for r in res["top_capped_corridors"]:
+        table.add_row(
+            str(r["corridor"]),
+            f"{int(r['total_flights']):,}",
+            f"{int(r['capped_flights']):,}",
+            f"{r['level_capped_pct']:.1f}%",
+            f"FL{r['avg_requested_fl']:.0f}",
+            f"FL{r['avg_actual_max_fl']:.0f}",
+            f"-{r['avg_fl_deficit']:.1f} FL",
+        )
+    console.print(table)
+
+
+@app.command("fra-analysis")
+def fra_analysis_cmd(
+    ectrl_id: int = typer.Argument(..., help="Eurocontrol Flight ID"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period (e.g. 201611, 202510)"),
+    tolerance: float = typer.Option(2.5, "--tolerance", "-t", help="Waypoint snap tolerance in nm"),
+) -> None:
+    """Snap 4D waypoints to ATS airways (raw_routes), RNAV fixes (fix.dat), and navaids (nav.dat) to measure Free Route Airspace (FRA) directness."""
+    with console.status(f"[cyan]Snapping 4D waypoints & evaluating Free Route Airspace (FRA) adherence for flight {ectrl_id}..."):
+        ds = FlightDataset(period=period)
+        rep = analyze_flight_fra_adherence(ds, ectrl_id=ectrl_id, snap_tolerance_nm=tolerance)
+
+    if not rep:
+        console.print(f"[red]Flight {ectrl_id} not found in period {period}[/red]")
+        raise typer.Exit(code=1)
+
+    console.print(
+        f"\n[bold green]Free Route Airspace (FRA) & Airway Snapping Report:[/bold green] Flight [cyan]{rep.ectrl_id}[/cyan] "
+        f"({rep.adep} ➔ {rep.ades}, {rep.ac_type})"
+    )
+    console.print(
+        f"FRA Directness Index: [bold cyan]{rep.fra_directness_index_pct:.1f}%[/bold cyan] ({rep.fra_direct_distance_nm:.1f} nm DCT) | "
+        f"Structured ATS Airway Adherence: [yellow]{rep.ats_airway_adherence_pct:.1f}%[/yellow] ({rep.ats_airway_distance_nm:.1f} nm)"
+    )
+    console.print(
+        f"En-Route Waypoints: {rep.total_enroute_waypoints} "
+        f"(Airway: {rep.airway_waypoints_count}, FRA Fix DCT: {rep.fra_fix_dct_waypoints_count}, Radar DCT: {rep.tactical_dct_waypoints_count})"
+    )
+    if rep.distinct_airways_used:
+        console.print(f"[green]Snapped ATS Airways:[/green] {', '.join(rep.distinct_airways_used)}")
+    if rep.sample_snapped_fixes:
+        console.print(f"[cyan]Snapped 5-Letter Fixes / Navaids:[/cyan] {', '.join(rep.sample_snapped_fixes)}\n")
+
+
+@app.command("radio-workload")
+def radio_workload_cmd(
+    airport: str = typer.Option("EGLL", "--airport", "-a", help="Airport ICAO code (e.g. EGLL, LFPG, EHAM)"),
+    date: str | None = typer.Option(None, "--date", "-d", help="Optional date filter (YYYY-MM-DD)"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period (e.g. 202510)"),
+) -> None:
+    """Estimate ATC Controller-Pilot VHF radio frequency workload and voice channel occupancy (%)."""
+    with console.status(f"[cyan]Estimating VHF radio frequency workload for {airport.upper()} ({period})..."):
+        ds = FlightDataset(period=period)
+        res = estimate_airport_and_sector_radio_workload(ds, airport_icao=airport, date_str=date)
+
+    console.print(
+        f"\n[bold green]VHF Radio Frequency Workload & Communications Occupancy:[/bold green] [cyan]{res['airport_icao']}[/cyan] (Period {period})"
+    )
+    console.print(
+        f"Peak Hourly Movements: [bold white]{res['peak_hourly_movements']} mvts/hr[/bold white] (Avg: {res['avg_hourly_movements']} mvts/hr) | "
+        f"Cataloged VHF Channels: {res['total_vhf_channels_cataloged']} | Terminal ILS/VOR/DME Navaids: {res['associated_ils_vor_dme_count']}"
+    )
+    console.print(
+        f"Primary Communications Bottleneck: [bold red]{res['primary_comms_bottleneck']}[/bold red] "
+        f"(Peak Voice Occupancy: {res['peak_voice_occupancy_pct']:.1f}%)\n"
+    )
+
+    table = Table(title=f"ATC Position VHF Channel Allocation & Peak Occupancy ({res['airport_icao']})", header_style="bold magenta")
+    table.add_column("ATC Position", style="bold cyan")
+    table.add_column("Effective VHF Ch", justify="right")
+    table.add_column("Sample Frequencies (MHz)", style="dim")
+    table.add_column("Peak Mvts / Ch", justify="right", style="yellow")
+    table.add_column("Est. Voice Occupancy %", justify="right", style="bold red")
+    table.add_column("Status", style="green")
+
+    for p in res["positions"]:
+        freqs_str = ", ".join(f"{f:.3f}" for f in p["sample_frequencies_mhz"]) or "Regional TRACON"
+        table.add_row(
+            p["atc_position"],
+            str(p["effective_channels"]),
+            freqs_str,
+            f"{p['peak_movements_per_channel']:.1f}",
+            f"{p['estimated_voice_occupancy_pct']:.1f}%",
+            p["workload_status"],
+        )
+    console.print(table)
+
+
+@app.command("crco-cost")
+def crco_cost_cmd(
+    ectrl_id: int = typer.Argument(..., help="Eurocontrol Flight ID"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period (e.g. 201611, 202510)"),
+) -> None:
+    """Compute Eurocontrol CRCO En-Route Navigation Charges (EUR) and Total Direct Operating Cost (Fuel EUR + Navigation EUR)."""
+    with console.status(f"[cyan]Calculating Eurocontrol CRCO route charges & direct operating cost for flight {ectrl_id}..."):
+        ds = FlightDataset(period=period)
+        rep = compute_flight_crco_charges(ds, ectrl_id=ectrl_id)
+
+    if not rep:
+        console.print(f"[red]Flight {ectrl_id} not found in period {period}[/red]")
+        raise typer.Exit(code=1)
+
+    console.print(
+        f"\n[bold green]Eurocontrol CRCO En-Route Charges & Direct Route Economics:[/bold green] "
+        f"Flight [cyan]{rep.ectrl_id}[/cyan] ({rep.adep} ➔ {rep.ades}, {rep.ac_type})"
+    )
+    console.print(
+        f"Aircraft MTOW: [white]{rep.mtow_tons:.1f} t[/white] (Weight Factor: [cyan]{rep.crco_weight_factor:.3f}[/cyan]) | "
+        f"Distance: [white]{rep.actual_distance_nm:.1f} nm ({rep.actual_distance_km:.1f} km)[/white] | "
+        f"Total Service Units: [yellow]{rep.total_service_units:.2f}[/yellow]"
+    )
+    console.print(
+        f"Actual CRCO Route Charge: [bold cyan]€{rep.actual_crco_charge_eur:,.2f} EUR[/bold cyan] (Filed: €{rep.filed_crco_charge_eur:,.2f} EUR, Δ €{rep.crco_charge_delta_eur:+,.2f}) | "
+        f"Est. Jet-A Fuel Cost: [bold yellow]€{rep.estimated_total_fuel_cost_eur:,.2f} EUR[/bold yellow]"
+    )
+    console.print(
+        f"Total Direct Route Cost (Fuel + CRCO): [bold green]€{rep.total_direct_route_cost_eur:,.2f} EUR[/bold green] "
+        f"(CRCO Share: {rep.crco_share_of_direct_cost_pct:.1f}%)\n"
+    )
+
+    table = Table(title="FIR Charging Zone Breakdown (Eurocontrol CRCO Unit Rates in EUR)", header_style="bold magenta")
+    table.add_column("FIR ID", style="bold cyan")
+    table.add_column("Zone", justify="center", style="yellow")
+    table.add_column("State / Charging Zone", style="white")
+    table.add_column("Dwell", justify="right")
+    table.add_column("Est Dist (km)", justify="right")
+    table.add_column("Service Units", justify="right")
+    table.add_column("Unit Rate (€)", justify="right", style="cyan")
+    table.add_column("Charge (€)", justify="right", style="bold green")
+
+    for b in rep.fir_breakdown:
+        table.add_row(
+            b.fir_id,
+            b.zone_code,
+            b.country_name,
+            f"{b.dwell_min:.1f}m",
+            f"{b.estimated_distance_km:.1f}",
+            f"{b.service_units:.2f}",
+            f"€{b.unit_rate_eur:.2f}",
+            f"€{b.charge_eur:,.2f}",
+        )
+    console.print(table)
+
+
+@app.command("route-economics")
+def route_economics_cmd(
+    adep: str = typer.Option("EGLL", "--adep", help="Origin airport ICAO"),
+    ades: str = typer.Option("LTFM", "--ades", help="Destination airport ICAO"),
+    ac_type: str | None = typer.Option(None, "--ac", help="Optional aircraft type filter"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period"),
+    limit: int = typer.Option(15, "--limit", "-n", help="Max flights to compare"),
+) -> None:
+    """Compare CRCO route charges vs. Jet-A fuel burn across a corridor (in EUR) to detect Route-Charge Avoidance detours."""
+    with console.status(f"[cyan]Analyzing CRCO route charges vs. fuel burn on {adep} ➔ {ades} ({period})..."):
+        ds = FlightDataset(period=period)
+        res = detect_route_charge_avoidance(ds, adep=adep, ades=ades, ac_type=ac_type, limit=limit)
+
+    console.print(
+        f"\n[bold green]Corridor Route Economics (CRCO Navigation Charges vs. Fuel Burn in EUR):[/bold green] "
+        f"[cyan]{res['corridor']}[/cyan] (Analyzed: {res['analyzed_flights']} flights, Avoidance Candidates: {res.get('avoidance_candidates_count', 0)})\n"
+    )
+
+    table = Table(title=f"Corridor Direct Cost Breakdown in Euros ({res['corridor']})", header_style="bold magenta")
+    table.add_column("Flight ID", style="cyan")
+    table.add_column("Operator", style="yellow")
+    table.add_column("AC", style="white")
+    table.add_column("Dist (nm)", justify="right")
+    table.add_column("CRCO Fee (€)", justify="right", style="cyan")
+    table.add_column("Fuel Cost (€)", justify="right", style="yellow")
+    table.add_column("Total Direct (€)", justify="right", style="bold green")
+    table.add_column("Top Cost FIR", style="dim")
+
+    for f in res["flights"][:12]:
+        table.add_row(
+            str(f["ectrl_id"]),
+            str(f["ac_operator"]),
+            str(f["ac_type"]),
+            f"{f['actual_distance_nm']:.1f}",
+            f"€{f['crco_charge_eur']:,.2f}",
+            f"€{f['fuel_cost_eur']:,.2f}",
+            f"€{f['total_direct_cost_eur']:,.2f}",
+            str(f["most_expensive_fir"] or "—"),
+        )
+    console.print(table)
+
+
+@app.command("conflict-scan")
+def conflict_scan_cmd(
+    date: str | None = typer.Option(None, "--date", "-d", help="Date YYYY-MM-DD (defaults to first day of period)"),
+    hour: int = typer.Option(10, "--hour", "-h", help="UTC hour (0-23)"),
+    horiz_nm: float = typer.Option(5.0, "--horiz-nm", help="Horizontal separation threshold in nm"),
+    vert_fl: float = typer.Option(10.0, "--vert-fl", help="Vertical separation threshold in Flight Levels (10 FL = 1,000 ft)"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period"),
+    limit: int = typer.Option(15, "--limit", "-n", help="Max proximity events to display"),
+) -> None:
+    """Scan 4D trajectories for co-altitude aircraft proximity events (<5 nm, <=1,000 ft) and compute airspace complexity."""
+    with console.status(f"[cyan]Scanning 4D airspace trajectories for co-altitude proximity events ({period}, {hour:02d}:00 UTC)..."):
+        ds = FlightDataset(period=period)
+        rep = scan_airspace_proximity_events(
+            ds, date_str=date, hour=hour, horiz_sep_nm=horiz_nm, vert_sep_fl=vert_fl, limit=limit
+        )
+        comp = compute_sector_complexity_index(ds, date_str=rep.date_str, hour=hour)
+
+    console.print(
+        f"\n[bold green]4D Co-Altitude Airspace Proximity & Complexity Scan:[/bold green] "
+        f"[cyan]{rep.date_str} @ {rep.hour_utc:02d}:00 UTC[/cyan] (Threshold: ≤{horiz_nm} nm / ≤{vert_fl*100:.0f} ft)"
+    )
+    console.print(
+        f"Proximity Pairs Detected: [bold yellow]{rep.events_detected}[/bold yellow] | "
+        f"Loss-of-Separation Alerts (<3nm/<1000ft): [bold red]{rep.loss_of_sep_alerts}[/bold red]\n"
+    )
+
+    if rep.events:
+        table = Table(title="Detected Co-Altitude Aircraft Proximity Events", header_style="bold magenta")
+        table.add_column("Flight 1 (Op/AC)", style="cyan")
+        table.add_column("Flight 2 (Op/AC)", style="cyan")
+        table.add_column("Time (UTC)", style="dim")
+        table.add_column("Horiz Sep", justify="right", style="bold red")
+        table.add_column("Vert Sep", justify="right", style="yellow")
+        table.add_column("Flight Levels", justify="center")
+        table.add_column("Severity", style="white")
+
+        for e in rep.events[:12]:
+            table.add_row(
+                f"{e.flight_1_id} ({e.operator_1}/{e.ac_type_1})",
+                f"{e.flight_2_id} ({e.operator_2}/{e.ac_type_2})",
+                e.timestamp_utc[11:19],
+                f"{e.horizontal_sep_nm:.2f} nm",
+                f"{e.vertical_sep_ft:.0f} ft",
+                f"FL{e.fl_1:.0f}/FL{e.fl_2:.0f}",
+                e.severity,
+            )
+        console.print(table)
+
+    if comp.get("sectors"):
+        c_table = Table(title="Top Dynamic Complexity Grid Sectors (5°x5° Cells)", header_style="bold cyan")
+        c_table.add_column("Grid Sector", style="bold white")
+        c_table.add_column("Active Flights", justify="right")
+        c_table.add_column("Vertical Climb/Desc %", justify="right", style="yellow")
+        c_table.add_column("FL Dispersion", justify="right")
+        c_table.add_column("Complexity Score", justify="right", style="bold green")
+        for s in comp["sectors"][:6]:
+            c_table.add_row(
+                str(s["grid_sector"]),
+                str(s["active_flights"]),
+                f"{s['vertical_transition_pct']:.1f}%",
+                f"±{s['fl_dispersion']:.1f} FL",
+                f"{s['dynamic_complexity_score']:.1f}",
+            )
+        console.print(c_table)
+
+
+@app.command("runway-safety")
+def runway_safety_cmd(
+    ectrl_id: int = typer.Argument(..., help="Eurocontrol Flight ID"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period"),
+) -> None:
+    """Assess arrival runway braking action, density altitude, crosswind limits, and landing distance safety margin."""
+    with console.status(f"[cyan]Assessing arrival runway braking & landing distance safety margin for flight {ectrl_id}..."):
+        ds = FlightDataset(period=period)
+        rep = assess_flight_runway_safety(ds, metar_client=None, ectrl_id=ectrl_id, fetch_live_metar=False)
+
+    if not rep:
+        console.print(f"[red]Flight {ectrl_id} not found in period {period}[/red]")
+        raise typer.Exit(code=1)
+
+    table = Table(
+        title=f"🛬 Arrival Runway Safety, Density Altitude & Braking Margin — Flight {rep.ectrl_id} (➔ {rep.ades})",
+        header_style="bold magenta",
+    )
+    table.add_column("Safety Parameter", style="cyan")
+    table.add_column("Measured / Computed Value", style="bold green")
+
+    table.add_row("Aircraft & Wake Category", f"{rep.ac_type} (Wake {rep.wake_category}) — Operator: {rep.ac_operator}")
+    table.add_row("Recommended Arrival Runway", f"RWY {rep.recommended_runway} (Hdg {rep.runway_heading_deg:.0f}°, Surface: {rep.runway_surface_type})")
+    table.add_row("ILS Precision Category", rep.ils_precision_category)
+    table.add_row("Field Elevation / Pressure / Density Alt", f"Elev: {rep.airport_elevation_ft:.0f} ft | PA: {rep.pressure_altitude_ft:.0f} ft | DA: {rep.density_altitude_ft:.0f} ft (ISA {rep.isa_temp_deviation_c:+.1f}°C)")
+    table.add_row("Runway Surface & Braking Code", f"{rep.runway_surface_condition} — ICAO Code: {rep.braking_action_code}")
+    table.add_row("Runway Wind Components", f"Headwind: {rep.headwind_kts:.1f} kts | Crosswind: {rep.crosswind_kts:.1f} kts | Tailwind: {rep.tailwind_kts:.1f} kts")
+    table.add_row("Available Landing Distance (LDA)", f"{rep.available_lda_m:,.0f} m ({rep.available_lda_ft:,.0f} ft)")
+    table.add_row("Required Factored Landing Distance", f"{rep.factored_required_landing_dist_m:,.0f} m (Unfactored: {rep.unfactored_landing_dist_m:,.0f} m)")
+    table.add_row("Stopping Safety Margin & LDA Usage", f"+{rep.landing_distance_safety_margin_m:,.0f} m margin ({rep.lda_utilization_pct:.1f}% of LDA)")
+    table.add_row("Overall Runway Safety Risk", f"[bold yellow]{rep.safety_risk_level}[/bold yellow]")
+    console.print(table)
+
+
+@app.command("contrail-impact")
+def contrail_impact_cmd(
+    ectrl_id: int = typer.Argument(..., help="Eurocontrol Flight ID"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period"),
+) -> None:
+    """Evaluate upper-air wind-optimal routing (TAS vs GS) and persistent contrail ISSR formation & avoidance."""
+    with console.status(f"[cyan]Analyzing upper-air winds & Schmidt-Appleman contrail ISSR profile for flight {ectrl_id}..."):
+        ds = FlightDataset(period=period)
+        rep = analyze_flight_wind_and_contrails(ds, ectrl_id=ectrl_id)
+
+    if not rep:
+        console.print(f"[red]Flight {ectrl_id} not found in period {period}[/red]")
+        raise typer.Exit(code=1)
+
+    table = Table(
+        title=f"🌬️ Upper-Air Winds & Persistent Contrail (ISSR) Climate Analysis — Flight {rep.ectrl_id} ({rep.adep} ➔ {rep.ades})",
+        header_style="bold magenta",
+    )
+    table.add_column("Upper-Air / Climate Metric", style="cyan")
+    table.add_column("Value & Tactical Guidance", style="bold green")
+
+    table.add_row("Avg Groundspeed vs True Airspeed", f"GS: {rep.avg_groundspeed_kts:.1f} kts | TAS: {rep.avg_true_airspeed_kts:.1f} kts")
+    table.add_row("Net Upper-Air Wind Component", f"{rep.avg_tailwind_component_kts:+.1f} kts ({rep.wind_routing_verdict})")
+    table.add_row("Wind Time Savings vs Still Air", f"{rep.wind_time_savings_min:+.1f} min")
+    table.add_row("Persistent Contrail (ISSR) Exposure", f"[bold yellow]{rep.persistent_contrail_distance_nm:.1f} nm ({rep.persistent_contrail_pct:.1f}% of cruise)[/bold yellow] ({rep.persistent_contrail_duration_min:.1f} min)")
+    table.add_row("Direct CO₂ vs Contrail Cirrus CO₂e", f"Direct CO₂: {rep.direct_co2_tons:.2f} t | Contrail GWP100: +{rep.contrail_co2e_tons:.2f} t CO₂e ({rep.total_climate_co2e_multiplier:.2f}x total)")
+    console.print(table)
+
+    if rep.issr_segments:
+        s_table = Table(title="Detected Ice Supersaturated Region (ISSR) Contrail Segments & ±2,000 ft Avoidance", header_style="bold cyan")
+        s_table.add_column("Seq", style="cyan")
+        s_table.add_column("Cruise FL", justify="right")
+        s_table.add_column("Dist (nm)", justify="right")
+        s_table.add_column("Temp (°C)", justify="right")
+        s_table.add_column("RHi (%)", justify="right", style="bold red")
+        s_table.add_column("Recommended Tactical Altitude Change", style="bold yellow")
+        for seg in rep.issr_segments[:8]:
+            s_table.add_row(
+                f"{seg.seq_start}➔{seg.seq_end}",
+                f"FL{seg.flight_level:.0f}",
+                f"{seg.distance_nm:.1f}",
+                f"{seg.temperature_c:.1f}°C",
+                f"{seg.rh_ice_pct:.1f}%",
+                seg.alt_deviation_note,
+            )
+        console.print(s_table)
+
+
+@app.command("optimize-tail-swaps")
+def optimize_tail_swaps_cmd(
+    operator: str = typer.Option("RYR", "--operator", "-op", help="Airline ICAO code (e.g. RYR, BAW, DLH, EZY)"),
+    airport: str | None = typer.Option(None, "--airport", "-a", help="Optional hub airport ICAO (or auto-detect top base)"),
+    date: str | None = typer.Option(None, "--date", "-d", help="Date YYYY-MM-DD"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period"),
+) -> None:
+    """Prescriptive AI optimizer recommending same-type aircraft tail swaps at hubs to absorb reactionary delays."""
+    with console.status(f"[cyan]Solving prescriptive tail-swap recovery schedule for {operator.upper()} ({period})..."):
+        ds = FlightDataset(period=period)
+        res = optimize_hub_tail_swaps(ds, operator=operator, hub_airport=airport, date_str=date)
+
+    console.print(
+        f"\n[bold green]Prescriptive Hub Tail-Swap Recovery Optimizer:[/bold green] "
+        f"[cyan]{res.operator}[/cyan] ({res.date_str}, Period {res.period})"
+    )
+    console.print(
+        f"Rotations Analyzed: {res.candidate_rotations_analyzed} | "
+        f"Recommended Tail Swaps: [bold cyan]{res.recommended_swaps_count}[/bold cyan] | "
+        f"Reactionary Delay Saved: [bold green]{res.total_delay_minutes_saved:.1f} min[/bold green] | "
+        f"Est. Cost Saved: [bold yellow]€{res.estimated_cost_saved_eur:,.2f} EUR[/bold yellow]\n"
+    )
+
+    if res.swaps:
+        table = Table(title="Recommended Same-Type Aircraft Tail Swaps", header_style="bold magenta")
+        table.add_column("Hub", style="cyan")
+        table.add_column("AC", style="white")
+        table.add_column("Delayed Tail ⇄ Donor Tail", style="bold yellow")
+        table.add_column("Protected Leg (STD)", style="white")
+        table.add_column("Base Delay", justify="right", style="red")
+        table.add_column("Post-Swap", justify="right", style="green")
+        table.add_column("Net Saved", justify="right", style="bold green")
+        table.add_column("Cost Saved (€)", justify="right", style="yellow")
+
+        for s in res.swaps[:12]:
+            table.add_row(
+                s.hub_airport,
+                s.ac_type,
+                f"{s.delayed_tail_reg} ⇄ {s.donor_tail_reg}",
+                f"➔{s.delayed_outbound_ades} ({s.delayed_outbound_std[11:16]})",
+                f"+{s.baseline_reactionary_delay_min:.0f}m",
+                f"+{s.post_swap_reactionary_delay_min:.0f}m",
+                f"-{s.net_delay_saved_min:.0f}m",
+                f"€{s.estimated_cost_saved_eur:,.0f}",
+            )
+        console.print(table)
 
 
 @app.command("dashboard")

@@ -56,11 +56,14 @@ class EnvironmentalImpact:
     excess_routing_fuel_kg: float
     total_excess_fuel_kg: float
     excess_co2_kg: float
-    estimated_excess_fuel_cost_usd: float
+    estimated_excess_fuel_cost_eur: float
+    fuel_price_eur_per_kg: float = 0.78
+    fuel_price_eur_per_gallon: float = 2.38
+    estimated_excess_fuel_cost_usd: float = 0.0
     fuel_price_usd_per_kg: float = 0.85
     fuel_price_usd_per_gallon: float = 2.58
     fuel_price_week: str = "N/A"
-    fuel_price_source: str = "EIA Weekly Spot Price (USGC/IATA)"
+    fuel_price_source: str = "EIA Weekly Spot Price (EUR Converted)"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -75,9 +78,9 @@ class EnvironmentalImpact:
             "excess_routing_fuel_kg": round(self.excess_routing_fuel_kg, 1),
             "total_excess_fuel_kg": round(self.total_excess_fuel_kg, 1),
             "excess_co2_kg": round(self.excess_co2_kg, 1),
-            "estimated_excess_fuel_cost_usd": round(self.estimated_excess_fuel_cost_usd, 2),
-            "fuel_price_usd_per_kg": round(self.fuel_price_usd_per_kg, 4),
-            "fuel_price_usd_per_gallon": round(self.fuel_price_usd_per_gallon, 3),
+            "estimated_excess_fuel_cost_eur": round(self.estimated_excess_fuel_cost_eur, 2),
+            "fuel_price_eur_per_kg": round(self.fuel_price_eur_per_kg, 4),
+            "fuel_price_eur_per_gallon": round(self.fuel_price_eur_per_gallon, 3),
             "fuel_price_week": self.fuel_price_week,
             "fuel_price_source": self.fuel_price_source,
         }
@@ -89,29 +92,33 @@ def compute_flight_fuel_and_emissions(
     fuel_price_per_kg: float | None = None,
 ) -> EnvironmentalImpact:
     """
-    Compute excess fuel burn and CO2 emissions caused by horizontal route extensions
+    Compute excess fuel burn, CO2 emissions, and Euro (€) cost caused by horizontal route extensions
     and terminal holding patterns.
-    Automatically resolves the official EIA weekly jet fuel spot price for the flight's departure date.
+    Automatically resolves the official EIA weekly jet fuel spot price (in EUR) for the flight's departure date.
     """
     flight = dataset.get_flight(ectrl_id)
     if not flight:
         raise ValueError(f"Flight {ectrl_id} not found")
 
-    # Resolve dynamic weekly jet fuel spot price from EIA if not explicitly overridden
+    # Resolve dynamic weekly jet fuel spot price in EUR from EIA if not explicitly overridden
     if fuel_price_per_kg is None:
         price_rec = get_weekly_fuel_price(
             flight.get("actual_off_block_time") or flight.get("filed_off_block_time"),
             period_hint=dataset.period,
         )
-        active_price_kg = price_rec.price_usd_per_kg
-        price_gal = price_rec.price_usd_per_gallon
+        active_price_kg_eur = price_rec.price_eur_per_kg
+        price_gal_eur = price_rec.price_eur_per_gallon
+        active_price_kg_usd = price_rec.price_usd_per_kg
+        price_gal_usd = price_rec.price_usd_per_gallon
         price_week = f"{price_rec.year}-W{price_rec.week_number:02d} ({price_rec.week_start} to {price_rec.week_end})"
         price_source = price_rec.source
     else:
-        active_price_kg = float(fuel_price_per_kg)
-        price_gal = round(active_price_kg * 3.043, 3)
+        active_price_kg_eur = float(fuel_price_per_kg)
+        price_gal_eur = round(active_price_kg_eur * 3.043, 3)
+        active_price_kg_usd = round(active_price_kg_eur / 0.925, 4)
+        price_gal_usd = round(price_gal_eur / 0.925, 3)
         price_week = "User Override"
-        price_source = "User Specified Parameter"
+        price_source = "User Specified Parameter (EUR)"
 
     ac_type = str(flight.get("ac_type") or "DEFAULT_JET").upper()
     fuel_flow = DEFAULT_FUEL_FLOW_KG_HR.get(ac_type, DEFAULT_FUEL_FLOW_KG_HR["DEFAULT_JET"])
@@ -132,7 +139,8 @@ def compute_flight_fuel_and_emissions(
 
     total_excess_fuel = holding_fuel_kg + routing_fuel_kg
     excess_co2 = total_excess_fuel * CO2_FACTOR
-    excess_cost = total_excess_fuel * active_price_kg
+    excess_cost_eur = total_excess_fuel * active_price_kg_eur
+    excess_cost_usd = total_excess_fuel * active_price_kg_usd
 
     return EnvironmentalImpact(
         ectrl_id=ectrl_id,
@@ -146,9 +154,12 @@ def compute_flight_fuel_and_emissions(
         excess_routing_fuel_kg=routing_fuel_kg,
         total_excess_fuel_kg=total_excess_fuel,
         excess_co2_kg=excess_co2,
-        estimated_excess_fuel_cost_usd=excess_cost,
-        fuel_price_usd_per_kg=active_price_kg,
-        fuel_price_usd_per_gallon=price_gal,
+        estimated_excess_fuel_cost_eur=excess_cost_eur,
+        fuel_price_eur_per_kg=active_price_kg_eur,
+        fuel_price_eur_per_gallon=price_gal_eur,
+        estimated_excess_fuel_cost_usd=excess_cost_usd,
+        fuel_price_usd_per_kg=active_price_kg_usd,
+        fuel_price_usd_per_gallon=price_gal_usd,
         fuel_price_week=price_week,
         fuel_price_source=price_source,
     )

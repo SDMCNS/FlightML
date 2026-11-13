@@ -629,3 +629,4 @@ def compile_all_external_sources(parquet_dir: Path | None = None, force: bool = 
     }
 
     return summary
+

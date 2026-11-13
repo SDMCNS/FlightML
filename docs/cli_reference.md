@@ -1,6 +1,6 @@
 # Command-Line Interface (CLI) Reference 💻
 
-FlightML includes an extensive, feature-rich command-line tool accessible via the `flightml` binary. All commands support rich terminal formatting, color-coded tables, and progress indicators.
+FlightML includes a comprehensive command-line interface accessible via `flightml`. All commands output Rich-formatted tables and status badges, with all monetary figures reported in **Euros (`€`, `EUR`)**.
 
 ```bash
 flightml --help
@@ -9,420 +9,208 @@ flightml --help
 ---
 
 > [!IMPORTANT]
-> ### 🔒 Data Access & Eurocontrol OneSky Online Compliance Notice
-> **Eurocontrol Research Data Access Prerequisite**:
-> The underlying aeronautical traffic, flight plans, and 4D radar trajectory archives supported by FlightML (such as Eurocontrol DDR2 / PRISME / R-NEST datasets) are **proprietary and not for public consumption or redistribution**.
->
-> To access or download raw historical datasets, researchers and organizations **must have an approved user account on Eurocontrol's OneSky Online portal** ([https://www.eurocontrol.int/](https://www.eurocontrol.int/)) with institutional access granted to the **Demand Data Repository (DDR)** under Eurocontrol's Data Dissemination Policy and standard Research Agreement.
->
-> **Data Privacy & Redaction Policy**:
-> In accordance with Eurocontrol data dissemination terms, operational commercial confidentiality, and GDPR requirements, **specific flight identifiers, physical aircraft tail registrations, and operational callsigns in this documentation and example snippets have been anonymized / redacted (e.g., `29126XXXX`, `N686XX`, `BAWXXXX`)** to prevent disclosing sensitive airline operational data.
-
----
-
-## 📑 Command Categories
-
-1. [Dashboard & Web Services](#1-dashboard--web-services)
-2. [Data Ingestion & Management](#2-data-ingestion--management)
-3. [Search & Flight Filtering](#3-search--flight-filtering)
-4. [4D Trajectory, Holdings & CDO](#4-4d-trajectory-holdings--cdo)
-5. [En-Route FIR Airspace & Bottlenecks](#5-en-route-fir-airspace--bottlenecks)
-6. [Fuel, Carbon & Spot Pricing](#6-fuel-carbon--spot-pricing)
-7. [Weather & Environmental Diagnostics](#7-weather--environmental-diagnostics)
-8. [Machine Learning & Delay Diagnostics](#8-machine-learning--delay-diagnostics)
-9. [Aviation Simulation & Stress Testing](#9-aviation-simulation--stress-testing)
-10. [Macro Period & AIRAC Cycle Analysis](#10-macro-period--airac-cycle-analysis)
+> ### 🔒 Synthetic Example Outputs Policy
+> In accordance with Eurocontrol data dissemination terms, commercial confidentiality, and GDPR requirements, **all sample output tables, flight identifiers (e.g., `900104215`), aircraft tail registrations (e.g., `G-SYNA`, `EI-SYNB`), and aggregate statistics shown below are realistic synthetic records** generated to illustrate CLI output schemas without exposing proprietary archive rows.
 
 ---
 
 ## 1. Dashboard & Web Services
 
 ### `flightml dashboard`
-Launch the interactive Streamlit simulation dashboard in your default browser.
-
+Launch the 10-tab interactive Streamlit simulation workbench (`http://localhost:8501`).
 ```bash
-flightml dashboard [--port PORT]
+flightml dashboard [--port 8501]
 ```
-
-- `--port`: Port to bind the Streamlit server (default: `8501`).
 
 ### `flightml serve`
-Launch the production FastAPI REST web service with uvicorn.
-
+Launch the FastAPI REST server (`http://127.0.0.1:8000`).
 ```bash
-flightml serve [--host HOST] [--port PORT] [--workers WORKERS]
+flightml serve [--host 127.0.0.1] [--port 8000]
 ```
-
-- `--host`: Host IP to bind (default: `127.0.0.1`).
-- `--port`: Port number (default: `8000`).
-- `--workers`: Number of worker processes (default: `1`).
 
 ---
 
-## 2. Data Ingestion & Management
-
-### `flightml ingest-archive`
-Extract, classify schemas, partition, and ingest a monthly Eurocontrol archive zip into compressed Parquet tables.
-
-```bash
-flightml ingest-archive <archive_path> [--data-dir DIR]
-```
-
-- `<archive_path>`: Path to the Eurocontrol zip file (e.g. `data/archive/202510.zip`).
-- `--data-dir`: Base directory for processed data (default: `data`).
-
-### `flightml list-periods`
-List all ingested data periods available for queries.
-
-```bash
-flightml list-periods [--data-dir DIR]
-```
-
-### `flightml convert`
-Convert legacy CSV datasets into high-performance Apache Parquet tables.
-
-```bash
-flightml convert <source_csv_dir> [--output-dir DIR]
-```
+## 2. Dataset Summary & Search
 
 ### `flightml summary`
-Display global dataset metrics, flight counts, date ranges, and airport coverage.
-
 ```bash
-flightml summary [--period PERIOD] [--data-dir DIR]
+flightml summary --period 202510
 ```
 
-- `--period`: Aeronautical period to inspect (default: `"202510"`).
-
-**Example Output:**
+**Synthetic Output Table:**
 ```text
-                       ✈️  FlightML Dataset Overview                        
+                       ✈️  FlightML Dataset Overview (Synthetic Sample)
 ┌─────────────────────────────┬────────────────────────────────────────────┐
 │ Metric                      │ Value                                      │
 ├─────────────────────────────┼────────────────────────────────────────────┤
-│ Total Processed Flights     │ 9XX,XXX                                    │
-│ Unique Aircraft Operators   │ 8XX                                        │
-│ Origin Airports (ADEP)      │ 1,622                                      │
-│ Destination Airports (ADES) │ 1,631                                      │
-│ Date Coverage               │ 2025-09-29 22:15:00 to 2025-11-01 02:40:00 │
-│ Mean Departure Delay        │ 4.36 min                                   │
-│ Mean Arrival Delay          │ 4.16 min                                   │
+│ Total Processed Flights     │ 842,500                                    │
+│ Unique Aircraft Operators   │ 740                                        │
+│ Origin Airports (ADEP)      │ 1,580                                      │
+│ Destination Airports (ADES) │ 1,595                                      │
+│ Date Coverage               │ 2025-10-01 00:00:00 to 2025-10-31 23:59:00 │
+│ Mean Departure Delay        │ 5.12 min                                   │
+│ Mean Arrival Delay          │ 4.85 min                                   │
 │ Airports Catalog            │ 86,336                                     │
 │ Runways Catalog             │ 48,405                                     │
 │ FIR Airspaces Catalog       │ 170                                        │
 └─────────────────────────────┴────────────────────────────────────────────┘
 ```
 
----
-
-## 3. Search & Flight Filtering
-
 ### `flightml search-flights`
-Search flights using multiple criteria with human-readable flight labels.
-
 ```bash
-flightml search-flights [--period PERIOD] [--adep ICAO] [--ades ICAO] [--operator CODE] [--date YYYY-MM-DD] [--limit N]
+flightml search-flights --period 202510 --adep EGLL --ades KORD --limit 3
 ```
 
-**Example Output (Identified parameters redacted with `XXXX`):**
+**Synthetic Output Table:**
 ```text
-$ flightml search-flights --period 202510 --adep EGLL --ades KORD --limit 3
-
-               Flight Search Results (Period: 202510, 3 matches)               
+          Flight Search Results (Period: 202510, Synthetic Sample)
 ┌──────────────────────────────────┬──────────┬───────┬───────────┬───────────┐
 │ Flight Label & Metadata          │ Distance │    FL │ Dep Delay │ Arr Delay │
 ├──────────────────────────────────┼──────────┼───────┼───────────┼───────────┤
-│ EGLL ➔ KORD (2025-10-01 07:23)   │  3517 nm │ FL320 │       -7m │       -1m │
-│ [XXX B763 N686XX] ... Flight ID: │          │       │           │           │
-│ 29127XXXX                        │          │       │           │           │
-│ EGLL ➔ KORD (2025-10-01 08:09)   │  3597 nm │ FL340 │       -6m │       -2m │
-│ [YYY B789 N848XX] ... Flight ID: │          │       │           │           │
-│ 29127XXXX                        │          │       │           │           │
-│ EGLL ➔ KORD (2025-10-01 10:17)   │  3521 nm │ FL320 │      +12m │      +10m │
-│ [ZZZ B763 N657XX] ... Flight ID: │          │       │           │           │
-│ 29127XXXX                        │          │       │           │           │
+│ EGLL ➔ KORD (2025-10-03 08:15)   │  3495 nm │ FL360 │       -4m │       -2m │
+│ [SYN B77W G-SYNA] ... Flight ID: │          │       │           │           │
+│ 900104215                        │          │       │           │           │
+│ EGLL ➔ KORD (2025-10-03 10:40)   │  3542 nm │ FL340 │       +8m │      +11m │
+│ [SYN B789 G-SYNB] ... Flight ID: │          │       │           │           │
+│ 900108492                        │          │       │           │           │
+│ EGLL ➔ KORD (2025-10-03 14:20)   │  3510 nm │ FL350 │       +2m │       +0m │
+│ [SYN A359 G-SYNC] ... Flight ID: │          │       │           │           │
+│ 900112640                        │          │       │           │           │
 └──────────────────────────────────┴──────────┴───────┴───────────┴───────────┘
 ```
 
-### `flightml recurring-series`
-Analyze recurring flights on a corridor day-by-day with time-of-day (diurnal) congestion breakdown.
-
-```bash
-flightml recurring-series --adep ICAO --ades ICAO [--operator CODE] [--ac TYPE] [--period PERIOD]
-```
-
-Example:
-```bash
-flightml recurring-series --adep EGLL --ades KORD --operator BAW --period 202510
-```
-
-### `flightml top-airports`
-List the busiest airports ranked by total departures and average departure delay.
-
-```bash
-flightml top-airports [--period PERIOD] [--limit N]
-```
-
-### `flightml top-delays`
-Identify network routes with the highest average arrival delays.
-
-```bash
-flightml top-delays [--period PERIOD] [--limit N] [--min-flights N]
-```
-
-- `--min-flights`: Minimum number of flights to avoid low-sample outliers (default: `50`).
-
 ---
 
-## 4. 4D Trajectory, Holdings & CDO
+## 3. ICAO GANP & Eurocontrol PRU KPI Commands
 
-### `flightml trajectory`
-Analyze 4D trajectory radar points, calculating path extension ratio and detecting airborne holding loops.
-
+### `flightml pru-kpis <ectrl_id>`
+Compute single-flight ICAO GANP & Eurocontrol PRU indicators (`KPI04 KEP`, `KPI05 KEA`, `KPI08 ASMA`, `KPI19` level-capping).
 ```bash
-flightml trajectory <ectrl_id> [--period PERIOD]
+flightml pru-kpis 900104215 --period 202510
 ```
 
-### `flightml map`
-Generate an interactive HTML Leaflet map displaying the 4D radar track and highlighted holding stacks.
-
+### `flightml cdo-descent <ectrl_id>` & `flightml cco-climb <ectrl_id>`
+Analyze Continuous Descent Operations (`KPI19 CDO`) and Continuous Climb Operations (`KPI17 CCO`) level-off staircases and excess fuel burn.
 ```bash
-flightml map <ectrl_id> [--output PATH] [--period PERIOD]
+flightml cdo-descent 900104215 --period 202510
+flightml cco-climb 900104215 --period 202510
 ```
 
-- `--output`: Filepath to save the interactive HTML map (default: `flight_<id>_map.html`).
-
-### `flightml cdo-descent`
-Analyze Continuous Descent Operations (CDO) descent profile, intermediate level-offs, and descent fuel waste.
-
+### `flightml level-capping`
+Identify corridors with systematic `KPI19` cruise flight-level capping ($\ge 2,000\text{ ft}$ below requested FL).
 ```bash
-flightml cdo-descent <ectrl_id> [--period PERIOD]
+flightml level-capping --period 202510 --top-n 5
 ```
 
-**Example Output (Redacted with `XXXX`):**
+**Synthetic Output Table:**
 ```text
-$ flightml cdo-descent 29126XXXX --period 202510
-
-Continuous Descent Operations (CDO) Report: ECTRL 29126XXXX
-Route: KORD ➔ EGLL | Aircraft: B772 | Cruise FL: 390
-CDO Compliance Score: 94.1% | Total Descent Time: 45.0 min
-Level-Off Inefficiencies: 1 events (2.7 min un-optimized level flight)
-Excess Descent Fuel Burn: 192.9 kg Jet-A | Excess CO₂: 609.5 kg
-
-             Detected Descent Level-Off & Altitude Reversal Events             
-┌────────────┬────────────┬─────────────┬──────────┬────────────┬─────────────┐
-│ Event Type │ Start UTC  │ End UTC     │ Duration │      Level │ Location    │
-├────────────┼────────────┼─────────────┼──────────┼────────────┼─────────────┤
-│ LEVEL_OFF  │ XX:XX:37   │ XX:XX:17    │  2.7 min │      FL140 │ 51.XX°,     │
-│            │            │             │          │            │ -1.XX°      │
-└────────────┴────────────┴─────────────┴──────────┴────────────┴─────────────┘
+           📏 Network KPI19 Cruise Level-Capping Corridors (Synthetic Sample)
+┌───────────────┬─────────┬────────┬───────────┬──────────┬──────────┬──────────────┐
+│ Corridor      │ Flights │ Capped │ Capped %  │ Avg Req  │ Avg Act  │ Mean Deficit │
+├───────────────┼─────────┼────────┼───────────┼──────────┼──────────┼──────────────┤
+│ EGLL ➔ EHAM   │     420 │    168 │     40.0% │    FL290 │    FL240 │     -50.0 FL │
+│ LFPG ➔ EDDF   │     385 │    131 │     34.0% │    FL310 │    FL260 │     -50.0 FL │
+│ EGKK ➔ LEMD   │     310 │     62 │     20.0% │    FL360 │    FL330 │     -30.0 FL │
+└───────────────┴─────────┴────────┴───────────┴──────────┴──────────┴──────────────┘
 ```
-
-### `flightml compare-twins`
-Compare the most and least efficient flights sharing the same city pair and aircraft type.
-
-```bash
-flightml compare-twins --adep ICAO --ades ICAO --ac TYPE [--period PERIOD] [--map PATH]
-```
-
-- `--map`: Optional HTML path to export dual-trajectory visual comparison.
 
 ---
 
-## 5. En-Route FIR Airspace & Bottlenecks
+## 4. Airspace Saturation, AUA Dwell, FRA & VHF Radio Comms
 
-### `flightml fir-saturation`
-Calculate hourly traffic saturation rates across European Flight Information Regions (FIRs) and identify airspace chokepoints.
-
+### `flightml fir-saturation` & `flightml aua-saturation`
 ```bash
-flightml fir-saturation [--period PERIOD] [--threshold N] [--limit N]
+flightml fir-saturation --period 202510 --threshold 40 --limit 3
+flightml aua-saturation --period 202510 --type TMA --threshold 30
 ```
 
-- `--threshold`: Hourly flight count threshold to flag as saturated (default: `40`).
-
-**Example Output:**
+**Synthetic Output Table (`aua-saturation`):**
 ```text
-$ flightml fir-saturation --period 202510 --threshold 40 --limit 3
-
-   🌐 European FIR Sector Saturation (Period: 202510, Threshold: ≥40 flt/hr)   
-┌─────────┬──────────┬──────────┬───────────┬──────────┬───────────┬──────────┐
-│         │    Total │     Peak │       Avg │    Dwell │           │ Saturat… │
-│ FIR ID  │ Travers… │  Flts/Hr │   Flts/Hr │    (min) │ Hours ≥40 │        % │
-├─────────┼──────────┼──────────┼───────────┼──────────┼───────────┼──────────┤
-│ LTBBFIR │  159,166 │      328 │     210.3 │     22.1 │       747 │    98.7% │
-│ LBSRFIR │  116,038 │      283 │     153.3 │     18.9 │       746 │    98.5% │
-│ LTAAFIR │  121,562 │      235 │     161.0 │     52.7 │       746 │    98.8% │
-└─────────┴──────────┴──────────┴───────────┴──────────┴───────────┴──────────┘
+      📡 ATC Unit Airspace (AUA) Hourly Saturation (Synthetic Sample)
+┌──────────┬──────────┬───────────┬──────────┬──────────┬───────────┬──────────────┐
+│ AUA ID   │ Type     │ Traversals│ Peak/Hr  │ Avg/Hr   │ Avg Dwell │ Status       │
+├──────────┼──────────┼───────────┼──────────┼──────────┼───────────┼──────────────┤
+│ EGTTTMA  │ TMA      │    48,200 │      112 │     64.8 │  16.4 min │ CRITICAL_SAT │
+│ LFFFTMA  │ TMA      │    41,900 │       98 │     56.3 │  14.9 min │ HIGH_DENSITY │
+│ EDDGTMA  │ TMA      │    35,100 │       84 │     47.2 │  13.8 min │ HIGH_DENSITY │
+└──────────┴──────────┴───────────┴──────────┴──────────┴───────────┴──────────────┘
 ```
 
-### `flightml flight-fir-dwell`
-Analyze sector-by-sector en-route dwell efficiency for a single flight, detecting holding, vectoring, or shortcuts.
-
+### `flightml flight-fra <ectrl_id>` & `flightml fra-evolution`
+Snap 4D trajectory waypoints to published ATS airways and 5-letter RNAV fixes (`fix.dat` / `nav.dat`) to measure Free Route Airspace (`FRA`) directness.
 ```bash
-flightml flight-fir-dwell <ectrl_id> [--period PERIOD]
+flightml flight-fra 900104215 --period 202510
+flightml fra-evolution --p1 201611 --p2 202510
 ```
 
-### `flightml bottlenecks`
-Rank the most congested FIR airspaces across the entire network period.
-
+### `flightml radio-workload`
+Estimate ATC controller-pilot VHF voice channel occupancy (`%`) across Tower, Approach, and Area Control positions.
 ```bash
-flightml bottlenecks [--period PERIOD] [--limit N]
-```
-
-### `flightml fir-locate`
-Identify which FIR airspace sector contains a given 3D coordinate.
-
-```bash
-flightml fir-locate --lat FLOAT --lon FLOAT [--fl FL] [--period PERIOD]
+flightml radio-workload --airport EGLL --period 202510
 ```
 
 ---
 
-## 6. Fuel, Carbon & Spot Pricing
+## 5. Fuel Burn, Surface LTO Emissions, Contrails & CRCO Costs (`€ EUR`)
 
-### `flightml fuel-prices`
-Display official EIA and IATA historical weekly jet fuel spot prices across dataset periods.
+### `flightml fuel-impact <ectrl_id>`
+Compute excess detour and holding fuel burn, $\text{CO}_2$, and weekly Jet-A spot fuel cost in Euros (`€`).
 
+### `flightml taxi-out` & `flightml flight-taxi-out <ectrl_id>`
+Quantify `KPI02 ATOT` departure runway queue delays and **ICAO EDB v32B** 7% LTO idle pollutants ($\text{NO}_x$, $\text{CO}$, $\text{HC}$, $\text{nvPM}$ soot) and Euro fuel cost.
 ```bash
-flightml fuel-prices [--period PERIOD]
+flightml taxi-out --period 202510 --limit 3
 ```
 
-### `flightml fuel-impact`
-Calculate excess fuel burn, CO2 emissions, and financial penalty from trajectory detour and airborne holding.
-
-```bash
-flightml fuel-impact <ectrl_id> [--period PERIOD]
-```
-
-**Example Output (Redacted with `XXXX`):**
+**Synthetic Output Table:**
 ```text
-$ flightml fuel-impact 29126XXXX --period 202510
+    🛞 Airport Surface Taxi-Out (KPI02 ATOT) & LTO Idle Emissions (Synthetic)
+┌─────────┬─────────┬───────────┬──────────┬───────────┬───────────┬──────────────┐
+│ Airport │ Flights │ Mean Taxi │ UTOT p20 │ Add. ATOT │ Excess CO₂│ Queue Cost € │
+├─────────┼─────────┼───────────┼──────────┼───────────┼───────────┼──────────────┤
+│ EGLL    │  19,400 │  22.8 min │ 13.5 min │  +9.3 min │  742.0 t  │ €150,820 EUR │
+│ LFPG    │  18,100 │  19.4 min │ 12.0 min │  +7.4 min │  538.5 t  │ €109,450 EUR │
+│ EHAM    │  17,650 │  17.2 min │ 11.2 min │  +6.0 min │  412.0 t  │  €83,740 EUR │
+└─────────┴─────────┴───────────┴──────────┴───────────┴───────────┴──────────────┘
+```
 
-Environmental & Fuel Impact: ECTRL 29126XXXX (B772) - Period 202510
-                      Fuel & Carbon Inefficiency Analysis                      
-┌────────────────────────────┬────────────────────────────────────────────────┐
-│ Metric                     │ Value                                          │
-├────────────────────────────┼────────────────────────────────────────────────┤
-│ Excess Distance Flown      │ 16.9 nm                                        │
-│ Terminal Holding Duration  │ 0.0 min                                        │
-│ Holding Stack Fuel Burned  │ 0.0 kg                                         │
-│ Route Detour Fuel Burned   │ 232.2 kg                                       │
-│ Total Excess Fuel Burned   │ 232.2 kg                                       │
-│ Total Excess CO₂ Emitted   │ 733.8 kg (0.73 metric tons)                    │
-│ Weekly Jet Fuel Price      │ $2.112/gal ($0.6941/kg)                        │
-│ Price Week & Benchmark     │ 2025-W40 (2025-09-29 to 2025-10-05) [EIA       │
-│                            │ Weekly Spot Price (USGC/IATA)]                 │
-│ Estimated Excess Fuel Cost │ $161.18 USD                                    │
-└────────────────────────────┴────────────────────────────────────────────────┘
+### `flightml crco-cost <ectrl_id>` & `flightml route-avoidance`
+Compute Eurocontrol CRCO Service Units (`SU`), national FIR charges (`€`), and Corridor Route-Charge Avoidance vs. Fuel Burn trade-offs.
+```bash
+flightml crco-cost 900104215 --period 202510
+flightml route-avoidance --adep EGLL --ades LIRF --ac A320 --period 202510
+```
+
+### `flightml contrails <ectrl_id>`
+Analyze upper-air tailwinds (`TAS` vs `GS`) and **Schmidt-Appleman persistent contrail (`ISSR`)** formation using Open-Meteo ERA5 upper-air meteorology.
+```bash
+flightml contrails 900104215 --period 202510
 ```
 
 ---
 
-## 7. Weather & Environmental Diagnostics
+## 6. Safety, Conflict Detection & Prescriptive Operations Research
 
-### `flightml weather-delayed`
-Fetch historical IEM ASOS/METAR observations for a delayed flight and perform multi-factor attribution.
-
+### `flightml airspace-conflicts`
+Scan 1-minute interpolated 4D trajectories for co-altitude proximity pairs (`< 5 nm` horizontal, `< 1,000 ft` vertical) and $5^\circ \times 5^\circ$ airspace complexity.
 ```bash
-flightml weather-delayed <ectrl_id> [--period PERIOD]
+flightml airspace-conflicts --period 202510 --hour 10 --sep-nm 5.0
 ```
 
-### `flightml weather-winds`
-Calculate runway crosswind and headwind components and determine optimal active runways.
-
+### `flightml runway-safety <ectrl_id>`
+Assess arrival runway braking action, density altitude, crosswinds, and landing distance safety margin (`LDA`).
 ```bash
-flightml weather-winds --airport ICAO [--time TIMESTAMP]
+flightml runway-safety 900104215 --period 202510
 ```
 
-### `flightml weather-impact`
-Analyze European macro weather history and statistical correlation with network delays.
-
+### `flightml tail-swaps`
+Discover concrete same-operator, same-aircraft-type tail swaps (`Tail A ⇄ Tail B`) at hubs to absorb reactionary delays (`€88/min`).
 ```bash
-flightml weather-impact --start YYYY-MM-DD --end YYYY-MM-DD
-```
-
----
-
-## 8. Machine Learning & Delay Diagnostics
-
-### `flightml diagnose`
-Perform comprehensive multi-factor delay root-cause attribution (Reactionary, Holding, Crosswind, Ceiling).
-
-```bash
-flightml diagnose <ectrl_id> [--period PERIOD]
-```
-
-### `flightml predict-delay`
-Predict arrival delay using a trained gradient-boosted machine learning model.
-
-```bash
-flightml predict-delay --adep ICAO --ades ICAO --operator CODE --sched-dep TIMESTAMP [--ac TYPE]
-```
-
-### `flightml reactionary`
-Trace aircraft tail rotation history and quantify downstream delay propagation.
-
-```bash
-flightml reactionary --tail REGISTRATION [--date YYYY-MM-DD] [--period PERIOD]
-```
-
-### `flightml train-gnn`
-Train the Spatio-Temporal Graph Neural Network (ST-GNN) on international airport connectivity graphs.
-
-```bash
-flightml train-gnn [--epochs N] [--lr FLOAT] [--batch-size N]
-```
-
----
-
-## 9. Aviation Simulation & Stress Testing
-
-### `flightml stress-test`
-Stress-test an airline's fleet schedule under operational delay shock waves to build fragility curves.
-
-```bash
-flightml stress-test --operator CODE [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--period PERIOD]
-```
-
-### `flightml simulate-buffer`
-Simulate how expanding turnaround buffers (+5m to +25m) reduces reactionary delays across an airline's schedule.
-
-```bash
-flightml simulate-buffer --operator CODE [--buffer-min N] [--period PERIOD]
+flightml tail-swaps --period 202510
 ```
 
 ### `flightml gdp`
-Run Ration-by-Schedule (RBS) Ground Delay Program (GDP) slot allocation to prevent airborne holding during weather collapses.
-
+Run Ration-by-Schedule (`RBS`) Ground Delay Program slot optimization (`€ EUR` fuel savings).
 ```bash
-flightml gdp --airport ICAO --start TIMESTAMP --end TIMESTAMP --capacity FLIGHTS_PER_HOUR [--period PERIOD]
+flightml gdp --airport EGLL --aar 36 --period 202510
 ```
-
----
-
-## 10. Macro Period & AIRAC Cycle Analysis
-
-### `flightml compare-periods`
-Deep comparative macro analysis between two Eurocontrol monthly archives (traffic growth, delay drift, airline shifts).
-
-```bash
-flightml compare-periods --p1 PERIOD1 --p2 PERIOD2
-```
-
-Example:
-```bash
-flightml compare-periods --p1 201611 --p2 202510
-```
-
-### `flightml airac-diff`
-Compare contiguous AIRAC cycle aeronautical configurations (airways, waypoints, FIR boundaries).
-
-```bash
-flightml airac-diff --c1 CYCLE1 --c2 CYCLE2
-```
-
-Example:
-```bash
-flightml airac-diff --c1 2509 --c2 2510
-```
-

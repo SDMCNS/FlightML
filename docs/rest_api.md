@@ -1,18 +1,12 @@
 # REST API Reference 🌐
 
-FlightML includes a production-ready, asynchronous **FastAPI** web service providing REST endpoints for aeronautical data queries, 4D trajectory analytics, weather fusion, weekly jet fuel pricing, and simulation stress testing.
+FlightML includes an asynchronous **FastAPI** web service providing REST endpoints for aeronautical data queries, $5^\circ \times 5^\circ$ airspace saturation, 4D trajectory analytics, ICAO GANP & Eurocontrol PRU KPIs, Eurocontrol CRCO route charges (`€ EUR`), and prescriptive operations research.
 
 ---
 
 > [!IMPORTANT]
-> ### 🔒 Data Access & Eurocontrol OneSky Online Compliance Notice
-> **Eurocontrol Research Data Access Prerequisite**:
-> The underlying aeronautical traffic, flight plans, and 4D radar trajectory archives supported by FlightML (such as Eurocontrol DDR2 / PRISME / R-NEST datasets) are **proprietary and not for public consumption or redistribution**.
->
-> To access or download raw historical datasets, researchers and organizations **must have an approved user account on Eurocontrol's OneSky Online portal** ([https://www.eurocontrol.int/](https://www.eurocontrol.int/)) with institutional access granted to the **Demand Data Repository (DDR)** under Eurocontrol's Data Dissemination Policy and standard Research Agreement.
->
-> **Data Privacy & Redaction Policy**:
-> In accordance with Eurocontrol data dissemination terms, operational commercial confidentiality, and GDPR requirements, **specific flight identifiers, physical aircraft tail registrations, and operational callsigns in this documentation and example snippets have been anonymized / redacted (e.g., `29126XXXX`, `N686XX`, `BAWXXXX`)** to prevent disclosing sensitive airline operational data.
+> ### 🔒 Synthetic Example Outputs Policy
+> All sample JSON responses, flight identifiers (e.g., `900104215`), and aircraft tail registrations (e.g., `G-SYNA`, `EI-SYNB`) shown below are realistic synthetic records generated to illustrate API schemas without exposing proprietary archive rows. All monetary fields are reported in **Euros (`€`, `EUR`)**.
 
 ---
 
@@ -30,174 +24,113 @@ flightml serve --host 127.0.0.1 --port 8000
 
 ## 📑 Endpoints Catalog
 
-### 1. System & Discovery
+### 1. System, Discovery & Search
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `GET` | `/` | Service health status and link to `/docs`. |
-| `GET` | `/api/v1/periods` | List all ingested Eurocontrol historical periods (`201611`, `202510`). |
-| `GET` | `/api/v1/summary` | Global dataset statistics (total flights, airports, routes, dates). |
+| `GET` | `/api/v1/periods` | List all ingested Eurocontrol periods (`201611`, `202510`). |
+| `GET` | `/api/v1/summary` | Global dataset statistics (total flights, operators, airports, delays). |
+| `GET` | `/api/v1/flights/search` | Multi-criteria flight search with human-readable labels. |
+| `GET` | `/api/v1/flights/{ectrl_id}` | Retrieve flight metadata, filed vs. actual route, and 4D holding summary. |
+| `GET` | `/api/v1/flights/{ectrl_id}/map` | Render interactive HTML Leaflet map of 4D trajectory and holding stacks. |
 
-#### Example: `GET /api/v1/periods`
+---
+
+### 2. Airspace Saturation, AUA Dwell & 4D Conflict Detection
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/v1/airspace/grid-saturation` | Period-average hourly flight density & Dynamic Complexity Index per $5^\circ \times 5^\circ$ square (`hour=0..23`). |
+| `GET` | `/api/v1/airspace/conflicts` | 1-minute interpolated 4D co-altitude proximity scanner (`< 5 nm` / `< 1,000 ft`) and sector complexity. |
+| `GET` | `/api/v1/fir/saturation` | Hourly traffic saturation across European Flight Information Regions (`FIRs`). |
+| `GET` | `/api/v1/flights/{ectrl_id}/fir-dwell` | Single-flight FIR entry/exit dwell efficiency vs. filed flight plan. |
+| `GET` | `/api/v1/aua/saturation` | Hourly saturation across granular ATC Unit Airspaces (`TMA`, `CTA`, `UTA`). |
+| `GET` | `/api/v1/flights/{ectrl_id}/aua-dwell` | Single-flight terminal (`TMA`) vs. en-route (`CTA`/`UTA`) dwell breakdown. |
+| `GET` | `/api/v1/airports/{ident}/radio-workload` | Estimate ATC controller-pilot VHF voice frequency occupancy (`%`). |
+
+#### Synthetic Example: `GET /api/v1/airspace/grid-saturation?hour=10&period=202510`
 ```json
 {
-  "available_periods": ["201611", "202510"]
+  "period": "202510",
+  "hour_utc": 10,
+  "total_active_squares": 65,
+  "critical_squares_count": 9,
+  "high_density_squares_count": 14,
+  "max_avg_flights_per_hour": 312.4,
+  "squares": [
+    {
+      "cell_lat": 45,
+      "cell_lon": 5,
+      "cell_label": "45°N to 50°N, 5°E to 10°E",
+      "active_days": 31,
+      "avg_flights_per_hour": 312.4,
+      "peak_flights_per_hour": 368,
+      "vertical_transition_pct": 34.2,
+      "avg_flight_level": 330.0,
+      "dynamic_complexity_score": 472.7,
+      "saturation_status": "CRITICAL_SATURATION"
+    }
+  ]
 }
 ```
 
 ---
 
-### 2. Flight Search & Trajectory
+### 3. ICAO GANP & Eurocontrol PRU KPIs, CDO/CCO & Free Route Airspace (`FRA`)
 
-#### `GET /api/v1/flights/search`
-Search flights across any period with rich human-readable labels.
-
-**Query Parameters:**
-- `period` *(string, default: "201611")*: Period ID (`201611`, `202510`).
-- `adep` *(string, optional)*: Origin ICAO (e.g. `EGLL`).
-- `ades` *(string, optional)*: Destination ICAO (e.g. `KORD`).
-- `operator` *(string, optional)*: Airline ICAO code (e.g. `BAW`).
-- `ac_type` *(string, optional)*: Aircraft type (e.g. `B772`).
-- `date_from` *(string, optional)*: `YYYY-MM-DD`.
-- `date_to` *(string, optional)*: `YYYY-MM-DD`.
-- `min_dist` *(float, optional)*: Minimum distance in nautical miles.
-- `max_dist` *(float, optional)*: Maximum distance in nautical miles.
-- `min_fl` / `max_fl` *(float, optional)*: Flight level range (e.g. `310` to `390`).
-- `limit` *(int, default: 25)*: Max records to return.
-
-#### `GET /api/v1/flights/{ectrl_id}`
-Retrieve complete flight details, filed flight plan, actual arrival delay, and 4D trajectory holding metrics.
-
-#### `GET /api/v1/flights/{ectrl_id}/map`
-Returns an interactive Leaflet HTML map rendering the 4D radar track, waypoints, and holding loops using unblocked Humanitarian OSM and USGS Topo tile layers.
-
-#### `GET /api/v1/flights/recurring`
-Longitudinal daily recurring series analysis on an origin-destination corridor with diurnal (time-of-day) congestion breakdown.
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/v1/flights/{ectrl_id}/pru-kpis` | Compute `KPI04 KEP`, `KPI05 KEA`, `KPI08 ASMA`, and `KPI19` level-capping scorecard. |
+| `GET` | `/api/v1/flights/{ectrl_id}/cdo` | Continuous Descent Operations (`KPI19 CDO`) compliance and level-off events. |
+| `GET` | `/api/v1/flights/{ectrl_id}/cco` | Continuous Climb Operations (`KPI17 CCO`) compliance and climb level-offs. |
+| `GET` | `/api/v1/flights/{ectrl_id}/vertical-profile` | Unified 3-phase vertical efficiency report (`CCO` + `Cruise Cap` + `CDO`). |
+| `GET` | `/api/v1/pru/level-capping` | Top corridors affected by systematic `KPI19` cruise flight-level capping. |
+| `GET` | `/api/v1/flights/{ectrl_id}/fra` | Snap 4D waypoints to ATS airways and 5-letter fixes to compute `FRA` directness. |
+| `GET` | `/api/v1/fra/evolution` | Compare Free Route Airspace (`FRA`) directness shift across two archives. |
 
 ---
 
-### 3. Fuel, Carbon & Weekly Spot Pricing
+### 4. Fuel Burn, LTO Surface Emissions, Contrails & Eurocontrol CRCO (`€ EUR`)
 
-#### `GET /api/v1/fuel/prices`
-Retrieve official historical weekly jet fuel spot prices (EIA / IATA Rotterdam Platts benchmark) in USD per gallon, USD per kg, and USD per metric ton.
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/v1/fuel/prices` | Historical weekly Jet-A spot prices in Euros (`price_eur_per_gallon`, `price_eur_per_kg`). |
+| `GET` | `/api/v1/flights/{ectrl_id}/fuel` | OpenAP excess fuel burn, $\text{CO}_2$, and weekly spot cost in Euros (`€`). |
+| `GET` | `/api/v1/surface/taxi-out` | Airport `KPI02 ATOT` queue delays and ICAO EDB v32B LTO idle emissions. |
+| `GET` | `/api/v1/flights/{ectrl_id}/taxi-out` | Single-flight surface taxi-out `ATOT` delay and 7% idle $\text{NO}_x / \text{CO} / \text{nvPM}$ emissions. |
+| `GET` | `/api/v1/flights/{ectrl_id}/crco-cost` | Eurocontrol CRCO Service Units (`SU`), FIR fees (`€`), and Total Direct Operating Cost (`€`). |
+| `GET` | `/api/v1/economics/route-avoidance` | Corridor CRCO Route-Charge vs. Extra Fuel Burn economic trade-off analysis (`€`). |
+| `GET` | `/api/v1/flights/{ectrl_id}/contrails` | Upper-air wind optimality (`TAS` vs `GS`) and persistent contrail `ISSR` forcing (`CO₂e`). |
 
-**Query Parameters:**
-- `period` *(string, optional)*: Filter by period ID (`201611`, `202510`).
-
-**Response Schema:**
-```json
-[
-  {
-    "period_id": "202510",
-    "week_label": "2025-W40 (Sep 29 - Oct 05)",
-    "price_usd_per_gallon": 2.112,
-    "price_usd_per_kg": 0.694,
-    "price_usd_per_metric_ton": 694.0,
-    "source": "U.S. EIA Series EER_EPJK_PF4_RGC_DPG / IATA Platts ARA"
-  }
-]
-```
-
-#### `GET /api/v1/flights/{ectrl_id}/fuel`
-Calculate aerodynamic fuel burn, carbon dioxide emissions ($3.16\text{ kg CO}_2\text{ per kg Jet-A}$), trajectory detour waste, holding loop waste, and weekly spot price financial penalties.
-
-**Query Parameters:**
-- `period` *(string, default: "201611")*: Data period.
-- `price_per_kg` *(float, optional)*: Manual price override in USD/kg.
-
-**Response Schema (Redacted with `XXXX`):**
+#### Synthetic Example: `GET /api/v1/flights/900104215/fuel?period=202510`
 ```json
 {
-  "ectrl_id": 29126XXXX,
-  "departure_date": "2025-10-01",
-  "total_fuel_kg": 46820.4,
-  "co2_emissions_kg": 147952.5,
-  "detour_excess_fuel_kg": 182.1,
-  "holding_excess_fuel_kg": 0.0,
-  "fuel_price_usd_per_gallon": 2.112,
-  "fuel_price_usd_per_kg": 0.694,
-  "fuel_price_week": "2025-W40 (Sep 29 - Oct 05)",
-  "total_fuel_cost_usd": 32493.36,
-  "detour_fuel_cost_usd": 126.38,
-  "holding_fuel_cost_usd": 0.0
+  "ectrl_id": 900104215,
+  "ac_type": "B77W",
+  "excess_distance_nm": 24.0,
+  "holding_duration_min": 4.5,
+  "holding_fuel_kg": 315.0,
+  "detour_fuel_kg": 288.0,
+  "total_excess_fuel_kg": 603.0,
+  "excess_co2_kg": 1905.5,
+  "fuel_price_eur_per_gallon": 1.954,
+  "fuel_price_eur_per_kg": 0.6421,
+  "fuel_price_week": "2025-W40 (2025-09-29 to 2025-10-05)",
+  "estimated_excess_fuel_cost_eur": 387.19
 }
 ```
 
 ---
 
-### 4. Continuous Descent Operations (CDO) & Twin Flights
+### 5. Diagnostics, Safety & Prescriptive Operations Research
 
-#### `GET /api/v1/flights/{ectrl_id}/cdo`
-Evaluate the terminal arrival descent profile, identify stepped level-offs, calculate CDO compliance score, and quantify excess descent fuel waste.
-
-#### `GET /api/v1/twins/compare`
-Benchmark the fastest vs slowest flights of identical complexity sharing the same city pair and aircraft type.
-
-**Query Parameters:**
-- `adep` *(string, required)*: Departure ICAO (e.g. `RKSI`).
-- `ades` *(string, required)*: Destination ICAO (e.g. `EGLL`).
-- `ac_type` *(string, default: "B77W")*: Aircraft ICAO type.
-- `period` *(string, default: "201611")*: Historical period.
-
----
-
-### 5. Airspace, En-Route FIR & Sector Dwell
-
-#### `GET /api/v1/fir/saturation`
-Calculate hourly traffic saturation rates across European Flight Information Regions (FIRs) and identify airspace chokepoints.
-
-**Query Parameters:**
-- `period` *(string, default: "202510")*: Data period.
-- `threshold` *(int, default: 40)*: Hourly traffic threshold.
-- `top_n` *(int, default: 15)*: Maximum top records.
-
-#### `GET /api/v1/flights/{ectrl_id}/fir-dwell`
-Assess sector-by-sector en-route dwell efficiency for a single flight, comparing actual sector dwell time against great-circle transit time to isolate holding or vectoring.
-
-#### `GET /api/v1/airac/diff`
-Diff contiguous AIRAC aeronautical navigation cycles (airways, waypoints, FIR boundary coordinates).
-
----
-
-### 6. Delay Diagnostics, Weather & Machine Learning
-
-#### `GET /api/v1/flights/{ectrl_id}/diagnostics`
-Synthesize trajectory holding, aircraft tail rotation history, aerodrome crosswinds, and cloud ceilings to assign percentage delay attribution.
-
-#### `GET /api/v1/flights/{ectrl_id}/weather`
-Fetch on-demand historical IEM ASOS/METAR weather observations for the departure and arrival airports at the exact flight times.
-
-#### `POST /api/v1/predict/delay`
-Predict arrival delay using a trained gradient-boosted machine learning model.
-
-**Request Body:**
-```json
-{
-  "adep": "EGLL",
-  "ades": "KORD",
-  "ac_operator": "BAW",
-  "market_segment": "Traditional Scheduled",
-  "requested_fl": 350.0,
-  "actual_distance_nm": 3400.0,
-  "dep_hour": 10,
-  "dep_dayofweek": 2,
-  "filed_air_time_min": 480.0
-}
-```
-
----
-
-### 7. Simulation & Airline Stress Testing
-
-#### `GET /api/v1/stress-test`
-Simulate cascading delay shock waves across an airline fleet schedule to generate fragility curves.
-
-**Query Parameters:**
-- `operator` *(string, default: "RYR")*: Airline ICAO code.
-- `start_date` *(string, default: "2016-11-01")*: `YYYY-MM-DD`.
-- `end_date` *(string, default: "2016-11-04")*: `YYYY-MM-DD`.
-- `period` *(string, default: "201611")*: Data period.
-
-#### `GET /api/v1/periods/compare`
-Run macro comparative analytics between two Eurocontrol periods, evaluating traffic growth, delay drift, airline market share, and fleet modernization.
-
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/v1/flights/{ectrl_id}/diagnostics` | Multi-factor delay root-cause attribution (tail rotation, holding, crosswinds, ceiling). |
+| `GET` | `/api/v1/flights/{ectrl_id}/runway-safety` | Arrival runway braking action, density altitude, and stopping distance margin (`LDA`). |
+| `GET` | `/api/v1/sim/tail-swaps` | Prescriptive hub tail-swap recovery optimizer (`Tail A ⇄ Tail B`, `€ EUR` savings). |
+| `GET` | `/api/v1/stress-test` | Multi-shock airline fleet delay contagion and fragility threshold analysis. |
+| `GET` | `/api/v1/twins/compare` | Benchmark most vs. least efficient twin flights on the same city pair and aircraft type. |
+| `GET` | `/api/v1/periods/compare` | Macro traffic growth, delay drift, and fleet modernization across archives. |
+| `GET` | `/api/v1/airac/diff` | Diff airway segments and FIR boundaries across contiguous AIRAC cycles. |
