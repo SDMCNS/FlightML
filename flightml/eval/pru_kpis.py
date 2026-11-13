@@ -58,6 +58,7 @@ class PRUFlightScorecard:
     upper_uir_dwell_min: float
     level_cap_excess_fuel_kg: float
     level_cap_excess_co2_kg: float
+    optimal_fl: float = 360.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -268,12 +269,14 @@ def compute_flight_pru_kpis(dataset: FlightDataset, ectrl_id: int) -> PRUFlightS
             elif fid != "TAXI_OUT":
                 lower_fir_min += d_min
 
-    # Estimate fuel penalty from cruise level-capping (~1.5% extra cruise fuel per 2,000 ft below optimal FL)
-    ac_perf = dataset.get_aircraft_performance(ac_type)
-    wake = str(ac_perf.get("wake_category") or "M") if ac_perf else "M"
-    base_cruise_ff_kg_hr = 6800.0 if wake == "H" else 11500.0 if wake == "J" else 1200.0 if wake == "L" else 2450.0
+    # Estimate fuel penalty from cruise level-capping and suboptimal altitude vs ideal aircraft/engine FL
+    from flightml.eval.aircraft_engine_perf import resolve_aircraft_engine_perf
+    eng_perf = resolve_aircraft_engine_perf(dataset, ac_type)
+    optimal_fl = eng_perf.optimal_cruise_fl
+    base_cruise_ff_kg_hr = eng_perf.nominal_fuel_flow_kg_hr
     cruise_hours = max(0.2, (act_enroute_nm / 440.0))
-    penalty_fraction = (level_cap_delta / 20.0) * 0.015 if is_capped else 0.0
+    effective_cap_deficit = max(level_cap_delta, max(0.0, optimal_fl - max_act_fl)) if is_capped or (optimal_fl - max_act_fl >= 20.0) else 0.0
+    penalty_fraction = (effective_cap_deficit / 20.0) * 0.015
     cap_fuel_kg = base_cruise_ff_kg_hr * cruise_hours * penalty_fraction
     cap_co2_kg = cap_fuel_kg * 3.16
 
@@ -308,6 +311,7 @@ def compute_flight_pru_kpis(dataset: FlightDataset, ectrl_id: int) -> PRUFlightS
         upper_uir_dwell_min=round(upper_uir_min, 1),
         level_cap_excess_fuel_kg=round(cap_fuel_kg, 1),
         level_cap_excess_co2_kg=round(cap_co2_kg, 1),
+        optimal_fl=round(optimal_fl, 0),
     )
 
 

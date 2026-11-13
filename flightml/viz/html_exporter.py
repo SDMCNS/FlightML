@@ -620,8 +620,10 @@ def _build_flight_performance_eco_section(ds: FlightDataset, flight_id: int) -> 
 
     kpis = [
         ("CDO Descent Score", f"{cdo_rep.cdo_compliance_score:.1f}%" if cdo_rep else "N/A", f"Excess descent fuel: {cdo_rep.excess_fuel_burned_kg:.1f} kg" if cdo_rep else ""),
-        ("CCO Climb Score", f"{cco_rep.cco_compliance_score:.1f}%" if cco_rep else "N/A", f"Excess climb fuel: {cco_rep.excess_fuel_burned_kg:.1f} kg" if cco_rep else ""),
-        ("Excess Route Fuel & CO₂", f"{impact.total_excess_fuel_kg:,.1f} kg", f"{impact.excess_co2_kg:,.1f} kg CO₂ (€{impact.estimated_excess_fuel_cost_eur:,.2f})"),
+        ("CCO Climb Score", f"{cco_rep.cco_compliance_score:.1f}%" if cco_rep else "N/A", f"Excess climb fuel: {cco_rep.excess_fuel_burned_kg:.1f} kg" if cdo_rep else ""),
+        ("Ideal vs Flown FL", f"FL{impact.optimal_cruise_fl:.0f} (Opt) / FL{impact.actual_cruise_fl:.0f} (Act)", f"Engine: {impact.selected_engine} (BPR {impact.bypass_ratio:.1f}:1, PR {impact.pressure_ratio:.1f})"),
+        ("Altitude Penalty / Savings", f"+{impact.excess_altitude_fuel_kg:,.1f} kg (€{impact.excess_altitude_fuel_cost_eur:,.2f})" if impact.excess_altitude_fuel_kg > 0 else "0 kg (Optimal)", f"Save up to {impact.potential_fuel_savings_kg:,.1f} kg / {impact.potential_fuel_savings_pct:.1f}% at FL{impact.optimal_cruise_fl:.0f}"),
+        ("Total Excess Fuel & CO₂", f"{impact.total_excess_fuel_kg:,.1f} kg", f"{impact.excess_co2_kg:,.1f} kg CO₂ (€{impact.estimated_excess_fuel_cost_eur:,.2f})"),
         ("Eurocontrol CRCO Charge", f"€{crco_rep.actual_crco_charge_eur:,.2f}" if crco_rep else "N/A", f"Total Direct Cost: €{crco_rep.total_direct_route_cost_eur:,.2f}" if crco_rep else ""),
         ("Arrival Runway Safety", f"RWY {rwy_saf.recommended_runway} ({rwy_saf.safety_risk_level})" if rwy_saf else "N/A", f"Margin +{rwy_saf.landing_distance_safety_margin_m:,.0f} m ({rwy_saf.ils_precision_category})" if rwy_saf else ""),
     ]
@@ -633,10 +635,14 @@ def _build_flight_performance_eco_section(ds: FlightDataset, flight_id: int) -> 
         t_series = pd.to_datetime(actual_df["time_over"])
         elapsed_min = (t_series - t_series.iloc[0]).dt.total_seconds() / 60.0
         ax1.fill_between(elapsed_min, actual_df["flight_level"], color="#2980b9", alpha=0.2)
-        ax1.plot(elapsed_min, actual_df["flight_level"], color="#2980b9", linewidth=2.3)
+        ax1.plot(elapsed_min, actual_df["flight_level"], color="#2980b9", linewidth=2.3, label="Actual Trajectory")
+        ax1.axhline(impact.optimal_cruise_fl, color="#27ae60", linestyle="--", linewidth=1.8, label=f"Optimal FL{impact.optimal_cruise_fl:.0f} ({impact.selected_engine})")
+        if impact.requested_fl > 0 and impact.requested_fl != impact.optimal_cruise_fl:
+            ax1.axhline(impact.requested_fl, color="#e67e22", linestyle=":", linewidth=1.5, label=f"Requested FL{impact.requested_fl:.0f}")
+        ax1.legend(loc="lower right", fontsize=8)
         ax1.set_xlabel("Elapsed Flight Time (min)")
         ax1.set_ylabel("Flight Level (FL)")
-        ax1.set_title(f"Vertical Profile (CCO / Cruise / CDO) — Flight #{flight_id}", fontweight="bold")
+        ax1.set_title(f"Vertical Profile & Ideal Cruise Level — Flight #{flight_id}", fontweight="bold")
         ax1.grid(True, linestyle="--", alpha=0.4)
 
     if crco_rep and crco_rep.fir_breakdown:

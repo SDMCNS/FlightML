@@ -62,6 +62,7 @@ from flightml.eval.surface_taxi import (
     analyze_flight_taxi_out,
 )
 from flightml.eval.fuel_carbon import compute_flight_fuel_and_emissions
+from flightml.eval.aircraft_engine_perf import resolve_aircraft_engine_perf
 from flightml.eval.jet_fuel_prices import (
     get_all_weekly_fuel_prices_df,
     get_weekly_fuel_price,
@@ -403,14 +404,35 @@ def get_flight_fuel_impact(
     ectrl_id: int,
     period: str = Query(default="201611", description="Eurocontrol period (e.g. 201611, 202510)"),
     price_per_kg: float | None = Query(default=None, description="Optional manual fuel price override in EUR/kg"),
+    engine_override: str | None = Query(default=None, description="Optional aircraft engine model override (e.g. V2527-A5, CFM56-5B4, GE90-115B)"),
 ) -> dict[str, Any]:
-    """Calculate excess fuel burn, CO2 emissions, and Euro (€) financial penalty with weekly EIA fuel spot price lookup."""
+    """Calculate excess fuel burn, CO2 emissions, and Euro (€) financial penalty with weekly EIA fuel spot price lookup and engine/altitude optimization."""
     ds = FlightDataset(period=period)
     try:
-        impact = compute_flight_fuel_and_emissions(ds, ectrl_id=ectrl_id, fuel_price_per_kg=price_per_kg)
+        impact = compute_flight_fuel_and_emissions(
+            ds,
+            ectrl_id=ectrl_id,
+            fuel_price_per_kg=price_per_kg,
+            engine_override=engine_override,
+        )
         return impact.to_dict()
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/v1/flights/{ectrl_id}/engines")
+def get_flight_engine_options(
+    ectrl_id: int,
+    period: str = Query(default="201611", description="Eurocontrol period"),
+) -> dict[str, Any]:
+    """Retrieve available engine options, default engine, bypass ratio, pressure ratio, and ideal cruising altitude for a flight's aircraft."""
+    ds = FlightDataset(period=period)
+    flight = ds.get_flight(ectrl_id)
+    if not flight:
+        raise HTTPException(status_code=404, detail=f"Flight {ectrl_id} not found")
+    ac_type = str(flight.get("ac_type") or "A320").upper()
+    perf = resolve_aircraft_engine_perf(ds, ac_type)
+    return perf.to_dict()
 
 
 @app.get("/api/v1/flights/{ectrl_id}/cdo")

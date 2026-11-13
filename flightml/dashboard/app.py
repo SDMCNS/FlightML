@@ -11,6 +11,12 @@ from flightml.geo.trajectory import analyze_trajectory
 from flightml.weather.metar_client import MetarClient
 from flightml.eval.diagnostics import diagnose_flight_bottlenecks
 from flightml.eval.fuel_carbon import compute_flight_fuel_and_emissions
+from flightml.eval.aircraft_engine_perf import (
+    AircraftEnginePerformance,
+    CruiseAltitudeEfficiency,
+    compute_cruise_altitude_efficiency,
+    resolve_aircraft_engine_perf,
+)
 from flightml.eval.flight_twins import compare_twin_flights, render_twin_comparison_map
 from flightml.eval.cdo_analyzer import (
     analyze_cdo_descent,
@@ -758,10 +764,12 @@ with tab_cat_single:
                     cc3.metric("Climb Level-Offs", f"{cco_rep.inefficiency_events_count} ({cco_rep.total_level_off_min:.1f}m)")
                     cc4.metric("Excess Climb Fuel", f"{cco_rep.excess_fuel_burned_kg:.1f} kg", f"{cco_rep.excess_co2_kg:.1f} kg CO₂")
                 if pru_vert:
+                    opt_val = getattr(pru_vert, "optimal_fl", 360.0)
                     st.caption(
-                        f"📏 **KPI19 Cruise Level-Capping:** Requested `FL{pru_vert.requested_fl:.0f}` vs. Actual Max `FL{pru_vert.max_actual_fl:.0f}` "
+                        f"📏 **KPI19 Cruise Altitude & Level-Capping:** Airframe/Engine Ideal `FL{opt_val:.0f}` | "
+                        f"Requested `FL{pru_vert.requested_fl:.0f}` vs. Actual Max `FL{pru_vert.max_actual_fl:.0f}` "
                         f"(Deficit: `-{pru_vert.level_cap_delta_fl:.0f} FL`, Level-Capped: `{pru_vert.is_level_capped}`, "
-                        f"Estimated Cruise Cap Penalty: `+{pru_vert.level_cap_excess_fuel_kg:.1f} kg Jet-A`)"
+                        f"Estimated Altitude Penalty: `+{pru_vert.level_cap_excess_fuel_kg:.1f} kg Jet-A`)"
                     )
 
         with st.expander("🌐 Network-Wide KPI19 Cruise Level-Capping Corridors (Top Capped City Pairs)", expanded=False):
@@ -816,13 +824,105 @@ with tab_cat_single:
             st.warning(f"Flight ID {active_flight_id} not found in period {selected_period}.")
         else:
             st.info(f"📍 **Active Flight:** `{ds.format_flight_label(flight)}`")
+            ac_type = str(flight.get("ac_type") or "A320").upper()
+            base_eng_perf = resolve_aircraft_engine_perf(ds, ac_type)
+
+            col_e1, col_e2 = st.columns([2, 1])
+            with col_e1:
+                selected_engine_opt = st.selectbox(
+                    "🔧 Aircraft Engine Variant (OpenAP / ICAO EDB Performance Model):",
+                    options=base_eng_perf.engine_options,
+                    index=0,
+                    key=f"fuel_engine_select_{active_flight_id}_{selected_period}",
+                    help="Select installed engine variant to evaluate aerodynamic cruise specific fuel consumption and ideal cruise flight level."
+                )
+            with col_e2:
+                cur_eng_perf = resolve_aircraft_engine_perf(ds, ac_type, engine_override=selected_engine_opt)
+                st.metric(
+                    "Engine BPR & Pressure Ratio",
+                    f"BPR {cur_eng_perf.bypass_ratio:.1f} : 1",
+                    f"PR {cur_eng_perf.pressure_ratio:.1f} | {cur_eng_perf.engine_type_class}",
+                )
+
             try:
-                impact = compute_flight_fuel_and_emissions(ds, int(active_flight_id))
+                impact = compute_flight_fuel_and_emissions(
+                    ds,
+                    int(active_flight_id),
+                    engine_override=selected_engine_opt,
+                )
+
+                st.markdown("#### ✈️ 3-Way Cruise Altitude Optimization: Ideal vs. Requested vs. Actual Flown")
+                fl1, fl2, fl3, fl4 = st.columns(4)
+                fl1.metric(
+                    "Ideal Cruise Altitude",
+                    f"FL{impact.optimal_cruise_fl:.0f}",
+                    f"Airframe & Engine Optimum",
+                )
+                fl2.metric(
+                    "Filed / Requested Altitude",
+                    f"FL{impact.requested_fl:.0f}",
+                    f"Δ to Ideal: {impact.fl_delta_requested_vs_optimal:+.0f} FL",
+                    delta_color="normal" if impact.fl_delta_requested_vs_optimal >= 0 else "inverse",
+                )
+                fl3.metric(
+                    "Actual Radar Flown Altitude",
+                    f"FL{impact.actual_cruise_fl:.0f}",
+                    f"Δ to Ideal: {impact.fl_delta_actual_vs_optimal:+.0f} FL",
+                    delta_color="normal" if impact.fl_delta_actual_vs_optimal >= 0 else "inverse",
+                )
+                fl4.metric(
+                    "Tactical ATC Capping",
+                    f"{impact.fl_delta_actual_vs_requested:+.0f} FL",
+                    f"Actual vs. Requested",
+                    delta_color="normal" if impact.fl_delta_actual_vs_requested >= 0 else "inverse",
+                )
+
+                if impact.potential_fuel_savings_kg > 0:
+                    st.success(
+                        f"💡 **Potential Savings at Optimal FL{impact.optimal_cruise_fl:.0f}:** "
+                        f"Cruising at the aircraft & engine combination's ideal altitude would save "
+                        f"**{impact.potential_fuel_savings_kg:,.1f} kg Jet-A** (**€{impact.potential_fuel_savings_eur:,.2f} EUR**) "
+                        f"or **{impact.potential_fuel_savings_pct:.1f}%** of en-route cruise fuel burn!"
+                    )
+                else:
+                    st.success(
+                        f"✅ **Optimal Vertical Cruise Efficiency:** Flight cruised at or near its ideal aerodynamic flight level (FL{impact.optimal_cruise_fl:.0f}). Zero altitude fuel penalty incurred."
+                    )
+
+                st.markdown("#### ⛽ Multi-Dimensional Fuel Burn & Emissions Breakdown")
                 fc1, fc2, fc3, fc4 = st.columns(4)
-                fc1.metric("Excess Distance", f"{impact.excess_distance_nm:.1f} nm")
-                fc2.metric("Excess Fuel Burned", f"{impact.total_excess_fuel_kg:,.1f} kg")
-                fc3.metric("Excess CO₂ Emitted", f"{impact.excess_co2_kg:,.1f} kg")
-                fc4.metric("Excess Fuel Cost", f"€{impact.estimated_excess_fuel_cost_eur:,.2f}")
+                fc1.metric("Excess Distance (Detour)", f"{impact.excess_distance_nm:.1f} nm", f"{impact.excess_routing_fuel_kg:,.0f} kg burn")
+                fc2.metric("Terminal Holding Burn", f"{impact.excess_holding_fuel_kg:,.1f} kg", f"{impact.holding_duration_min:.1f} min loops")
+                fc3.metric(
+                    "Suboptimal Altitude Penalty",
+                    f"{impact.excess_altitude_fuel_kg:,.1f} kg",
+                    f"+{impact.actual_burn_penalty_pct:.1f}% cruise penalty",
+                    delta_color="inverse" if impact.excess_altitude_fuel_kg > 0 else "normal",
+                )
+                fc4.metric(
+                    "Total Excess Fuel & Cost",
+                    f"{impact.total_excess_fuel_kg:,.1f} kg",
+                    f"€{impact.estimated_excess_fuel_cost_eur:,.2f} EUR",
+                    delta_color="inverse" if impact.total_excess_fuel_kg > 0 else "normal",
+                )
+
+                with st.expander("📐 Vertical Cruise Inefficiency Attribution (Planning vs. Tactical ATC)", expanded=False):
+                    va1, va2 = st.columns(2)
+                    with va1:
+                        st.markdown(
+                            f"**Flight Planning Disparity (Requested vs. Ideal FL):**\n"
+                            f"- Filed Altitude: `FL{impact.requested_fl:.0f}` (Deficit: `{impact.fl_delta_requested_vs_optimal:+.0f} FL` vs FL{impact.optimal_cruise_fl:.0f})\n"
+                            f"- Inherent Planning Fuel Penalty: **{impact.planning_excess_fuel_kg:,.1f} kg** (**€{impact.planning_excess_fuel_cost_eur:,.2f} EUR**)\n"
+                            f"- Reflects airline dispatch decisions prior to departure."
+                        )
+                    with va2:
+                        atc_sign = "+" if impact.atc_tactical_excess_fuel_kg > 0 else ""
+                        st.markdown(
+                            f"**Tactical ATC Deviation (Actual vs. Requested FL):**\n"
+                            f"- Tactical Deviation: `{impact.fl_delta_actual_vs_requested:+.0f} FL`\n"
+                            f"- ATC Induced Fuel Variance: **{atc_sign}{impact.atc_tactical_excess_fuel_kg:,.1f} kg** (**€{impact.atc_tactical_excess_fuel_cost_eur:,.2f} EUR**)\n"
+                            f"- Positive values indicate tactical level capping; negative values indicate ATC climbed the aircraft higher towards optimal."
+                        )
 
                 price_gal = getattr(impact, "fuel_price_eur_per_gallon", 1.265 if selected_period == "201611" else 1.992)
                 price_kg = getattr(impact, "fuel_price_eur_per_kg", price_gal / 3.043)
@@ -832,7 +932,7 @@ with tab_cat_single:
                 st.caption(
                     f"⛽ **Weekly Jet Fuel Pricing Applied:** `€{price_gal:.3f}/gal` "
                     f"(`€{price_kg:.4f}/kg`) | **Week:** `{price_week}` "
-                    f"| **Benchmark:** `{price_source}`"
+                    f"| **Benchmark:** `{price_source}` | **Nominal Cruise Flow:** `{impact.nominal_fuel_flow_kg_hr:,.0f} kg/h`"
                 )
             except Exception as e:
                 st.error(f"Error computing emissions for flight {active_flight_id}: {e}")
