@@ -13,12 +13,14 @@ def create_trajectory_map(
     actual_df: pd.DataFrame,
     planned_df: pd.DataFrame,
     output_html_path: Path | str | None = None,
+    active_navaids: list[Any] | None = None,
 ) -> folium.Map:
     """
     Generate an interactive Leaflet/Folium map visualizing:
     - Planned 4D flight path (dashed blue)
     - Actual radar trajectory (solid purple)
     - Detected airborne holding stacks (orange/red circles)
+    - Likely used radio navaids along the trajectory as color-coded dots (DME, VOR, ILS/LOC, NDB)
     - Departure (ADEP) & Destination (ADES) airport pins
     - Zero-API-key, completely unblocked open tile layers (OSM France HOT, OpenTopoMap, USGS Topo)
     """
@@ -149,21 +151,95 @@ def create_trajectory_map(
             tooltip=f"Holding Stack: {h.duration_min:.1f} min at FL{h.flight_level:.0f}",
         ).add_to(m)
 
-    # Add layer control to toggle basemaps
+    # Add likely used route navaids as colored dots along the trajectory
+    if active_navaids:
+        nav_group = folium.FeatureGroup(name="📡 Active Route Navaids (DME / VOR / ILS / NDB)", show=True)
+        for nav in active_navaids:
+            nd = nav.to_dict() if hasattr(nav, "to_dict") else (nav if isinstance(nav, dict) else nav.__dict__)
+            n_ident = str(nd.get("ident", "NAV"))
+            n_name = str(nd.get("name", ""))
+            n_type = str(nd.get("nav_type", "DME"))
+            n_freq = nd.get("frequency_mhz")
+            n_lat = float(nd.get("latitude", 0.0))
+            n_lon = float(nd.get("longitude", 0.0))
+            n_elev = float(nd.get("elevation_ft", 0.0))
+            n_rng = float(nd.get("published_range_nm", 40.0))
+            n_dist = float(nd.get("min_distance_to_track_nm", 0.0))
+            n_fl = float(nd.get("aircraft_fl_at_closest", 0.0))
+            t_lat = float(nd.get("closest_track_lat", n_lat))
+            t_lon = float(nd.get("closest_track_lon", n_lon))
+            n_rlos = float(nd.get("rlos_horizon_nm", 150.0))
+            n_role = str(nd.get("fms_navigation_role", ""))
+            n_col = str(nd.get("marker_color", "#00a8ff"))
+            if n_type in ("ILS_LOC", "LOC", "DME_ILS"):
+                n_col = "#ff2e93"  # High-contrast magenta for ILS/LOC dots
+
+            freq_str = f"{n_freq:.2f} MHz" if n_freq is not None else "UHF Ch"
+
+            # Subtle dashed radio reception sightline to closest trajectory point
+            folium.PolyLine(
+                locations=[[n_lat, n_lon], [t_lat, t_lon]],
+                color=n_col,
+                weight=1.5,
+                dash_array="3, 5",
+                opacity=0.65,
+                tooltip=f"{n_ident} ({n_type}) slant reception: {n_dist:.1f} nm at FL{n_fl:.0f}",
+            ).add_to(nav_group)
+
+            # Colored dot for the navaid station
+            folium.CircleMarker(
+                location=[n_lat, n_lon],
+                radius=6.5 if n_type in ("DME", "VOR") else 7.5,
+                color="#1e272e",
+                weight=1.5,
+                fill=True,
+                fill_color=n_col,
+                fill_opacity=0.95,
+                tooltip=f"📡 {n_ident} ({n_type} | {freq_str}) — {n_dist:.1f} nm from track @ FL{n_fl:.0f}",
+                popup=folium.Popup(
+                    f"""
+                    <div style="font-family: sans-serif; min-width: 230px; font-size: 12.5px;">
+                        <b style="color: {n_col}; font-size: 14px;">📡 {n_ident} — {n_name}</b><br>
+                        <hr style="margin: 4px 0;">
+                        <b>Navaid Type:</b> {n_type} ({freq_str})<br>
+                        <b>Station Elevation:</b> {n_elev:,.0f} ft MSL (Pub Range: {n_rng:.0f} nm)<br>
+                        <b>Closest Track Pass:</b> {n_dist:.2f} nm @ FL{n_fl:.0f}<br>
+                        <b>Radio Horizon (RLOS):</b> {n_rlos:.1f} nm<br>
+                        <b>FMS Role:</b> {n_role}
+                    </div>
+                    """,
+                    max_width=290,
+                ),
+            ).add_to(nav_group)
+
+        nav_group.add_to(m)
+
+    # Add layer control to toggle basemaps and navaid overlay
     folium.LayerControl(position="topright", collapsed=True).add_to(m)
 
     # Add title header box (bottom-left to avoid layer control collision)
+    nav_legend_line = (
+        '<br><b>Navaids:</b> '
+        '<span style="color: #00a8ff;">● DME</span> | '
+        '<span style="color: #00b894;">● VOR</span> | '
+        '<span style="color: #ff2e93;">● ILS/LOC</span> | '
+        '<span style="color: #f39c12;">● NDB</span>'
+        if active_navaids
+        else ""
+    )
+    box_height = 138 if active_navaids else 115
     title_html = f"""
     <div style="position: fixed;
-                bottom: 25px; left: 15px; width: 340px; height: 115px;
+                bottom: 25px; left: 15px; width: 355px; height: {box_height}px;
                 background-color: white; border:2px solid #bdc3c7; border-radius: 8px;
-                z-index: 9999; font-size:13px; font-family: sans-serif;
+                z-index: 9999; font-size:12.5px; font-family: sans-serif;
                 padding: 10px; box-shadow: 2px 2px 6px rgba(0,0,0,0.2);">
-        <b style="font-size: 15px; color: #2c3e50;">✈️ Flight {ectrl_id} ({op} - {ac})</b><br>
+        <b style="font-size: 14.5px; color: #2c3e50;">✈️ Flight {ectrl_id} ({op} - {ac})</b><br>
         <b>Route:</b> {adep} &rarr; {ades}<br>
         <b>Distance:</b> Actual {metrics.actual_distance_nm:.0f} nm (Plan: {metrics.planned_distance_nm:.0f} nm)<br>
         <b>Efficiency Ratio:</b> {metrics.horizontal_extension_ratio:.3f}x | <b>Holdings:</b> {len(metrics.holding_events)}<br>
         <span style="color: #2980b9;">-- Filed Plan</span> | <span style="color: #8e44ad;">— Actual Track</span> | <span style="color: #e74c3c;">⭕ Holding</span>
+        {nav_legend_line}
     </div>
     """
     m.get_root().html.add_child(folium.Element(title_html))

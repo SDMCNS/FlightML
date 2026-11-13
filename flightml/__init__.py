@@ -26,6 +26,13 @@ from flightml.geo.conflict_scanner import (
     compute_hourly_grid_saturation,
     ProximityReport,
 )
+from flightml.geo.rnp_navaid_analyzer import (
+    analyze_flight_navaids_and_rnp,
+    FlightNavaidRNPReport,
+    ActiveRouteNavaid,
+    TrajectoryRNPPoint,
+    compute_rlos_nm,
+)
 
 # Weather & Environmental Modeling
 from flightml.weather.metar_client import MetarClient
@@ -113,6 +120,11 @@ __all__ = [
     "compute_sector_complexity_index",
     "compute_hourly_grid_saturation",
     "ProximityReport",
+    "analyze_flight_navaids_and_rnp",
+    "FlightNavaidRNPReport",
+    "ActiveRouteNavaid",
+    "TrajectoryRNPPoint",
+    "compute_rlos_nm",
     # Weather & Fuel
     "MetarClient",
     "UpperAirClient",

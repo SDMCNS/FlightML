@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import importlib
+import altair as alt
 import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
@@ -12,6 +13,7 @@ for _mod in [
     "flightml.eval.jet_fuel_prices",
     "flightml.data.dataset",
     "flightml.geo.conflict_scanner",
+    "flightml.geo.rnp_navaid_analyzer",
     "flightml.sim.tail_swap_optimizer",
     "flightml.viz.map_builder",
     "flightml.eval.crco_economics",
@@ -53,6 +55,7 @@ from flightml.geo.conflict_scanner import (
     compute_sector_complexity_index,
     compute_hourly_grid_saturation,
 )
+from flightml.geo.rnp_navaid_analyzer import analyze_flight_navaids_and_rnp
 from flightml.weather.runway_safety import assess_flight_runway_safety
 from flightml.eval.contrail_climate import analyze_flight_wind_and_contrails
 from flightml.sim.tail_swap_optimizer import optimize_hub_tail_swaps
@@ -398,13 +401,14 @@ with tab1:
 
 # ----------------- TAB 2: Trajectory Explorer -----------------
 with tab2:
-    st.header("4D Trajectory, Deviation & Holding Stack Visualizer")
+    st.header("4D Trajectory, Active Route Navaids, RNP/RNAV Capability & Holding Stack Visualizer")
 
     flight = ds.get_flight(int(active_flight_id))
     if flight:
         st.info(f"📍 **Active Flight:** `{ds.format_flight_label(flight)}`")
         trajs = ds.get_trajectory(int(active_flight_id))
         metrics = analyze_trajectory(trajs["actual"], trajs["planned"])
+        nav_rnp_rep = analyze_flight_navaids_and_rnp(ds, int(active_flight_id))
 
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Route", f"{flight['adep']} ➔ {flight['ades']}")
@@ -413,8 +417,182 @@ with tab2:
         m4.metric("Inefficiency Ratio", f"{metrics.horizontal_extension_ratio:.3f}x")
         m5.metric("Holding Duration", f"{metrics.total_holding_duration_min:.1f} min")
 
-        m = create_trajectory_map(flight, trajs["actual"], trajs["planned"])
-        st_folium(m, width=1200, height=520, key=f"traj_map_{selected_period}_{active_flight_id}")
+        st.caption(
+            "🗺️ **Interactive 4D Route & Active Navaids Map:** Colored dots show ground radio navigation aids auto-tuned along the corridor "
+            "(🔵 **DME** slant-range stations | 🟢 **VOR** omnidirectional stations | 🟣 **ILS/LOC** precision approach | 🟠 **NDB** beacons) "
+            "with dashed sightlines to the aircraft's closest 4D trajectory pass."
+        )
+        m = create_trajectory_map(
+            flight,
+            trajs["actual"],
+            trajs["planned"],
+            active_navaids=nav_rnp_rep.active_navaids if nav_rnp_rep else None,
+        )
+        st_folium(m, width=1200, height=540, key=f"traj_map_{selected_period}_{active_flight_id}")
+
+        if nav_rnp_rep and nav_rnp_rep.profile_points:
+            st.markdown("#### 📡 Active Route Navaids & Anticipated RNP/RNAV Capability vs. Vertical Profile")
+            st.caption(f"**Navigation & PBN Summary:** {nav_rnp_rep.overall_navigation_summary}")
+
+            nr1, nr2, nr3, nr4, nr5 = st.columns(5)
+            nr1.metric(
+                "Likely Used Route Navaids",
+                f"{nav_rnp_rep.total_active_navaids} stations",
+                f"{nav_rnp_rep.dme_stations_used} DME / {nav_rnp_rep.vor_stations_used} VOR / {nav_rnp_rep.ils_stations_used} ILS",
+            )
+            nr2.metric("Best Terminal RNP", f"RNP {nav_rnp_rep.best_rnp_nm:.1f} nm", "Approach / TMA")
+            nr3.metric(
+                "En-Route RNP / RNAV",
+                f"RNAV {nav_rnp_rep.mean_enroute_rnp_nm:.1f} nm",
+                f"Max/Worst: {nav_rnp_rep.worst_rnp_nm:.1f} nm",
+            )
+            nr4.metric(
+                "Multi-DME (DME/DME) Coverage",
+                f"{nav_rnp_rep.dme_dme_coverage_pct:.1f}%",
+                "≥2 DMEs in Radio Horizon",
+            )
+            nr5.metric(
+                "Beyond-RLOS Oceanic Share",
+                f"{nav_rnp_rep.gnss_only_oceanic_pct:.1f}%",
+                "GNSS / IRS Only" if nav_rnp_rep.gnss_only_oceanic_pct > 0 else "100% Terrestrial RLOS",
+            )
+
+            prof_df = pd.DataFrame([p.to_dict() for p in nav_rnp_rep.profile_points])
+            prof_df["total_vhf_navaids_in_rlos"] = prof_df["dme_in_rlos_count"] + prof_df["vor_in_rlos_count"]
+
+            # Dual-Axis Altair Graph: Vertical Flight Profile (FL) + Anticipated RNP/RNAV Available (nm)
+            base_x = alt.X("cumulative_dist_nm:Q", title="Cumulative Flown Distance Along Route (nm)")
+
+            fl_area = (
+                alt.Chart(prof_df)
+                .mark_area(opacity=0.22, color="#8e44ad", line={"color": "#8e44ad", "strokeWidth": 2.5})
+                .encode(
+                    x=base_x,
+                    y=alt.Y("flight_level:Q", title="Vertical Profile — Flight Level (FL, 100s ft)", scale=alt.Scale(zero=True)),
+                    tooltip=[
+                        alt.Tooltip("seq_num:Q", title="Waypoint #"),
+                        alt.Tooltip("time_utc:N", title="Time (UTC)"),
+                        alt.Tooltip("cumulative_dist_nm:Q", title="Distance Flown (nm)", format=".1f"),
+                        alt.Tooltip("flight_level:Q", title="Flight Level (FL)", format=".0f"),
+                        alt.Tooltip("flight_phase:N", title="Flight Phase"),
+                        alt.Tooltip("anticipated_rnp_nm:Q", title="Anticipated RNP/RNAV (nm)", format=".1f"),
+                        alt.Tooltip("pbn_specification:N", title="PBN Specification"),
+                        alt.Tooltip("dme_in_rlos_count:Q", title="DMEs in Radio Horizon"),
+                        alt.Tooltip("vor_in_rlos_count:Q", title="VORs in Radio Horizon"),
+                        alt.Tooltip("primary_navaids_tuned:N", title="Primary Tuned Navaids"),
+                        alt.Tooltip("availability_reason:N", title="Why This RNP/RNAV Is Available"),
+                    ],
+                )
+            )
+
+            rnp_line = (
+                alt.Chart(prof_df)
+                .mark_line(interpolate="step-after", color="#d35400", strokeWidth=2.5, strokeDash=[5, 3])
+                .encode(
+                    x=base_x,
+                    y=alt.Y(
+                        "anticipated_rnp_nm:Q",
+                        title="Anticipated RNP / RNAV Accuracy (nm — lower is tighter)",
+                        scale=alt.Scale(zero=True),
+                    ),
+                )
+            )
+
+            rnp_pts = (
+                alt.Chart(prof_df)
+                .mark_circle(size=68, opacity=0.95)
+                .encode(
+                    x=base_x,
+                    y=alt.Y("anticipated_rnp_nm:Q", title="Anticipated RNP / RNAV Accuracy (nm — lower is tighter)"),
+                    color=alt.Color(
+                        "pbn_specification:N",
+                        title="Anticipated PBN / RNP Specification",
+                        legend=alt.Legend(orient="bottom", columns=2),
+                    ),
+                    tooltip=[
+                        alt.Tooltip("seq_num:Q", title="Waypoint #"),
+                        alt.Tooltip("time_utc:N", title="Time (UTC)"),
+                        alt.Tooltip("cumulative_dist_nm:Q", title="Distance Flown (nm)", format=".1f"),
+                        alt.Tooltip("flight_level:Q", title="Flight Level (FL)", format=".0f"),
+                        alt.Tooltip("anticipated_rnp_nm:Q", title="Anticipated RNP/RNAV (nm)", format=".1f"),
+                        alt.Tooltip("pbn_specification:N", title="PBN Specification"),
+                        alt.Tooltip("dme_in_rlos_count:Q", title="DMEs in Radio Horizon"),
+                        alt.Tooltip("vor_in_rlos_count:Q", title="VORs in Radio Horizon"),
+                        alt.Tooltip("primary_navaids_tuned:N", title="Primary Tuned Navaids"),
+                        alt.Tooltip("availability_reason:N", title="Why This RNP/RNAV Is Available"),
+                    ],
+                )
+            )
+
+            combined_profile_chart = (
+                alt.layer(fl_area, rnp_line + rnp_pts)
+                .resolve_scale(y="independent")
+                .properties(
+                    height=320,
+                    title="Vertical Flight Profile (FL, Purple) vs. Anticipated RNP/RNAV Capability (nm, Colored Step Curve) — Hover Any Point for 'Why'",
+                )
+            )
+            st.altair_chart(combined_profile_chart, use_container_width=True)
+
+            # Secondary strip: Count of Active DME & VOR stations within Radio Line-of-Sight along route
+            rlos_chart = (
+                alt.Chart(prof_df)
+                .mark_bar(color="#00a8ff", opacity=0.75)
+                .encode(
+                    x=base_x,
+                    y=alt.Y("dme_in_rlos_count:Q", title="DMEs in RLOS"),
+                    tooltip=[
+                        alt.Tooltip("cumulative_dist_nm:Q", title="Distance (nm)", format=".1f"),
+                        alt.Tooltip("flight_level:Q", title="Flight Level (FL)", format=".0f"),
+                        alt.Tooltip("dme_in_rlos_count:Q", title="DME Stations in RLOS"),
+                        alt.Tooltip("vor_in_rlos_count:Q", title="VOR Stations in RLOS"),
+                        alt.Tooltip("primary_navaids_tuned:N", title="Primary Tuned Navaids"),
+                        alt.Tooltip("availability_reason:N", title="Why This RNP/RNAV Is Available"),
+                    ],
+                )
+                .properties(
+                    height=135,
+                    title="Terrestrial Multi-DME Station Redundancy in Radio Line-of-Sight (RLOS) Along Trajectory",
+                )
+            )
+            st.altair_chart(rlos_chart, use_container_width=True)
+
+            col_nav_tbl, col_rnp_tbl = st.columns(2)
+            with col_nav_tbl:
+                with st.expander(f"📡 Likely Used Route Navaids ({len(nav_rnp_rep.active_navaids)} Colored Dots on Map)", expanded=True):
+                    if nav_rnp_rep.active_navaids:
+                        nav_rows = [
+                            {
+                                "Ident": n.ident,
+                                "Station Name": n.name,
+                                "Type": n.nav_type,
+                                "Freq (MHz)": f"{n.frequency_mhz:.2f}" if n.frequency_mhz is not None else "UHF",
+                                "Closest Pass": f"{n.min_distance_to_track_nm:.1f} nm",
+                                "Acft FL": f"FL{n.aircraft_fl_at_closest:.0f}",
+                                "RLOS Horizon": f"{n.rlos_horizon_nm:.0f} nm",
+                                "FMS Role": n.fms_navigation_role,
+                            }
+                            for n in nav_rnp_rep.active_navaids
+                        ]
+                        st.dataframe(pd.DataFrame(nav_rows), use_container_width=True)
+                    else:
+                        st.info("No terrestrial VHF/UHF navaids within corridor range.")
+
+            with col_rnp_tbl:
+                with st.expander("🧭 Anticipated RNP/RNAV Availability & 'Why' Along Route", expanded=True):
+                    rnp_rows = [
+                        {
+                            "Dist (nm)": f"{p.cumulative_dist_nm:.0f} nm",
+                            "FL": f"FL{p.flight_level:.0f}",
+                            "RNP (nm)": f"{p.anticipated_rnp_nm:.1f} nm",
+                            "PBN Specification": p.pbn_specification,
+                            "DME / VOR in RLOS": f"{p.dme_in_rlos_count} DME / {p.vor_in_rlos_count} VOR",
+                            "Primary Tuned": p.primary_navaids_tuned,
+                            "Why Available": p.availability_reason,
+                        }
+                        for p in nav_rnp_rep.profile_points
+                    ]
+                    st.dataframe(pd.DataFrame(rnp_rows), use_container_width=True)
 
         pru_sc = compute_flight_pru_kpis(ds, int(active_flight_id))
         if pru_sc:
@@ -1220,6 +1398,7 @@ with tab10:
 | **KPI17 (CCO)** | **Continuous Climb Operations (Climb Profile)** | Identifies intermediate level-offs ($|\\text{ROCD}| < 200\\text{ ft/min}$ for $\\ge 60\\text{ s}$) below Top of Climb (`TOC`). Level-offs at low/medium altitudes force high drag and higher specific fuel consumption compared to an uninterrupted climb to cruise altitude. |
 | **KPI19 (CDO & Level-Cap)** | **Continuous Descent Operations & Cruise Level-Capping** | **CDO** measures uninterrupted idle-thrust descent from Top of Descent (`TOD`) to landing without throttle-up level segments. **Cruise Level-Capping** compares the filed requested Flight Level ($\\text{FL}_{\\text{req}}$) against the maximum actual achieved cruise level ($\\text{FL}_{\\text{max,act}}$); a deficit $\\ge 20\\text{ FL}$ ($2,000\\text{ ft}$) increases cruise fuel burn by ~1.25% per $1,000\\text{ ft}$. |
 | **FRA vs. ATS** | **Free Route Airspace Directness Index** | Matches actual trajectory legs against **86,280 global 5-letter waypoints (`fix.dat`)**, **17,090 VHF navaids (`nav.dat`)**, and published ATS airways. Segments where consecutive waypoints lie on the same published airway are classified as **Structured ATS Airway**; off-airway point-to-point segments are classified as **Free Route Airspace (`FRA / DCT`)**. |
+| **RNP / RNAV & RLOS** | **Anticipated PBN Navigation Capability (ICAO Doc 9613)** | Evaluates terrestrial `DME`, `VOR`, `ILS/LOC`, and `NDB` stations within the VHF/UHF **Radio Line-of-Sight (`RLOS`)** horizon $D_{\\text{RLOS}} (\\text{nm}) = 1.23 \\times (\\sqrt{h_{\\text{ac, ft}}} + \\sqrt{h_{\\text{nav, ft}}})$ at each 4D waypoint: **`0.1 nm`** (`xLS / RNP AR APCH 0.1` with ILS/LOC lock), **`0.3 nm`** (`RNP APCH 0.3`), **`1.0 nm`** (`RNAV 1 / RNP 1` with $\\ge 2$–$3$ DMEs in RLOS), **`2.0 nm`** (`RNAV 2` dual-DME), **`5.0 nm`** (`RNAV 5 / B-RNAV` single VOR/DME), and **`10.0 nm`** (`RNP 4 / RNP 10` Oceanic/Remote beyond-RLOS relying on GNSS + IRS). |
 """
         )
 

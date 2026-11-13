@@ -39,6 +39,7 @@ from flightml.geo.conflict_scanner import (
     compute_sector_complexity_index,
     compute_hourly_grid_saturation,
 )
+from flightml.geo.rnp_navaid_analyzer import analyze_flight_navaids_and_rnp
 from flightml.weather.runway_safety import assess_flight_runway_safety
 from flightml.eval.contrail_climate import analyze_flight_wind_and_contrails
 from flightml.sim.tail_swap_optimizer import optimize_hub_tail_swaps
@@ -726,6 +727,20 @@ def get_airspace_grid_saturation_endpoint(
     """Compute average hourly flight density and complexity per 5° x 5° geographic square across the period."""
     ds = FlightDataset(period=period)
     return compute_hourly_grid_saturation(ds, hour_utc=hour)
+
+
+@app.get("/api/v1/flights/{ectrl_id}/navaids-rnp")
+def get_flight_navaids_rnp_endpoint(
+    ectrl_id: int,
+    period: str = Query(default="202510", description="Data period ID"),
+    corridor_nm: float = Query(default=35.0, ge=5.0, le=100.0, description="Corridor half-width (nm) for likely used navaids"),
+) -> dict[str, Any]:
+    """Analyze likely used radio navaids (DME, VOR, ILS/LOC, NDB) along a flight's 4D trajectory and point-by-point anticipated RNP/RNAV capability."""
+    ds = FlightDataset(period=period)
+    rep = analyze_flight_navaids_and_rnp(ds, ectrl_id=ectrl_id, corridor_half_width_nm=corridor_nm)
+    if not rep:
+        raise HTTPException(status_code=404, detail=f"Flight {ectrl_id} not found in period {period}")
+    return rep.to_dict()
 
 
 @app.get("/api/v1/sim/tail-swaps")
