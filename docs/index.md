@@ -25,6 +25,8 @@ FlightML enables researchers, airlines, air navigation service providers (ANSPs)
 - [**CLI Reference Manual**](file:///C:/Projects/data/FlightML/docs/cli_reference.md): Detailed reference guide for all 32 `flightml` terminal commands and options.
 - [**REST API Reference**](file:///C:/Projects/data/FlightML/docs/rest_api.md): Complete catalog of FastAPI endpoints, request parameters, response schemas, and Swagger docs.
 - [**Architecture & Methodology**](file:///C:/Projects/data/FlightML/docs/architecture.md): Deep dive into DuckDB columnar query execution, thread-safe cursor handling, BADA fuel burn physics, and weather fusion.
+- [**Future Roadmap & Research Capabilities**](file:///C:/Projects/data/FlightML/docs/future_roadmap.md): Audit of untapped data assets (`Flight_AUAs`, `TAXI_OUT`, `UIR`, `navaids`, `frequencies`) and next-generation ATM, climate, and AI roadmap.
+- [**FlightML v2.0 Implementation Plan (`v2_plan.md`)**](file:///C:/Projects/data/FlightML/docs/v2_plan.md): Executable 6-sprint engineering blueprint, rationale, and external data acquisition catalog.
 
 ---
 

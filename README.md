@@ -30,6 +30,8 @@ Detailed guides and manuals are available in the [**`docs/`**](docs/index.md) di
 - 💻 [**CLI Reference Manual**](docs/cli_reference.md): Exhaustive guide for all 32 `flightml` terminal commands and sample outputs.
 - 🌐 [**REST API Reference**](docs/rest_api.md): Full FastAPI endpoints catalog, request/response schemas, and Swagger docs.
 - 🏛️ [**Architecture & Methodology**](docs/architecture.md): Columnar DuckDB execution, BADA fuel burn physics, and weather fusion.
+- 🔭 [**Future Roadmap & Research Capabilities**](docs/future_roadmap.md): Audit of untapped data assets (`Flight_AUAs`, `TAXI_OUT`, `UIR`, `navaids`, `frequencies`) and next-generation ATM, climate, and AI roadmap.
+- 🗺️ [**FlightML v2.0 Implementation Plan (`v2_plan.md`)**](docs/v2_plan.md): Executable 6-sprint engineering blueprint, rationale, and external data acquisition catalog.
 
 ---
 
