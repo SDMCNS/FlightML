@@ -49,7 +49,7 @@ FlightML enables researchers, airlines, air navigation service providers (ANSPs)
 ```
 
 1. **Massive-Scale Aeronautical Data Ingestion**:
-   - Ingests and normalizes multi-gigabyte Eurocontrol archives (e.g. November 2016 baseline of 697,000+ flights; October 2025 modern archive of 934,000+ flights).
+   - Ingests and normalizes multi-gigabyte Eurocontrol archives across historical and modern periods.
    - Partitions flight records, airport layouts, runway magnetic headings, FIR airspace geometries, and 4D trajectory radar points into compressed Apache Parquet tables queried via an embedded DuckDB engine.
 
 2. **4D Radar Trajectory Analytics & Holding Detection**:

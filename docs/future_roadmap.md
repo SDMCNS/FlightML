@@ -37,7 +37,7 @@ An inspection of `data/` and `data/extracted/202510/` reveals **high-value table
 ```mermaid
 flowchart LR
     subgraph Active["Currently Exploited Tables"]
-        F["flights.parquet<br/>(697k + 934k flights)"]
+        F["flights.parquet<br/>(Multi-Period Flight Archives)"]
         TA["flights_actual.parquet<br/>(4D Radar Points)"]
         TP["flights_planned.parquet<br/>(4D Filed Points)"]
         FFA["flight_firs_actual.parquet<br/>(FIR/UIR + TAXI_OUT)"]

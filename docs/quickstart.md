@@ -102,8 +102,8 @@ flightml list-periods
 Output:
 ```
 Available FlightML Data Periods:
-- 202510 [MODERN] (AIRAC Cycle 2510, ~934k flights)
-- 201611 [HISTORICAL] (AIRAC Cycle 1611, ~697k flights)
+- 202510 [MODERN] (AIRAC Cycle 2510, ~XXXk flights)
+- 201611 [HISTORICAL] (AIRAC Cycle 1611, ~XXXk flights)
 ```
 
 ---
