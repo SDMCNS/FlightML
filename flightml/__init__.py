@@ -9,6 +9,7 @@ __version__ = "0.1.0"
 # Core Data Access & Ingestion
 from flightml.data.dataset import FlightDataset
 from flightml.data.archive_ingest import EurocontrolArchiveIngestor, list_available_periods
+from flightml.data.external_sources import compile_all_external_sources
 
 # Geospatial & 4D Trajectory
 from flightml.geo.trajectory import analyze_trajectory, TrajectoryMetrics
@@ -50,6 +51,7 @@ __all__ = [
     "FlightDataset",
     "EurocontrolArchiveIngestor",
     "list_available_periods",
+    "compile_all_external_sources",
     # Geo
     "analyze_trajectory",
     "TrajectoryMetrics",

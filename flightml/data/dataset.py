@@ -161,6 +161,73 @@ class FlightDataset:
                 FROM {fir_fld_src};
             """)
 
+        # Optional ATC Unit Airspace (AUA: TMA, CTA, UTA) traversal views
+        aua_act_pq = self.periods_dir / self.period / "flight_auas_actual.parquet"
+        if aua_act_pq.exists():
+            aua_act_src = f"'{str(aua_act_pq).replace(chr(92), '/')}'"
+            self.con.execute(f"""
+                CREATE OR REPLACE VIEW flight_auas_actual AS
+                SELECT
+                    '{self.period}' AS period_id,
+                    "ECTRL ID" AS ectrl_id,
+                    "Sequence Number" AS seq_num,
+                    "AUA ID" AS aua_id,
+                    CASE
+                        WHEN "AUA ID" LIKE '%TMA%' THEN 'TMA'
+                        WHEN "AUA ID" LIKE '%UTA%' OR "AUA ID" LIKE '%UIR%' THEN 'UTA'
+                        WHEN "AUA ID" LIKE '%CTA%' THEN 'CTA'
+                        ELSE 'OTHER'
+                    END AS aua_type,
+                    "Entry Time" AS entry_time,
+                    "Exit Time" AS exit_time,
+                    datediff('minute', "Entry Time", "Exit Time") AS dwell_min
+                FROM {aua_act_src};
+            """)
+
+        aua_fld_pq = self.periods_dir / self.period / "flight_auas_filed.parquet"
+        if aua_fld_pq.exists():
+            aua_fld_src = f"'{str(aua_fld_pq).replace(chr(92), '/')}'"
+            self.con.execute(f"""
+                CREATE OR REPLACE VIEW flight_auas_filed AS
+                SELECT
+                    '{self.period}' AS period_id,
+                    "ECTRL ID" AS ectrl_id,
+                    "Sequence Number" AS seq_num,
+                    "AUA ID" AS aua_id,
+                    CASE
+                        WHEN "AUA ID" LIKE '%TMA%' THEN 'TMA'
+                        WHEN "AUA ID" LIKE '%UTA%' OR "AUA ID" LIKE '%UIR%' THEN 'UTA'
+                        WHEN "AUA ID" LIKE '%CTA%' THEN 'CTA'
+                        ELSE 'OTHER'
+                    END AS aua_type,
+                    "Entry Time" AS entry_time,
+                    "Exit Time" AS exit_time,
+                    datediff('minute', "Entry Time", "Exit Time") AS dwell_min
+                FROM {aua_fld_src};
+            """)
+
+        # External Reference Views (fix.dat, nav.dat, OpenAP aircraft/dragpolar/wrap/engines, ICAO EDB, CRCO unit rates)
+        ext_tables = [
+            "nav_fixes",
+            "nav_aids_xplane",
+            "openap_aircraft",
+            "openap_wrap",
+            "openap_engines",
+            "icao_edb_gaseous",
+            "icao_edb_nvpm",
+            "crco_unit_rates",
+        ]
+        if not all((self.parquet_dir / f"{t}.parquet").exists() for t in ext_tables):
+            from flightml.data.external_sources import compile_all_external_sources
+
+            compile_all_external_sources(parquet_dir=self.parquet_dir, force=False)
+
+        for tbl in ext_tables:
+            pq_file = self.parquet_dir / f"{tbl}.parquet"
+            if pq_file.exists():
+                pq_src = f"'{str(pq_file).replace(chr(92), '/')}'"
+                self.con.execute(f"CREATE OR REPLACE VIEW {tbl} AS SELECT * FROM {pq_src};")
+
     @property
     def cursor(self) -> duckdb.DuckDBPyConnection:
         """Return an independent, thread-safe cursor for concurrent query execution."""
@@ -471,6 +538,196 @@ class FlightDataset:
             return res
         except Exception:
             return {}
+
+    def has_aua_traversals(self) -> bool:
+        """Check whether the active period includes ATC Unit Airspace (AUA) traversal tables."""
+        try:
+            self.cursor.execute("SELECT 1 FROM flight_auas_actual LIMIT 1")
+            return True
+        except Exception:
+            return False
+
+    def get_flight_aua_traversals(self, ectrl_id: int) -> pd.DataFrame:
+        """
+        Fetch sequenced ATC Unit Airspace (TMA, CTA, UTA) traversals for an individual flight,
+        comparing actual dwell vs filed planned dwell.
+        """
+        if not self.has_aua_traversals():
+            return pd.DataFrame()
+
+        sql = """
+            SELECT
+                a.seq_num,
+                a.aua_id,
+                a.aua_type,
+                a.entry_time AS actual_entry,
+                a.exit_time AS actual_exit,
+                round(epoch(a.exit_time - a.entry_time) / 60.0, 1) AS actual_dwell_min,
+                f.entry_time AS filed_entry,
+                f.exit_time AS filed_exit,
+                round(epoch(f.exit_time - f.entry_time) / 60.0, 1) AS filed_dwell_min,
+                round((epoch(a.exit_time - a.entry_time) - epoch(f.exit_time - f.entry_time)) / 60.0, 1) AS dwell_diff_min
+            FROM flight_auas_actual a
+            LEFT JOIN flight_auas_filed f
+              ON a.ectrl_id = f.ectrl_id AND a.aua_id = f.aua_id
+            WHERE a.ectrl_id = ?
+            ORDER BY a.seq_num ASC;
+        """
+        return self.cursor.execute(sql, [int(ectrl_id)]).df()
+
+    def find_nearest_waypoints(
+        self,
+        lat: float,
+        lon: float,
+        radius_nm: float = 15.0,
+        limit: int = 10,
+        include_fixes: bool = True,
+        include_navaids: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Find the closest global 5-letter RNAV waypoints (`fix.dat`) and/or radio navaids (`nav.dat`)
+        within `radius_nm` nautical miles of `(lat, lon)`.
+        """
+        deg_margin = (radius_nm / 60.0) * 1.5
+        lon_margin = deg_margin / max(0.2, abs(__import__("math").cos(__import__("math").radians(lat))))
+
+        subqueries: list[str] = []
+        params: list[Any] = []
+
+        if include_fixes:
+            subqueries.append("""
+                SELECT
+                    fix_ident AS ident,
+                    'FIX' AS kind,
+                    fix_ident AS name,
+                    latitude,
+                    longitude,
+                    NULL AS frequency_mhz
+                FROM nav_fixes
+                WHERE latitude BETWEEN ? AND ?
+                  AND longitude BETWEEN ? AND ?
+            """)
+            params.extend([lat - deg_margin, lat + deg_margin, lon - lon_margin, lon + lon_margin])
+
+        if include_navaids:
+            subqueries.append("""
+                SELECT
+                    ident,
+                    nav_type AS kind,
+                    name,
+                    latitude,
+                    longitude,
+                    frequency_mhz
+                FROM nav_aids_xplane
+                WHERE latitude BETWEEN ? AND ?
+                  AND longitude BETWEEN ? AND ?
+            """)
+            params.extend([lat - deg_margin, lat + deg_margin, lon - lon_margin, lon + lon_margin])
+
+        if not subqueries:
+            return pd.DataFrame()
+
+        union_sql = " UNION ALL ".join(subqueries)
+        sql = f"""
+            WITH candidates AS (
+                {union_sql}
+            ),
+            scored AS (
+                SELECT
+                    ident,
+                    kind,
+                    name,
+                    latitude,
+                    longitude,
+                    frequency_mhz,
+                    round(
+                        3440.065 * 2 * asin(sqrt(
+                            pow(sin(radians(latitude - ?) / 2), 2) +
+                            cos(radians(?)) * cos(radians(latitude)) *
+                            pow(sin(radians(longitude - ?) / 2), 2)
+                        )),
+                        2
+                    ) AS distance_nm
+                FROM candidates
+            )
+            SELECT * FROM scored
+            WHERE distance_nm <= ?
+            ORDER BY distance_nm ASC
+            LIMIT ?;
+        """
+        params.extend([lat, lat, lon, radius_nm, int(limit)])
+        return self.cursor.execute(sql, params).df()
+
+    def get_aircraft_performance(self, ac_type: str) -> dict[str, Any] | None:
+        """
+        Retrieve OpenAP aircraft performance, MTOW, CRCO weight factor, drag polar, and fuel polynomial
+        parameters for a 4-letter ICAO aircraft type (including synonyms).
+        """
+        code = ac_type.strip().upper()
+        df = self.cursor.execute("SELECT * FROM openap_aircraft WHERE ac_type = ?", [code]).df()
+        if df.empty:
+            return None
+        return df.iloc[0].to_dict()
+
+    def get_crco_unit_rate(self, fir_or_zone: str) -> dict[str, Any] | None:
+        """
+        Resolve a 2-letter CRCO zone code (e.g. 'EG', 'ED', 'LF', 'LT') or an ICAO FIR ID
+        (e.g. 'EGTTFIR', 'EDGGFIR', 'LPPOFIR') to its Eurocontrol CRCO unit rate in EUR.
+        """
+        clean = fir_or_zone.strip().upper()
+        # Special Atlantic / Canarias zone overrides in Eurocontrol CRCO
+        if clean.startswith("LPPO"):
+            zone = "AZ"
+        elif clean.startswith("GCCC"):
+            zone = "GC"
+        else:
+            zone = clean[:2]
+
+        df = self.cursor.execute("SELECT * FROM crco_unit_rates WHERE zone_code = ?", [zone]).df()
+        if df.empty:
+            return None
+        return df.iloc[0].to_dict()
+
+    def get_engine_emissions(self, engine_query: str) -> dict[str, Any]:
+        """
+        Query ICAO EDB v32B gaseous (NOx, CO, HC) and nvPM (soot mass & particle number)
+        emission indices for a matching engine designation.
+        """
+        q = f"%{engine_query.strip()}%"
+        gas_df = self.cursor.execute(
+            "SELECT * FROM icao_edb_gaseous WHERE engine_name ILIKE ? ORDER BY rated_thrust_kn DESC LIMIT 5",
+            [q],
+        ).df()
+        nvpm_df = self.cursor.execute(
+            "SELECT * FROM icao_edb_nvpm WHERE engine_name ILIKE ? ORDER BY rated_thrust_kn DESC LIMIT 5",
+            [q],
+        ).df()
+        return {
+            "query": engine_query,
+            "gaseous_matches": gas_df.to_dict(orient="records"),
+            "nvpm_matches": nvpm_df.to_dict(orient="records"),
+        }
+
+    def get_external_data_summary(self) -> dict[str, int]:
+        """Return row counts for all registered external reference views in DuckDB."""
+        views = [
+            "nav_fixes",
+            "nav_aids_xplane",
+            "openap_aircraft",
+            "openap_wrap",
+            "openap_engines",
+            "icao_edb_gaseous",
+            "icao_edb_nvpm",
+            "crco_unit_rates",
+        ]
+        cur = self.cursor
+        counts: dict[str, int] = {}
+        for v in views:
+            try:
+                counts[v] = int(cur.execute(f"SELECT COUNT(*) FROM {v}").fetchone()[0])
+            except Exception:
+                counts[v] = 0
+        return counts
 
     @classmethod
     def list_available_periods(cls, parquet_dir: Path | str | None = None) -> list[str]:

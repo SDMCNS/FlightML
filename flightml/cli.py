@@ -1140,6 +1140,73 @@ def flight_fir_dwell_cmd(
     console.print(table)
 
 
+@app.command("external-data")
+def external_data_cmd(
+    rebuild: bool = typer.Option(False, "--rebuild", help="Force re-parsing and compiling of all external sources"),
+) -> None:
+    """Compile and audit all external navigation, OpenAP, ICAO EDB, and CRCO unit rate datasets."""
+    from flightml.data.external_sources import compile_all_external_sources
+
+    with console.status("[bold cyan]Compiling & verifying external aeronautical reference datasets..."):
+        summary = compile_all_external_sources(force=rebuild)
+
+    table = Table(
+        title="🧭 Compiled External Reference Datasets (v2.0 Foundation)",
+        header_style="bold magenta",
+    )
+    table.add_column("DuckDB View", style="bold cyan")
+    table.add_column("Rows", justify="right", style="green")
+    table.add_column("Source Path", style="white")
+    table.add_column("Supports v2.0 Sprints", style="yellow")
+
+    for view_name, meta in summary.items():
+        table.add_row(
+            view_name,
+            f"{meta['rows']:,}",
+            meta["source"],
+            meta["supports_sprints"],
+        )
+    console.print(table)
+
+
+@app.command("nearest-waypoints")
+def nearest_waypoints_cmd(
+    lat: float = typer.Option(..., "--lat", help="Latitude in decimal degrees"),
+    lon: float = typer.Option(..., "--lon", help="Longitude in decimal degrees"),
+    radius: float = typer.Option(15.0, "--radius", "-r", help="Search radius in nautical miles"),
+    limit: int = typer.Option(10, "--limit", "-l", help="Max waypoints/navaids to return"),
+) -> None:
+    """Find the closest global 5-letter RNAV waypoints (fix.dat) and radio navaids (nav.dat)."""
+    ds = FlightDataset()
+    df = ds.find_nearest_waypoints(lat=lat, lon=lon, radius_nm=radius, limit=limit)
+    if df.empty:
+        console.print(f"[yellow]No waypoints or navaids found within {radius} nm of ({lat}, {lon}).[/yellow]")
+        return
+
+    table = Table(
+        title=f"Nearest Navigation Fixes & Navaids to ({lat:.4f}°, {lon:.4f}°)",
+        header_style="bold magenta",
+    )
+    table.add_column("Ident", style="bold cyan")
+    table.add_column("Type", style="yellow")
+    table.add_column("Name", style="white")
+    table.add_column("Coordinates", justify="right")
+    table.add_column("Freq (MHz)", justify="right", style="green")
+    table.add_column("Distance", justify="right", style="bold green")
+
+    for _, r in df.iterrows():
+        freq_str = f"{r['frequency_mhz']:.2f}" if r["frequency_mhz"] is not None and str(r["frequency_mhz"]) != "nan" else "—"
+        table.add_row(
+            str(r["ident"]),
+            str(r["kind"]),
+            str(r["name"]),
+            f"{r['latitude']:.4f}°, {r['longitude']:.4f}°",
+            freq_str,
+            f"{r['distance_nm']:.2f} nm",
+        )
+    console.print(table)
+
+
 @app.command("dashboard")
 def dashboard_cmd(
     port: int = typer.Option(8501, "--port", "-p", help="Port for the Streamlit dashboard"),

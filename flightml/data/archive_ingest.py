@@ -69,6 +69,10 @@ class EurocontrolArchiveIngestor:
                 classified["flight_firs_actual"] = f
             elif "flight_firs_filed" in name:
                 classified["flight_firs_filed"] = f
+            elif "flight_auas_actual" in name:
+                classified["flight_auas_actual"] = f
+            elif "flight_auas_filed" in name:
+                classified["flight_auas_filed"] = f
             elif name.startswith("fir_") or name == "fir.csv":
                 # Prefer active cycle if available (e.g. FIR_2510 over FIR_2509)
                 if airac_cycle and airac_cycle in name:
