@@ -50,6 +50,11 @@ from flightml.weather.runway_safety import assess_flight_runway_safety
 
 
 REPORT_PAGE_KEYS = [
+    "single_flight",
+    "system_summary",
+    "what_if_scenarios",
+    "maps_navigation",
+    "general_economics",
     "airspace_overview",
     "trajectory_rnp",
     "global_navaids",
@@ -61,6 +66,13 @@ REPORT_PAGE_KEYS = [
 ]
 
 REPORT_PAGE_TITLES: dict[str, str] = {
+    # 5 Master Architectural Categories
+    "single_flight": "✈️ Single Flight & Aircraft Analysis Report",
+    "system_summary": "🌐 System-Level Summary & Analysis Report",
+    "what_if_scenarios": "🔮 What-If Scenarios & Operations Research Report",
+    "maps_navigation": "🗺️ Information & Aeronautical Maps Report",
+    "general_economics": "💶 General Aviation & Route Economics Report (€)",
+    # Detailed sub-reports & bundle
     "airspace_overview": "🌐 Airspace & Sector Saturation Report",
     "trajectory_rnp": "🗺️ 4D Trajectory, Active Navaids & RNP Report",
     "global_navaids": "📡 Global Radio Navaids World Map Report",
@@ -940,7 +952,7 @@ def _build_macro_reference_section(ds: FlightDataset) -> str:
 # Master Static HTML Report Generator
 # ---------------------------------------------------------------------------
 def generate_static_html_report(
-    ds: FlightDataset,
+    ds: FlightDataset | None = None,
     page_key: str = "trajectory_rnp",
     flight_id: int | None = None,
     hour_utc: int = 10,
@@ -967,6 +979,9 @@ def generate_static_html_report(
     Generate a complete, standalone, self-contained HTML report with embedded high-DPI Base64 PNG
     charts/maps and styled data tables for any selected dashboard page (or the full executive bundle).
     """
+    if ds is None:
+        ds = FlightDataset()
+
     if flight_id is None:
         sample_df = ds.query("SELECT ectrl_id FROM flights LIMIT 1")
         flight_id = int(sample_df.iloc[0]["ectrl_id"]) if not sample_df.empty else 202007026
@@ -975,9 +990,8 @@ def generate_static_html_report(
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     sections: list[str] = []
-    if page_key in ("airspace_overview", "full_executive_bundle"):
-        sections.append(_build_airspace_overview_section(ds, hour_utc=hour_utc))
-    if page_key in ("trajectory_rnp", "full_executive_bundle"):
+    # 5 Master Architectural Categories mapping
+    if page_key in ("single_flight", "trajectory_rnp", "flight_performance_eco", "full_executive_bundle"):
         sections.append(
             _build_trajectory_rnp_section(
                 ds,
@@ -986,7 +1000,24 @@ def generate_static_html_report(
                 nav_type_filter=nav_type_filter,
             )
         )
-    if page_key in ("global_navaids", "full_executive_bundle"):
+        sections.append(_build_flight_performance_eco_section(ds, flight_id=int(flight_id)))
+
+    if page_key in ("system_summary", "airspace_overview", "full_executive_bundle"):
+        sections.append(_build_airspace_overview_section(ds, hour_utc=hour_utc))
+        sections.append(_build_macro_reference_section(ds))
+
+    if page_key in ("what_if_scenarios", "what_if_stress_tests", "full_executive_bundle"):
+        sections.append(
+            _build_what_if_stress_section(
+                ds,
+                conflict_hour=conflict_hour,
+                conflict_nm=conflict_nm,
+                gdp_airport=gdp_airport,
+                gdp_aar=gdp_aar,
+            )
+        )
+
+    if page_key in ("maps_navigation", "global_navaids", "full_executive_bundle"):
         sections.append(
             _build_global_navaids_section(
                 ds,
@@ -997,9 +1028,8 @@ def generate_static_html_report(
                 limit=world_limit,
             )
         )
-    if page_key in ("flight_performance_eco", "full_executive_bundle"):
-        sections.append(_build_flight_performance_eco_section(ds, flight_id=int(flight_id)))
-    if page_key in ("corridor_twin_benchmarks", "full_executive_bundle"):
+
+    if page_key in ("general_economics", "corridor_twin_benchmarks", "full_executive_bundle"):
         sections.append(
             _build_corridor_twin_section(
                 ds,
@@ -1011,18 +1041,6 @@ def generate_static_html_report(
                 rec_op=rec_op,
             )
         )
-    if page_key in ("what_if_stress_tests", "full_executive_bundle"):
-        sections.append(
-            _build_what_if_stress_section(
-                ds,
-                conflict_hour=conflict_hour,
-                conflict_nm=conflict_nm,
-                gdp_airport=gdp_airport,
-                gdp_aar=gdp_aar,
-            )
-        )
-    if page_key in ("macro_reference", "full_executive_bundle"):
-        sections.append(_build_macro_reference_section(ds))
 
     body_html = "\n".join(sections)
 

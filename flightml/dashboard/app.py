@@ -383,991 +383,799 @@ st.markdown(
     f"Active dataset: **Eurocontrol Cycle {selected_period}**."
 )
 
+
 (
-    tab1,
-    tab2,
-    tab_world_nav,
-    tab_group_perf,
-    tab_group_bench,
-    tab8,
-    tab_group_macro,
+    tab_cat_single,
+    tab_cat_system,
+    tab_cat_whatif,
+    tab_cat_maps,
+    tab_cat_econ,
 ) = st.tabs(
     [
-        "🌐 Airspace & Sector Saturation",
-        "🗺️ 4D Trajectory & RNP",
-        "📡 Global Navaids World Map",
-        "📐 Flight Performance & Eco (€)",
-        "📊 Corridor & Twin Benchmarks",
-        "🔮 What-If & Stress Tests",
-        "📈 Macro & Reference Guide",
+        "✈️ Single Aircraft / Flight Views",
+        "🌐 System-Level Summary & Analysis Views",
+        "🔮 What-If Scenario Views",
+        "🗺️ Information & Map Views",
+        "💶 General Economic Views (€)",
     ]
 )
 
-with tab_group_perf:
-    st.caption("Grouped Single-Flight Performance Views: Vertical Profile (CDO/CCO), Delay & Runway Safety Diagnostics, and Fuel/Carbon/CRCO (€) Accounting.")
-    render_page_export_bar("flight_performance_eco", "tab_perf")
-    tab4, tab5, tab6 = st.tabs(
+# =============================================================================
+# 1. SINGLE AIRCRAFT / FLIGHT VIEWS
+# =============================================================================
+with tab_cat_single:
+    st.caption(
+        "Focused telemetry, 4D trajectory tracking, navaid reception, vertical climb/descent profile (CCO/CDO), "
+        "delay root-cause diagnostics, and environmental/LTO emissions accounting for the selected active flight."
+    )
+    render_page_export_bar("single_flight", "cat_single")
+    sf_sub1, sf_sub2, sf_sub3, sf_sub4 = st.tabs(
         [
+            "🗺️ 4D Trajectory & RNP Profile",
             "📉 Vertical Profile: CDO & CCO",
             "🩺 Delay & Runway Diagnostics",
-            "🌱 Fuel, Carbon & Route Charges (€)",
+            "🌱 Fuel, Carbon & Surface LTO",
         ]
     )
 
-with tab_group_bench:
-    st.caption("Grouped Corridor & City-Pair Benchmarking: Twin-Flight Efficiency Comparison and Longitudinal Recurring Series / Diurnal Bank Trends.")
-    render_page_export_bar("corridor_twin_benchmarks", "tab_bench")
-    tab7, tab3 = st.tabs(
-        [
-            "👯 Twin-Flight Efficiency Benchmark",
-            "📅 Recurring Series & Diurnal Trends",
-        ]
-    )
+    with sf_sub1:
+        st.header("4D Trajectory, Active Route Navaids, RNP/RNAV Capability & Holding Stack Visualizer")
+        render_page_export_bar("trajectory_rnp", "tab2")
 
-with tab_group_macro:
-    st.caption("Grouped Structural & Documentation Views: Cross-Period Macro Evolution / AIRAC Diffing and Complete Methodology & KPI Reference.")
-    render_page_export_bar("macro_reference", "tab_macro")
-    tab9, tab10 = st.tabs(
-        [
-            "📈 Macro Evolution & AIRAC Diff",
-            "📖 Methodology & KPI Reference",
-        ]
-    )
+        flight = ds.get_flight(int(active_flight_id))
+        if flight:
+            st.info(f"📍 **Active Flight:** `{ds.format_flight_label(flight)}`")
+            trajs = ds.get_trajectory(int(active_flight_id))
+            metrics = analyze_trajectory(trajs["actual"], trajs["planned"])
+            nav_rnp_rep = _cached_flight_navaids_rnp(selected_period, int(active_flight_id))
 
-# ----------------- TAB 1: Network Overview & Airspace Map -----------------
-with tab1:
-    st.header(f"Global Network Status & Airspace Saturation ({selected_period})")
-    render_page_export_bar("airspace_overview", "tab1")
-    stats = ds.get_summary()
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("Route", f"{flight['adep']} ➔ {flight['ades']}")
+            m2.metric("Operator", f"{flight['ac_operator']} ({flight['ac_type']})")
+            m3.metric("Actual Distance", f"{metrics.actual_distance_nm:.0f} nm")
+            m4.metric("Inefficiency Ratio", f"{metrics.horizontal_extension_ratio:.3f}x")
+            m5.metric("Holding Duration", f"{metrics.total_holding_duration_min:.1f} min")
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Processed Flights", f"{stats['total_flights']:,}")
-    c2.metric("Aircraft Operators", f"{stats['total_operators']:,}")
-    c3.metric("Departure Airports", f"{stats['unique_dep_airports']:,}")
-    c4.metric("Avg Arrival Delay", f"{stats['avg_arr_delay_min']} min")
-
-    st.divider()
-    st.subheader("🗺️ 5° × 5° European Airspace Hourly Saturation & Complexity Map (Period Average by Hour of Day)")
-    st.markdown(
-        "Visualizes the **average hourly flight density, peak traffic load, vertical climb/descent transition intensity, "
-        "and Dynamic Complexity Score** across every $5^\\circ \\times 5^\\circ$ geographic square for any selected hour of the day (`00:00`–`23:00 UTC`)."
-    )
-    col_gm1, col_gm2 = st.columns([2, 3])
-    with col_gm1:
-        map_hour_utc = st.slider(
-            "Select Hour of Day (UTC) — Averaged Across All Days in Period",
-            min_value=0,
-            max_value=23,
-            value=10,
-            format="%02d:00 UTC",
-            key=f"grid_map_hour_{selected_period}",
-        )
-    grid_sat_data = _cached_grid_saturation(selected_period, map_hour_utc)
-    with col_gm2:
-        gm_c1, gm_c2, gm_c3, gm_c4 = st.columns(4)
-        gm_c1.metric("Active 5°×5° Squares", f"{grid_sat_data['total_active_squares']}")
-        gm_c2.metric("Critical Saturation", f"{grid_sat_data['critical_squares_count']} squares")
-        gm_c3.metric("High Density", f"{grid_sat_data['high_density_squares_count']} squares")
-        gm_c4.metric("Peak Square Avg/Hr", f"{grid_sat_data['max_avg_flights_per_hour']:.1f} flts/hr")
-
-    grid_map = create_grid_saturation_map(grid_sat_data)
-    st_folium(
-        grid_map,
-        width=1200,
-        height=540,
-        returned_objects=[],
-        key=f"folium_grid_sat_{selected_period}_{map_hour_utc}",
-    )
-
-    with st.expander(f"📊 View 5° × 5° Square Saturation Table for {map_hour_utc:02d}:00–{map_hour_utc:02d}:59 UTC", expanded=False):
-        if grid_sat_data.get("squares"):
-            sq_df = pd.DataFrame(grid_sat_data["squares"])[
-                [
-                    "cell_label",
-                    "saturation_status",
-                    "avg_flights_per_hour",
-                    "peak_flights_per_hour",
-                    "vertical_transition_pct",
-                    "avg_flight_level",
-                    "dynamic_complexity_score",
-                    "active_days",
-                ]
-            ].rename(
-                columns={
-                    "cell_label": "5°×5° Square",
-                    "saturation_status": "Status",
-                    "avg_flights_per_hour": "Avg Flights / Hr",
-                    "peak_flights_per_hour": "Peak Flights / Hr",
-                    "vertical_transition_pct": "Vertical Climb/Desc (%)",
-                    "avg_flight_level": "Mean FL",
-                    "dynamic_complexity_score": "Complexity Index",
-                    "active_days": "Active Days",
-                }
-            )
-            st.dataframe(sq_df, use_container_width=True)
-
-    st.divider()
-    col_left, col_right = st.columns(2)
-    with col_left:
-        st.subheader("Busiest Hubs by Departures")
-        top_apt = ds.get_top_airports(10)
-        st.dataframe(top_apt, use_container_width=True)
-
-    with col_right:
-        st.subheader("Worst Delayed Corridors")
-        top_delays = ds.get_top_delayed_routes(min_flights=50, limit=10)
-        st.dataframe(top_delays, use_container_width=True)
-
-    if ds.has_fir_traversals():
-        st.subheader("🌐 En-Route FIR Sector Hourly Saturation & Bottlenecks")
-        col_s1, col_s2 = st.columns([1, 3])
-        with col_s1:
-            sat_thresh = st.slider("Saturation Threshold (flts/hr)", 20, 100, 40, key=f"fir_thresh_{selected_period}")
-        sat_data = calculate_fir_hourly_saturation(ds, threshold_flights_per_hr=sat_thresh, top_n=10)
-        if sat_data.get("top_saturated_firs"):
-            sat_df = pd.DataFrame(sat_data["top_saturated_firs"])
-            st.dataframe(sat_df, use_container_width=True)
-
-        if ds.has_aua_traversals():
-            st.subheader("📡 ATC Unit Airspaces (AUA: TMA / CTA / UTA) Saturation")
-            col_a1, col_a2 = st.columns([1, 2])
-            with col_a1:
-                aua_type_sel = st.selectbox(
-                    "Filter AUA Type",
-                    ["All (TMA/CTA/UTA)", "TMA", "CTA", "UTA"],
-                    key=f"aua_type_{selected_period}",
+            col_nav_tog1, col_nav_tog2 = st.columns([1, 2])
+            with col_nav_tog1:
+                show_route_navaids = st.toggle(
+                    "📡 Show Active Route Navaids on Map",
+                    value=True,
+                    key=f"tog_route_navaids_{selected_period}",
+                    help="Toggle the colored navaid station icons and slant-range reception sightlines on or off.",
                 )
-            with col_a2:
-                aua_thresh = st.slider(
-                    "AUA Hourly Saturation Threshold (flts/hr)",
-                    15,
-                    90,
-                    30,
-                    key=f"aua_thresh_{selected_period}",
+            with col_nav_tog2:
+                route_nav_type_filter = st.multiselect(
+                    "Filter Route Navaid Types Shown on Map",
+                    options=["VOR-DME", "DME", "VOR", "ILS_LOC", "NDB"],
+                    default=["VOR-DME", "DME", "VOR", "ILS_LOC", "NDB"],
+                    disabled=not show_route_navaids,
+                    key=f"flt_route_navaids_{selected_period}",
                 )
-            aua_filter = None if aua_type_sel.startswith("All") else aua_type_sel
-            aua_sat = calculate_aua_hourly_saturation(
-                ds, aua_type=aua_filter, threshold_flights_per_hr=aua_thresh, top_n=10
-            )
-            if aua_sat.get("top_saturated_auas"):
-                st.dataframe(pd.DataFrame(aua_sat["top_saturated_auas"]), use_container_width=True)
 
-        st.subheader("🛞 Airport Surface Movement & ICAO KPI02 Additional Taxi-Out Time (ATOT)")
-        taxi_res = analyze_airport_taxi_out_performance(ds, min_flights=50, top_n=12)
-        if taxi_res.get("airports"):
+            filtered_route_navaids = (
+                [n for n in nav_rnp_rep.active_navaids if n.nav_type in route_nav_type_filter]
+                if (nav_rnp_rep and nav_rnp_rep.active_navaids and show_route_navaids)
+                else []
+            )
+
             st.caption(
-                "UTOT = 20th-percentile unimpeded taxi-out baseline per (airport, wake category) | "
-                "ATOT = Additional Taxi-Out Time (ICAO GANP KPI02) | LTO Idle Emissions via ICAO EDB v32B"
+                "🗺️ **Interactive 4D Route & Active Navaids Map:** Colored dots show ground radio navigation aids auto-tuned along the entire corridor "
+                "(🔵 **VOR-DME / VORTAC** | 🔷 **DME / TACAN** | 🟢 **VOR** | 🟣 **ILS/LOC** | 🟠 **NDB**) "
+                "with dashed sightlines to the aircraft's closest 4D trajectory pass. Use the toggle above to switch navaid icons on or off."
             )
-            st.dataframe(pd.DataFrame(taxi_res["airports"]), use_container_width=True)
-    else:
-        st.subheader("Top Congested European FIR Airspace Sectors")
-        fir_df = analyze_fir_bottlenecks(ds, limit=8)
-        st.dataframe(fir_df, use_container_width=True)
-
-    with st.expander("📻 ATC Controller-Pilot VHF Radio Frequency Workload & Comms Occupancy", expanded=False):
-        col_rad1, col_rad2 = st.columns([1, 3])
-        with col_rad1:
-            rad_apt = st.text_input("Airport ICAO", value="EGLL", key=f"rad_apt_{selected_period}").strip().upper()
-        rad_res = estimate_airport_and_sector_radio_workload(ds, airport_icao=rad_apt)
-        rc1, rc2, rc3, rc4 = st.columns(4)
-        rc1.metric("Peak Movements / Hr", f"{rad_res['peak_hourly_movements']}")
-        rc2.metric("Cataloged VHF Channels", f"{rad_res['total_vhf_channels_cataloged']}")
-        rc3.metric("Terminal ILS/VOR/DME", f"{rad_res['associated_ils_vor_dme_count']}")
-        rc4.metric("Primary Comms Bottleneck", rad_res["primary_comms_bottleneck"], f"{rad_res['peak_voice_occupancy_pct']:.1f}% occ")
-        st.dataframe(pd.DataFrame(rad_res["positions"]), use_container_width=True)
-
-# ----------------- TAB 2: Trajectory Explorer -----------------
-with tab2:
-    st.header("4D Trajectory, Active Route Navaids, RNP/RNAV Capability & Holding Stack Visualizer")
-    render_page_export_bar("trajectory_rnp", "tab2")
-
-    flight = ds.get_flight(int(active_flight_id))
-    if flight:
-        st.info(f"📍 **Active Flight:** `{ds.format_flight_label(flight)}`")
-        trajs = ds.get_trajectory(int(active_flight_id))
-        metrics = analyze_trajectory(trajs["actual"], trajs["planned"])
-        nav_rnp_rep = _cached_flight_navaids_rnp(selected_period, int(active_flight_id))
-
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Route", f"{flight['adep']} ➔ {flight['ades']}")
-        m2.metric("Operator", f"{flight['ac_operator']} ({flight['ac_type']})")
-        m3.metric("Actual Distance", f"{metrics.actual_distance_nm:.0f} nm")
-        m4.metric("Inefficiency Ratio", f"{metrics.horizontal_extension_ratio:.3f}x")
-        m5.metric("Holding Duration", f"{metrics.total_holding_duration_min:.1f} min")
-
-        col_nav_tog1, col_nav_tog2 = st.columns([1, 2])
-        with col_nav_tog1:
-            show_route_navaids = st.toggle(
-                "📡 Show Active Route Navaids on Map",
-                value=True,
-                key=f"tog_route_navaids_{selected_period}",
-                help="Toggle the colored navaid station icons and slant-range reception sightlines on or off.",
+            m = create_trajectory_map(
+                flight,
+                trajs["actual"],
+                trajs["planned"],
+                active_navaids=filtered_route_navaids,
+                show_navaids=show_route_navaids,
             )
-        with col_nav_tog2:
-            route_nav_type_filter = st.multiselect(
-                "Filter Route Navaid Types Shown on Map",
-                options=["VOR-DME", "DME", "VOR", "ILS_LOC", "NDB"],
-                default=["VOR-DME", "DME", "VOR", "ILS_LOC", "NDB"],
-                disabled=not show_route_navaids,
-                key=f"flt_route_navaids_{selected_period}",
+            st_folium(
+                m,
+                width=1200,
+                height=540,
+                returned_objects=[],
+                key=f"traj_map_{selected_period}_{active_flight_id}_{int(show_route_navaids)}_{len(filtered_route_navaids)}",
             )
 
-        filtered_route_navaids = (
-            [n for n in nav_rnp_rep.active_navaids if n.nav_type in route_nav_type_filter]
-            if (nav_rnp_rep and nav_rnp_rep.active_navaids and show_route_navaids)
-            else []
-        )
+            if nav_rnp_rep and nav_rnp_rep.profile_points:
+                st.markdown("#### 📡 Active Route Navaids & Anticipated RNP/RNAV Capability vs. Vertical Profile")
+                st.caption(f"**Navigation & PBN Summary:** {nav_rnp_rep.overall_navigation_summary}")
 
-        st.caption(
-            "🗺️ **Interactive 4D Route & Active Navaids Map:** Colored dots show ground radio navigation aids auto-tuned along the entire corridor "
-            "(🔵 **VOR-DME / VORTAC** | 🔷 **DME / TACAN** | 🟢 **VOR** | 🟣 **ILS/LOC** | 🟠 **NDB**) "
-            "with dashed sightlines to the aircraft's closest 4D trajectory pass. Use the toggle above to switch navaid icons on or off."
+                nr1, nr2, nr3, nr4, nr5 = st.columns(5)
+                nr1.metric(
+                    "Likely Used Route Navaids",
+                    f"{nav_rnp_rep.total_active_navaids} stations",
+                    f"{nav_rnp_rep.dme_stations_used} DME / {nav_rnp_rep.vor_stations_used} VOR / {nav_rnp_rep.ils_stations_used} ILS",
+                )
+                nr2.metric("Best Terminal RNP", f"RNP {nav_rnp_rep.best_rnp_nm:.1f} nm", "Approach / TMA")
+                nr3.metric(
+                    "En-Route RNP / RNAV",
+                    f"RNAV {nav_rnp_rep.mean_enroute_rnp_nm:.1f} nm",
+                    f"Max/Worst: {nav_rnp_rep.worst_rnp_nm:.1f} nm",
+                )
+                nr4.metric(
+                    "Multi-DME (DME/DME) Coverage",
+                    f"{nav_rnp_rep.dme_dme_coverage_pct:.1f}%",
+                    "≥2 DMEs in Radio Horizon",
+                )
+                nr5.metric(
+                    "Beyond-RLOS Oceanic Share",
+                    f"{nav_rnp_rep.gnss_only_oceanic_pct:.1f}%",
+                    "GNSS / IRS Only" if nav_rnp_rep.gnss_only_oceanic_pct > 0 else "100% Terrestrial RLOS",
+                )
+
+                prof_df = pd.DataFrame([p.to_dict() for p in nav_rnp_rep.profile_points])
+                prof_df["total_vhf_navaids_in_rlos"] = prof_df["dme_in_rlos_count"] + prof_df["vor_in_rlos_count"]
+
+                # Dual-Axis Altair Graph: Vertical Flight Profile (FL) + Anticipated RNP/RNAV Available (nm)
+                base_x = alt.X("cumulative_dist_nm:Q", title="Cumulative Flown Distance Along Route (nm)")
+
+                fl_area = (
+                    alt.Chart(prof_df)
+                    .mark_area(opacity=0.22, color="#8e44ad", line={"color": "#8e44ad", "strokeWidth": 2.5})
+                    .encode(
+                        x=base_x,
+                        y=alt.Y("flight_level:Q", title="Vertical Profile — Flight Level (FL, 100s ft)", scale=alt.Scale(zero=True)),
+                        tooltip=[
+                            alt.Tooltip("seq_num:Q", title="Waypoint #"),
+                            alt.Tooltip("time_utc:N", title="Time (UTC)"),
+                            alt.Tooltip("cumulative_dist_nm:Q", title="Distance Flown (nm)", format=".1f"),
+                            alt.Tooltip("flight_level:Q", title="Flight Level (FL)", format=".0f"),
+                            alt.Tooltip("flight_phase:N", title="Flight Phase"),
+                            alt.Tooltip("anticipated_rnp_nm:Q", title="Anticipated RNP/RNAV (nm)", format=".1f"),
+                            alt.Tooltip("pbn_specification:N", title="PBN Specification"),
+                            alt.Tooltip("dme_in_rlos_count:Q", title="DMEs in Radio Horizon"),
+                            alt.Tooltip("vor_in_rlos_count:Q", title="VORs in Radio Horizon"),
+                            alt.Tooltip("primary_navaids_tuned:N", title="Primary Tuned Navaids"),
+                            alt.Tooltip("availability_reason:N", title="Why This RNP/RNAV Is Available"),
+                        ],
+                    )
+                )
+
+                rnp_line = (
+                    alt.Chart(prof_df)
+                    .mark_line(interpolate="step-after", color="#d35400", strokeWidth=2.5, strokeDash=[5, 3])
+                    .encode(
+                        x=base_x,
+                        y=alt.Y(
+                            "anticipated_rnp_nm:Q",
+                            title="Anticipated RNP / RNAV Accuracy (nm — lower is tighter)",
+                            scale=alt.Scale(zero=True),
+                        ),
+                    )
+                )
+
+                rnp_pts = (
+                    alt.Chart(prof_df)
+                    .mark_circle(size=68, opacity=0.95)
+                    .encode(
+                        x=base_x,
+                        y=alt.Y("anticipated_rnp_nm:Q", title="Anticipated RNP / RNAV Accuracy (nm — lower is tighter)"),
+                        color=alt.Color(
+                            "pbn_specification:N",
+                            title="Anticipated PBN / RNP Specification",
+                            legend=alt.Legend(orient="bottom", columns=2),
+                        ),
+                        tooltip=[
+                            alt.Tooltip("seq_num:Q", title="Waypoint #"),
+                            alt.Tooltip("time_utc:N", title="Time (UTC)"),
+                            alt.Tooltip("cumulative_dist_nm:Q", title="Distance Flown (nm)", format=".1f"),
+                            alt.Tooltip("flight_level:Q", title="Flight Level (FL)", format=".0f"),
+                            alt.Tooltip("anticipated_rnp_nm:Q", title="Anticipated RNP/RNAV (nm)", format=".1f"),
+                            alt.Tooltip("pbn_specification:N", title="PBN Specification"),
+                            alt.Tooltip("dme_in_rlos_count:Q", title="DMEs in Radio Horizon"),
+                            alt.Tooltip("vor_in_rlos_count:Q", title="VORs in Radio Horizon"),
+                            alt.Tooltip("primary_navaids_tuned:N", title="Primary Tuned Navaids"),
+                            alt.Tooltip("availability_reason:N", title="Why This RNP/RNAV Is Available"),
+                        ],
+                    )
+                )
+
+                combined_profile_chart = (
+                    alt.layer(fl_area, rnp_line + rnp_pts)
+                    .resolve_scale(y="independent")
+                    .properties(
+                        height=320,
+                        title="Vertical Flight Profile (FL, Purple) vs. Anticipated RNP/RNAV Capability (nm, Colored Step Curve) — Hover Any Point for 'Why'",
+                    )
+                )
+                st.altair_chart(combined_profile_chart, use_container_width=True)
+
+                # Secondary strip: Count of Active DME & VOR stations within Radio Line-of-Sight along route
+                rlos_chart = (
+                    alt.Chart(prof_df)
+                    .mark_bar(color="#00a8ff", opacity=0.75)
+                    .encode(
+                        x=base_x,
+                        y=alt.Y("dme_in_rlos_count:Q", title="DMEs in RLOS"),
+                        tooltip=[
+                            alt.Tooltip("cumulative_dist_nm:Q", title="Distance (nm)", format=".1f"),
+                            alt.Tooltip("flight_level:Q", title="Flight Level (FL)", format=".0f"),
+                            alt.Tooltip("dme_in_rlos_count:Q", title="DME Stations in RLOS"),
+                            alt.Tooltip("vor_in_rlos_count:Q", title="VOR Stations in RLOS"),
+                            alt.Tooltip("primary_navaids_tuned:N", title="Primary Tuned Navaids"),
+                            alt.Tooltip("availability_reason:N", title="Why This RNP/RNAV Is Available"),
+                        ],
+                    )
+                    .properties(
+                        height=135,
+                        title="Terrestrial Multi-DME Station Redundancy in Radio Line-of-Sight (RLOS) Along Trajectory",
+                    )
+                )
+                st.altair_chart(rlos_chart, use_container_width=True)
+
+                col_nav_tbl, col_rnp_tbl = st.columns(2)
+                with col_nav_tbl:
+                    with st.expander(f"📡 Likely Used Route Navaids ({len(nav_rnp_rep.active_navaids)} Colored Dots on Map)", expanded=True):
+                        if nav_rnp_rep.active_navaids:
+                            nav_rows = [
+                                {
+                                    "Ident": n.ident,
+                                    "Station Name": n.name,
+                                    "Type": n.nav_type,
+                                    "Freq (MHz)": f"{n.frequency_mhz:.2f}" if n.frequency_mhz is not None else "UHF",
+                                    "Closest Pass": f"{n.min_distance_to_track_nm:.1f} nm",
+                                    "Acft FL": f"FL{n.aircraft_fl_at_closest:.0f}",
+                                    "RLOS Horizon": f"{n.rlos_horizon_nm:.0f} nm",
+                                    "FMS Role": n.fms_navigation_role,
+                                }
+                                for n in nav_rnp_rep.active_navaids
+                            ]
+                            st.dataframe(pd.DataFrame(nav_rows), use_container_width=True)
+                        else:
+                            st.info("No terrestrial VHF/UHF navaids within corridor range.")
+
+                with col_rnp_tbl:
+                    with st.expander("🧭 Anticipated RNP/RNAV Availability & 'Why' Along Route", expanded=True):
+                        rnp_rows = [
+                            {
+                                "Dist (nm)": f"{p.cumulative_dist_nm:.0f} nm",
+                                "FL": f"FL{p.flight_level:.0f}",
+                                "RNP (nm)": f"{p.anticipated_rnp_nm:.1f} nm",
+                                "PBN Specification": p.pbn_specification,
+                                "DME / VOR in RLOS": f"{p.dme_in_rlos_count} DME / {p.vor_in_rlos_count} VOR",
+                                "Primary Tuned": p.primary_navaids_tuned,
+                                "Why Available": p.availability_reason,
+                            }
+                            for p in nav_rnp_rep.profile_points
+                        ]
+                        st.dataframe(pd.DataFrame(rnp_rows), use_container_width=True)
+
+            pru_sc = compute_flight_pru_kpis(ds, int(active_flight_id))
+            if pru_sc:
+                st.markdown("#### 📏 ICAO GANP & Eurocontrol PRU Horizontal & Terminal KPIs")
+                pk1, pk2, pk3, pk4, pk5 = st.columns(5)
+                pk1.metric("KPI04 (KEP Filed)", f"{pru_sc.kpi04_kep_pct:.2f}%", f"{pru_sc.enroute_filed_dist_nm:.0f} nm (>40nm)")
+                pk2.metric("KPI05 (KEA Actual)", f"{pru_sc.kpi05_kea_pct:.2f}%", pru_sc.enroute_routing_verdict)
+                pk3.metric("Tactical KEA - KEP", f"{pru_sc.tactical_kea_minus_kep_pct:+.2f}%", f"{pru_sc.tactical_distance_delta_nm:+.1f} nm")
+                pk4.metric("KPI08 ASMA (40nm)", f"{pru_sc.asma_40nm_actual_min:.1f} min", f"+{pru_sc.kpi08_asma_40nm_additional_min:.1f}m add")
+                pk5.metric(
+                    "KPI19 Cruise FL",
+                    f"FL{pru_sc.max_actual_fl:.0f} (Req FL{pru_sc.requested_fl:.0f})",
+                    "CAPPED" if pru_sc.is_level_capped else "OPTIMAL",
+                )
+
+            fra_rep = analyze_flight_fra_adherence(ds, int(active_flight_id))
+            if fra_rep:
+                st.markdown("#### 🛣️ Free Route Airspace (FRA) vs. Structured ATS Airway Snapping")
+                fr1, fr2, fr3, fr4 = st.columns(4)
+                fr1.metric("FRA Directness Index", f"{fra_rep.fra_directness_index_pct:.1f}%", f"{fra_rep.fra_direct_distance_nm:.0f} nm DCT")
+                fr2.metric("ATS Airway Adherence", f"{fra_rep.ats_airway_adherence_pct:.1f}%", f"{fra_rep.ats_airway_distance_nm:.0f} nm")
+                fr3.metric("Snapped ATS Airways", f"{len(fra_rep.distinct_airways_used)}", ", ".join(fra_rep.distinct_airways_used[:4]) or "DCT Only")
+                fr4.metric("Snapped 5-Letter Fixes", f"{len(fra_rep.sample_snapped_fixes)}", ", ".join(fra_rep.sample_snapped_fixes[:4]) or "—")
+
+            if ds.has_fir_traversals():
+                st.markdown("#### 🧭 En-Route Sector Traversal & Dwell Efficiency")
+                dwell_res = calculate_flight_fir_dwell_inefficiency(ds, int(active_flight_id))
+                if dwell_res.get("has_data") and dwell_res.get("sectors"):
+                    st.caption(f"**Verdict:** {dwell_res['verdict']}")
+                    c_dw1, c_dw2, c_dw3 = st.columns(3)
+                    c_dw1.metric("Total Actual Dwell", f"{dwell_res['total_actual_dwell_min']} min")
+                    c_dw2.metric("Total Filed Dwell", f"{dwell_res['total_filed_dwell_min']} min")
+                    c_dw3.metric("Net Sector Dwell Delta", f"{dwell_res['net_dwell_diff_min']:+.1f} min")
+                    st.dataframe(pd.DataFrame(dwell_res["sectors"]), use_container_width=True)
+
+            if ds.has_aua_traversals():
+                st.markdown("#### 📡 ATC Unit Airspace (AUA: TMA / CTA / UTA) Traversal & Dwell Breakdown")
+                aua_dwell = calculate_flight_aua_dwell_inefficiency(ds, int(active_flight_id))
+                if aua_dwell.get("has_data") and aua_dwell.get("sectors"):
+                    ca1, ca2, ca3, ca4 = st.columns(4)
+                    ca1.metric("Actual AUA Dwell", f"{aua_dwell['total_actual_aua_min']:.1f} min")
+                    ca2.metric("Filed AUA Dwell", f"{aua_dwell['total_filed_aua_min']:.1f} min")
+                    ca3.metric("TMA (Terminal) Delta", f"{aua_dwell['tma_dwell_delta_min']:+.1f} min")
+                    ca4.metric("CTA/UTA (En-Route) Delta", f"{aua_dwell['enroute_cta_uta_dwell_delta_min']:+.1f} min")
+                    st.dataframe(pd.DataFrame(aua_dwell["sectors"]), use_container_width=True)
+        else:
+            st.warning(f"Flight ID {active_flight_id} not found in period {selected_period}.")
+
+        # ----------------- TAB WORLD NAV: Global Navaids World Map Explorer -----------------
+
+    with sf_sub2:
+        st.header("Vertical Flight Efficiency: Continuous Descent (CDO), Climb (CCO) & Level-Capping")
+        st.markdown(
+            "Identifies inefficient staircase descents, intermediate climb/descent level-offs, altitude reversals, and en-route cruise level caps. "
+            "Uninterrupted continuous climb and 3° idle-thrust descent profiles minimize fuel burn, noise, and emissions."
         )
-        m = create_trajectory_map(
-            flight,
-            trajs["actual"],
-            trajs["planned"],
-            active_navaids=filtered_route_navaids,
-            show_navaids=show_route_navaids,
+        flight = ds.get_flight(int(active_flight_id))
+        if not flight:
+            st.warning(f"Flight ID {active_flight_id} not found in period {selected_period}.")
+        else:
+            st.info(f"📍 **Active Flight:** `{ds.format_flight_label(flight)}`")
+            with st.spinner("Analyzing vertical descent profile and level-off segments..."):
+                cdo_rep = analyze_cdo_descent(ds, int(active_flight_id))
+
+            if not cdo_rep:
+                st.warning(f"No completed descent profile detected for flight {active_flight_id}.")
+            else:
+                col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+                col_c1.metric("CDO Compliance Score", f"{cdo_rep.cdo_compliance_score:.1f}%")
+                col_c2.metric("Descent Duration", f"{cdo_rep.total_descent_duration_min:.1f} min")
+                col_c3.metric("Level-Off Inefficiencies", f"{cdo_rep.inefficiency_events_count} events")
+                col_c4.metric("Excess Descent Fuel", f"{cdo_rep.excess_fuel_burned_kg:.1f} kg")
+
+                st.markdown(
+                    f"**Route:** `{cdo_rep.adep}` ➔ `{cdo_rep.ades}` | **Aircraft:** `{cdo_rep.ac_type}` | "
+                    f"**Cruise Flight Level:** `FL{cdo_rep.cruise_flight_level:.0f}` | "
+                    f"**Un-optimized Level Flight:** `{cdo_rep.total_level_or_climb_min:.1f} min` | "
+                    f"**Excess CO₂:** `{cdo_rep.excess_co2_kg:.1f} kg`"
+                )
+
+                # Trajectory vertical profile chart
+                trajs = ds.get_trajectory(int(active_flight_id))
+                if not trajs["actual"].empty:
+                    chart_df = trajs["actual"][["time_over", "flight_level"]].copy()
+                    chart_df["time_over"] = pd.to_datetime(chart_df["time_over"])
+                    chart_df = chart_df.set_index("time_over")
+                    st.subheader("Vertical Flight Profile (Altitude / FL vs Time)")
+                    st.line_chart(chart_df)
+
+                if cdo_rep.inefficiency_events:
+                    st.subheader("Detected Descent Inefficiency Events (Level-Offs & Climbing Reversals)")
+                    ev_data = [
+                        {
+                            "Event": ev.event_type,
+                            "Start (UTC)": ev.start_time,
+                            "End (UTC)": ev.end_time,
+                            "Duration (min)": f"{ev.duration_min:.1f}",
+                            "Flight Level": f"FL{ev.flight_level:.0f}",
+                            "Latitude": f"{ev.latitude:.2f}°",
+                            "Longitude": f"{ev.longitude:.2f}°",
+                        }
+                        for ev in cdo_rep.inefficiency_events
+                    ]
+                    st.dataframe(pd.DataFrame(ev_data), use_container_width=True)
+
+                st.divider()
+                st.subheader("🛫 Continuous Climb Operations (KPI17 CCO) & KPI19 Cruise Level-Capping")
+                cco_rep = analyze_cco_climb(ds, int(active_flight_id))
+                pru_vert = compute_flight_pru_kpis(ds, int(active_flight_id))
+                if cco_rep:
+                    cc1, cc2, cc3, cc4 = st.columns(4)
+                    cc1.metric("CCO Climb Compliance", f"{cco_rep.cco_compliance_score:.1f}%")
+                    cc2.metric("Climb Duration to TOC", f"{cco_rep.total_climb_duration_min:.1f} min")
+                    cc3.metric("Climb Level-Offs", f"{cco_rep.inefficiency_events_count} ({cco_rep.total_level_off_min:.1f}m)")
+                    cc4.metric("Excess Climb Fuel", f"{cco_rep.excess_fuel_burned_kg:.1f} kg", f"{cco_rep.excess_co2_kg:.1f} kg CO₂")
+                if pru_vert:
+                    st.caption(
+                        f"📏 **KPI19 Cruise Level-Capping:** Requested `FL{pru_vert.requested_fl:.0f}` vs. Actual Max `FL{pru_vert.max_actual_fl:.0f}` "
+                        f"(Deficit: `-{pru_vert.level_cap_delta_fl:.0f} FL`, Level-Capped: `{pru_vert.is_level_capped}`, "
+                        f"Estimated Cruise Cap Penalty: `+{pru_vert.level_cap_excess_fuel_kg:.1f} kg Jet-A`)"
+                    )
+
+        with st.expander("🌐 Network-Wide KPI19 Cruise Level-Capping Corridors (Top Capped City Pairs)", expanded=False):
+            cap_res = analyze_network_level_capping(ds, top_n=12)
+            if cap_res.get("top_capped_corridors"):
+                st.caption(
+                    f"Evaluated **{cap_res.get('analyzed_flights', 0):,}** flights "
+                    f"(**{cap_res.get('level_capped_flights', 0):,}** capped / **{cap_res.get('level_capped_pct', 0.0):.1f}%**, "
+                    f"mean deficit **-{cap_res.get('mean_fl_deficit', 0.0):.1f} FL**). "
+                    "Identifies city pairs where ATC tactical or RAD restrictions systematically cap aircraft ≥2,000 ft below their filed optimal cruise flight level."
+                )
+                st.dataframe(pd.DataFrame(cap_res["top_capped_corridors"]), use_container_width=True)
+
+        # ----------------- TAB 5: Delay & Runway Diagnostics -----------------
+
+    with sf_sub3:
+        st.header("Multi-Factor Delay Root-Cause Attribution & Runway Braking Safety")
+        flight = ds.get_flight(int(active_flight_id))
+        if not flight:
+            st.warning(f"Flight ID {active_flight_id} not found in period {selected_period}.")
+        else:
+            st.info(f"📍 **Active Flight:** `{ds.format_flight_label(flight)}`")
+            if st.button("Run Diagnostic Lab for Active Flight", key=f"btn_diag_{selected_period}"):
+                with st.spinner("Analyzing weather, tail turns, and holding stacks..."):
+                    diag = diagnose_flight_bottlenecks(ds, metar_client, int(active_flight_id))
+
+                st.subheader(f"Diagnostic Report: ECTRL {diag.ectrl_id}")
+                dc1, dc2, dc3 = st.columns(3)
+                dc1.metric("Arrival Delay", f"{diag.total_arr_delay_min} min")
+                dc2.metric("Departure Delay", f"{diag.total_dep_delay_min} min")
+                dc3.metric("Primary Factor", diag.primary_bottleneck_factor)
+
+                st.info(f"💡 **Mitigation Recommendation:** {diag.mitigation_recommendation}")
+                st.json(diag.to_dict())
+
+            st.divider()
+            st.subheader("🛬 Arrival Runway Braking, Density Altitude & Overrun Safety Margin")
+            rwy_saf = assess_flight_runway_safety(ds, metar_client=None, ectrl_id=int(active_flight_id), fetch_live_metar=False)
+            if rwy_saf:
+                rs1, rs2, rs3, rs4 = st.columns(4)
+                rs1.metric("Recommended Runway", f"RWY {rwy_saf.recommended_runway}", rwy_saf.ils_precision_category)
+                rs2.metric("Density Altitude", f"{rwy_saf.density_altitude_ft:,.0f} ft", f"ISA {rwy_saf.isa_temp_deviation_c:+.1f}°C")
+                rs3.metric("Stopping Safety Margin", f"+{rwy_saf.landing_distance_safety_margin_m:,.0f} m", f"{rwy_saf.lda_utilization_pct:.1f}% of LDA")
+                rs4.metric("Runway Safety Risk", rwy_saf.safety_risk_level, rwy_saf.braking_action_code)
+
+        # ----------------- TAB 6: Fuel, Carbon & Route Charges -----------------
+
+    with sf_sub4:
+        st.header("Environmental, Surface LTO, Contrail & Eurocontrol CRCO Cost Quantification (€)")
+        flight = ds.get_flight(int(active_flight_id))
+        if not flight:
+            st.warning(f"Flight ID {active_flight_id} not found in period {selected_period}.")
+        else:
+            st.info(f"📍 **Active Flight:** `{ds.format_flight_label(flight)}`")
+            try:
+                impact = compute_flight_fuel_and_emissions(ds, int(active_flight_id))
+                fc1, fc2, fc3, fc4 = st.columns(4)
+                fc1.metric("Excess Distance", f"{impact.excess_distance_nm:.1f} nm")
+                fc2.metric("Excess Fuel Burned", f"{impact.total_excess_fuel_kg:,.1f} kg")
+                fc3.metric("Excess CO₂ Emitted", f"{impact.excess_co2_kg:,.1f} kg")
+                fc4.metric("Excess Fuel Cost", f"€{impact.estimated_excess_fuel_cost_eur:,.2f}")
+
+                price_gal = getattr(impact, "fuel_price_eur_per_gallon", 1.265 if selected_period == "201611" else 1.992)
+                price_kg = getattr(impact, "fuel_price_eur_per_kg", price_gal / 3.043)
+                price_week = getattr(impact, "fuel_price_week", "Weekly Spot Price")
+                price_source = getattr(impact, "fuel_price_source", "EIA Weekly Spot Price (EUR Converted)")
+
+                st.caption(
+                    f"⛽ **Weekly Jet Fuel Pricing Applied:** `€{price_gal:.3f}/gal` "
+                    f"(`€{price_kg:.4f}/kg`) | **Week:** `{price_week}` "
+                    f"| **Benchmark:** `{price_source}`"
+                )
+            except Exception as e:
+                st.error(f"Error computing emissions for flight {active_flight_id}: {e}")
+
+            if ds.has_fir_traversals():
+                taxi_rep = analyze_flight_taxi_out(ds, int(active_flight_id))
+                if taxi_rep:
+                    st.divider()
+                    st.subheader("🛞 Departure Surface Movement (TAXI_OUT) & ICAO EDB v32B LTO Idle Emissions")
+                    tx1, tx2, tx3, tx4 = st.columns(4)
+                    tx1.metric("Actual Taxi-Out", f"{taxi_rep.actual_taxi_out_min:.1f} min", f"UTOT p20: {taxi_rep.unimpeded_utot_min:.1f}m")
+                    tx2.metric("ICAO KPI02 ATOT", f"+{taxi_rep.additional_atot_min:.1f} min", taxi_rep.congestion_status)
+                    tx3.metric("Excess Queue Fuel & CO₂", f"{taxi_rep.excess_atot_fuel_kg:,.1f} kg", f"{taxi_rep.excess_co2_kg:,.1f} kg CO₂")
+                    tx4.metric(
+                        "Excess LTO NOx / CO / nvPM",
+                        f"{taxi_rep.excess_nox_g:,.0f}g NOx / {taxi_rep.excess_co_g:,.0f}g CO",
+                        f"{taxi_rep.excess_nvpm_mg:,.0f} mg nvPM soot",
+                    )
+                    st.caption(
+                        f"🔧 **Engine Profile:** `{taxi_rep.ac_type}` (Wake `{taxi_rep.wake_category}`, Default Engine `{taxi_rep.default_engine}`) "
+                        f"| **7% Idle + APU Rate:** `{taxi_rep.idle_fuel_rate_kg_min:.2f} kg/min` "
+                        f"| **Excess Queue Cost:** `€{taxi_rep.excess_fuel_cost_eur:,.2f} EUR`"
+                    )
+
+            crco_rep = compute_flight_crco_charges(ds, int(active_flight_id))
+            if crco_rep:
+                st.divider()
+                st.subheader("💶 Eurocontrol CRCO En-Route Navigation Charges & Direct Operating Cost (€)")
+                cr1, cr2, cr3, cr4 = st.columns(4)
+                cr1.metric("Aircraft Weight Factor", f"{crco_rep.crco_weight_factor:.3f}", f"MTOW: {crco_rep.mtow_tons:.1f} t")
+                cr2.metric("CRCO Service Units", f"{crco_rep.total_service_units:.2f} SU", f"{crco_rep.actual_distance_km:.0f} km")
+                cr3.metric("Actual CRCO Fee", f"€{crco_rep.actual_crco_charge_eur:,.2f}", f"Filed: €{crco_rep.filed_crco_charge_eur:,.2f}")
+                cr4.metric(
+                    "Total Direct Route Cost",
+                    f"€{crco_rep.total_direct_route_cost_eur:,.2f}",
+                    f"{crco_rep.crco_share_of_direct_cost_pct:.1f}% CRCO share",
+                )
+                if crco_rep.fir_breakdown:
+                    st.dataframe(pd.DataFrame([b.__dict__ for b in crco_rep.fir_breakdown]), use_container_width=True)
+
+            contrail_rep = analyze_flight_wind_and_contrails(ds, int(active_flight_id))
+            if contrail_rep:
+                st.divider()
+                st.subheader("🌬️ Upper-Air Winds & Persistent Contrail (ISSR) Climate Impact")
+                ct1, ct2, ct3, ct4 = st.columns(4)
+                ct1.metric("Avg GS vs TAS", f"{contrail_rep.avg_groundspeed_kts:.0f} kts GS", f"TAS: {contrail_rep.avg_true_airspeed_kts:.0f} kts")
+                ct2.metric("Net Upper-Air Wind", f"{contrail_rep.avg_tailwind_component_kts:+.1f} kts", f"{contrail_rep.wind_time_savings_min:+.1f}m wind time")
+                ct3.metric("Persistent Contrail (ISSR)", f"{contrail_rep.persistent_contrail_distance_nm:.1f} nm", f"{contrail_rep.persistent_contrail_pct:.1f}% of cruise")
+                ct4.metric(
+                    "Total Climate Multiplier",
+                    f"{contrail_rep.total_climate_co2e_multiplier:.2f}x CO₂e",
+                    f"+{contrail_rep.contrail_co2e_tons:.2f}t contrail CO₂e",
+                )
+                if contrail_rep.issr_segments:
+                    st.dataframe(pd.DataFrame([s.__dict__ for s in contrail_rep.issr_segments]), use_container_width=True)
+
+        st.divider()
+        with st.expander("💶 Corridor Route-Charge Avoidance vs. Extra Fuel Burn Trade-Off Scanner", expanded=False):
+            st.markdown(
+                "Analyzes city-pair corridors to detect whether longer horizontal routes are driven by **CRCO navigation charge avoidance** "
+                "(flying around high-unit-rate FIRs) versus ATC tactical weather/congestion detours."
+            )
+            col_rc1, col_rc2, col_rc3 = st.columns(3)
+            rc_adep = col_rc1.text_input("Origin (ADEP)", value="EGLL", key=f"rc_adep_{selected_period}").strip().upper()
+            rc_ades = col_rc2.text_input("Destination (ADES)", value="LIRF", key=f"rc_ades_{selected_period}").strip().upper()
+            rc_ac = col_rc3.text_input("Aircraft Type (Optional)", value="A320", key=f"rc_ac_{selected_period}").strip().upper()
+            if st.button("Analyze Corridor CRCO Economics", key=f"btn_crco_corridor_{selected_period}"):
+                crco_corr = detect_route_charge_avoidance(
+                    ds, adep=rc_adep, ades=rc_ades, ac_type=rc_ac if rc_ac else None
+                )
+                if not crco_corr.get("flights"):
+                    st.warning(f"No matching flights found on corridor `{rc_adep} ➔ {rc_ades}`.")
+                else:
+                    cc_m1, cc_m2, cc_m3, cc_m4 = st.columns(4)
+                    cc_m1.metric("Flights Analyzed", f"{crco_corr['analyzed_flights']}")
+                    cc_m2.metric("Shortest Route Dist", f"{crco_corr['shortest_route_distance_nm']:.1f} nm")
+                    cc_m3.metric("Shortest Route CRCO Fee", f"€{crco_corr['shortest_route_crco_eur']:,.2f} EUR")
+                    cc_m4.metric("Avoidance Detour Candidates", f"{crco_corr['avoidance_candidates_count']} flights")
+                    st.dataframe(pd.DataFrame(crco_corr["flights"]), use_container_width=True)
+
+        with st.expander(f"📊 View Weekly Average Jet Fuel Spot Prices in Euros ({selected_period})", expanded=False):
+            all_fuel_df = get_all_weekly_fuel_prices_df()
+            period_fuel_df = all_fuel_df[all_fuel_df["period_id"] == selected_period]
+            if not period_fuel_df.empty:
+                st.dataframe(
+                    period_fuel_df[["week_label", "price_eur_per_gallon", "price_eur_per_kg", "price_eur_per_metric_ton", "source"]],
+                    use_container_width=True,
+                )
+            else:
+                st.dataframe(all_fuel_df, use_container_width=True)
+
+        # ----------------- TAB 7: Twin-Flight Efficiency Benchmarking -----------------
+
+# =============================================================================
+# 2. SYSTEM-LEVEL SUMMARY & ANALYSIS VIEWS
+# =============================================================================
+with tab_cat_system:
+    st.caption(
+        "Macro air navigation metrics, en-route sector (FIR/AUA) saturation, airport surface movement (ATOT), "
+        "cross-decade historical traffic growth, and network-wide hub weather correlation."
+    )
+    render_page_export_bar("system_summary", "cat_system")
+    sys_sub1, sys_sub2 = st.tabs(
+        [
+            "🌐 Network Status & Airspace Saturation",
+            "📈 Macro Evolution & AIRAC Diff",
+        ]
+    )
+
+    with sys_sub1:
+        st.header(f"Global Network Status & Airspace Saturation ({selected_period})")
+        render_page_export_bar("airspace_overview", "tab1")
+        stats = ds.get_summary()
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Processed Flights", f"{stats['total_flights']:,}")
+        c2.metric("Aircraft Operators", f"{stats['total_operators']:,}")
+        c3.metric("Departure Airports", f"{stats['unique_dep_airports']:,}")
+        c4.metric("Avg Arrival Delay", f"{stats['avg_arr_delay_min']} min")
+
+        st.divider()
+        st.subheader("🗺️ 5° × 5° European Airspace Hourly Saturation & Complexity Map (Period Average by Hour of Day)")
+        st.markdown(
+            "Visualizes the **average hourly flight density, peak traffic load, vertical climb/descent transition intensity, "
+            "and Dynamic Complexity Score** across every $5^\\circ \\times 5^\\circ$ geographic square for any selected hour of the day (`00:00`–`23:00 UTC`)."
         )
+        col_gm1, col_gm2 = st.columns([2, 3])
+        with col_gm1:
+            map_hour_utc = st.slider(
+                "Select Hour of Day (UTC) — Averaged Across All Days in Period",
+                min_value=0,
+                max_value=23,
+                value=10,
+                format="%02d:00 UTC",
+                key=f"grid_map_hour_{selected_period}",
+            )
+        grid_sat_data = _cached_grid_saturation(selected_period, map_hour_utc)
+        with col_gm2:
+            gm_c1, gm_c2, gm_c3, gm_c4 = st.columns(4)
+            gm_c1.metric("Active 5°×5° Squares", f"{grid_sat_data['total_active_squares']}")
+            gm_c2.metric("Critical Saturation", f"{grid_sat_data['critical_squares_count']} squares")
+            gm_c3.metric("High Density", f"{grid_sat_data['high_density_squares_count']} squares")
+            gm_c4.metric("Peak Square Avg/Hr", f"{grid_sat_data['max_avg_flights_per_hour']:.1f} flts/hr")
+
+        grid_map = create_grid_saturation_map(grid_sat_data)
         st_folium(
-            m,
+            grid_map,
             width=1200,
             height=540,
             returned_objects=[],
-            key=f"traj_map_{selected_period}_{active_flight_id}_{int(show_route_navaids)}_{len(filtered_route_navaids)}",
+            key=f"folium_grid_sat_{selected_period}_{map_hour_utc}",
         )
 
-        if nav_rnp_rep and nav_rnp_rep.profile_points:
-            st.markdown("#### 📡 Active Route Navaids & Anticipated RNP/RNAV Capability vs. Vertical Profile")
-            st.caption(f"**Navigation & PBN Summary:** {nav_rnp_rep.overall_navigation_summary}")
-
-            nr1, nr2, nr3, nr4, nr5 = st.columns(5)
-            nr1.metric(
-                "Likely Used Route Navaids",
-                f"{nav_rnp_rep.total_active_navaids} stations",
-                f"{nav_rnp_rep.dme_stations_used} DME / {nav_rnp_rep.vor_stations_used} VOR / {nav_rnp_rep.ils_stations_used} ILS",
-            )
-            nr2.metric("Best Terminal RNP", f"RNP {nav_rnp_rep.best_rnp_nm:.1f} nm", "Approach / TMA")
-            nr3.metric(
-                "En-Route RNP / RNAV",
-                f"RNAV {nav_rnp_rep.mean_enroute_rnp_nm:.1f} nm",
-                f"Max/Worst: {nav_rnp_rep.worst_rnp_nm:.1f} nm",
-            )
-            nr4.metric(
-                "Multi-DME (DME/DME) Coverage",
-                f"{nav_rnp_rep.dme_dme_coverage_pct:.1f}%",
-                "≥2 DMEs in Radio Horizon",
-            )
-            nr5.metric(
-                "Beyond-RLOS Oceanic Share",
-                f"{nav_rnp_rep.gnss_only_oceanic_pct:.1f}%",
-                "GNSS / IRS Only" if nav_rnp_rep.gnss_only_oceanic_pct > 0 else "100% Terrestrial RLOS",
-            )
-
-            prof_df = pd.DataFrame([p.to_dict() for p in nav_rnp_rep.profile_points])
-            prof_df["total_vhf_navaids_in_rlos"] = prof_df["dme_in_rlos_count"] + prof_df["vor_in_rlos_count"]
-
-            # Dual-Axis Altair Graph: Vertical Flight Profile (FL) + Anticipated RNP/RNAV Available (nm)
-            base_x = alt.X("cumulative_dist_nm:Q", title="Cumulative Flown Distance Along Route (nm)")
-
-            fl_area = (
-                alt.Chart(prof_df)
-                .mark_area(opacity=0.22, color="#8e44ad", line={"color": "#8e44ad", "strokeWidth": 2.5})
-                .encode(
-                    x=base_x,
-                    y=alt.Y("flight_level:Q", title="Vertical Profile — Flight Level (FL, 100s ft)", scale=alt.Scale(zero=True)),
-                    tooltip=[
-                        alt.Tooltip("seq_num:Q", title="Waypoint #"),
-                        alt.Tooltip("time_utc:N", title="Time (UTC)"),
-                        alt.Tooltip("cumulative_dist_nm:Q", title="Distance Flown (nm)", format=".1f"),
-                        alt.Tooltip("flight_level:Q", title="Flight Level (FL)", format=".0f"),
-                        alt.Tooltip("flight_phase:N", title="Flight Phase"),
-                        alt.Tooltip("anticipated_rnp_nm:Q", title="Anticipated RNP/RNAV (nm)", format=".1f"),
-                        alt.Tooltip("pbn_specification:N", title="PBN Specification"),
-                        alt.Tooltip("dme_in_rlos_count:Q", title="DMEs in Radio Horizon"),
-                        alt.Tooltip("vor_in_rlos_count:Q", title="VORs in Radio Horizon"),
-                        alt.Tooltip("primary_navaids_tuned:N", title="Primary Tuned Navaids"),
-                        alt.Tooltip("availability_reason:N", title="Why This RNP/RNAV Is Available"),
-                    ],
-                )
-            )
-
-            rnp_line = (
-                alt.Chart(prof_df)
-                .mark_line(interpolate="step-after", color="#d35400", strokeWidth=2.5, strokeDash=[5, 3])
-                .encode(
-                    x=base_x,
-                    y=alt.Y(
-                        "anticipated_rnp_nm:Q",
-                        title="Anticipated RNP / RNAV Accuracy (nm — lower is tighter)",
-                        scale=alt.Scale(zero=True),
-                    ),
-                )
-            )
-
-            rnp_pts = (
-                alt.Chart(prof_df)
-                .mark_circle(size=68, opacity=0.95)
-                .encode(
-                    x=base_x,
-                    y=alt.Y("anticipated_rnp_nm:Q", title="Anticipated RNP / RNAV Accuracy (nm — lower is tighter)"),
-                    color=alt.Color(
-                        "pbn_specification:N",
-                        title="Anticipated PBN / RNP Specification",
-                        legend=alt.Legend(orient="bottom", columns=2),
-                    ),
-                    tooltip=[
-                        alt.Tooltip("seq_num:Q", title="Waypoint #"),
-                        alt.Tooltip("time_utc:N", title="Time (UTC)"),
-                        alt.Tooltip("cumulative_dist_nm:Q", title="Distance Flown (nm)", format=".1f"),
-                        alt.Tooltip("flight_level:Q", title="Flight Level (FL)", format=".0f"),
-                        alt.Tooltip("anticipated_rnp_nm:Q", title="Anticipated RNP/RNAV (nm)", format=".1f"),
-                        alt.Tooltip("pbn_specification:N", title="PBN Specification"),
-                        alt.Tooltip("dme_in_rlos_count:Q", title="DMEs in Radio Horizon"),
-                        alt.Tooltip("vor_in_rlos_count:Q", title="VORs in Radio Horizon"),
-                        alt.Tooltip("primary_navaids_tuned:N", title="Primary Tuned Navaids"),
-                        alt.Tooltip("availability_reason:N", title="Why This RNP/RNAV Is Available"),
-                    ],
-                )
-            )
-
-            combined_profile_chart = (
-                alt.layer(fl_area, rnp_line + rnp_pts)
-                .resolve_scale(y="independent")
-                .properties(
-                    height=320,
-                    title="Vertical Flight Profile (FL, Purple) vs. Anticipated RNP/RNAV Capability (nm, Colored Step Curve) — Hover Any Point for 'Why'",
-                )
-            )
-            st.altair_chart(combined_profile_chart, use_container_width=True)
-
-            # Secondary strip: Count of Active DME & VOR stations within Radio Line-of-Sight along route
-            rlos_chart = (
-                alt.Chart(prof_df)
-                .mark_bar(color="#00a8ff", opacity=0.75)
-                .encode(
-                    x=base_x,
-                    y=alt.Y("dme_in_rlos_count:Q", title="DMEs in RLOS"),
-                    tooltip=[
-                        alt.Tooltip("cumulative_dist_nm:Q", title="Distance (nm)", format=".1f"),
-                        alt.Tooltip("flight_level:Q", title="Flight Level (FL)", format=".0f"),
-                        alt.Tooltip("dme_in_rlos_count:Q", title="DME Stations in RLOS"),
-                        alt.Tooltip("vor_in_rlos_count:Q", title="VOR Stations in RLOS"),
-                        alt.Tooltip("primary_navaids_tuned:N", title="Primary Tuned Navaids"),
-                        alt.Tooltip("availability_reason:N", title="Why This RNP/RNAV Is Available"),
-                    ],
-                )
-                .properties(
-                    height=135,
-                    title="Terrestrial Multi-DME Station Redundancy in Radio Line-of-Sight (RLOS) Along Trajectory",
-                )
-            )
-            st.altair_chart(rlos_chart, use_container_width=True)
-
-            col_nav_tbl, col_rnp_tbl = st.columns(2)
-            with col_nav_tbl:
-                with st.expander(f"📡 Likely Used Route Navaids ({len(nav_rnp_rep.active_navaids)} Colored Dots on Map)", expanded=True):
-                    if nav_rnp_rep.active_navaids:
-                        nav_rows = [
-                            {
-                                "Ident": n.ident,
-                                "Station Name": n.name,
-                                "Type": n.nav_type,
-                                "Freq (MHz)": f"{n.frequency_mhz:.2f}" if n.frequency_mhz is not None else "UHF",
-                                "Closest Pass": f"{n.min_distance_to_track_nm:.1f} nm",
-                                "Acft FL": f"FL{n.aircraft_fl_at_closest:.0f}",
-                                "RLOS Horizon": f"{n.rlos_horizon_nm:.0f} nm",
-                                "FMS Role": n.fms_navigation_role,
-                            }
-                            for n in nav_rnp_rep.active_navaids
-                        ]
-                        st.dataframe(pd.DataFrame(nav_rows), use_container_width=True)
-                    else:
-                        st.info("No terrestrial VHF/UHF navaids within corridor range.")
-
-            with col_rnp_tbl:
-                with st.expander("🧭 Anticipated RNP/RNAV Availability & 'Why' Along Route", expanded=True):
-                    rnp_rows = [
-                        {
-                            "Dist (nm)": f"{p.cumulative_dist_nm:.0f} nm",
-                            "FL": f"FL{p.flight_level:.0f}",
-                            "RNP (nm)": f"{p.anticipated_rnp_nm:.1f} nm",
-                            "PBN Specification": p.pbn_specification,
-                            "DME / VOR in RLOS": f"{p.dme_in_rlos_count} DME / {p.vor_in_rlos_count} VOR",
-                            "Primary Tuned": p.primary_navaids_tuned,
-                            "Why Available": p.availability_reason,
-                        }
-                        for p in nav_rnp_rep.profile_points
+        with st.expander(f"📊 View 5° × 5° Square Saturation Table for {map_hour_utc:02d}:00–{map_hour_utc:02d}:59 UTC", expanded=False):
+            if grid_sat_data.get("squares"):
+                sq_df = pd.DataFrame(grid_sat_data["squares"])[
+                    [
+                        "cell_label",
+                        "saturation_status",
+                        "avg_flights_per_hour",
+                        "peak_flights_per_hour",
+                        "vertical_transition_pct",
+                        "avg_flight_level",
+                        "dynamic_complexity_score",
+                        "active_days",
                     ]
-                    st.dataframe(pd.DataFrame(rnp_rows), use_container_width=True)
-
-        pru_sc = compute_flight_pru_kpis(ds, int(active_flight_id))
-        if pru_sc:
-            st.markdown("#### 📏 ICAO GANP & Eurocontrol PRU Horizontal & Terminal KPIs")
-            pk1, pk2, pk3, pk4, pk5 = st.columns(5)
-            pk1.metric("KPI04 (KEP Filed)", f"{pru_sc.kpi04_kep_pct:.2f}%", f"{pru_sc.enroute_filed_dist_nm:.0f} nm (>40nm)")
-            pk2.metric("KPI05 (KEA Actual)", f"{pru_sc.kpi05_kea_pct:.2f}%", pru_sc.enroute_routing_verdict)
-            pk3.metric("Tactical KEA - KEP", f"{pru_sc.tactical_kea_minus_kep_pct:+.2f}%", f"{pru_sc.tactical_distance_delta_nm:+.1f} nm")
-            pk4.metric("KPI08 ASMA (40nm)", f"{pru_sc.asma_40nm_actual_min:.1f} min", f"+{pru_sc.kpi08_asma_40nm_additional_min:.1f}m add")
-            pk5.metric(
-                "KPI19 Cruise FL",
-                f"FL{pru_sc.max_actual_fl:.0f} (Req FL{pru_sc.requested_fl:.0f})",
-                "CAPPED" if pru_sc.is_level_capped else "OPTIMAL",
-            )
-
-        fra_rep = analyze_flight_fra_adherence(ds, int(active_flight_id))
-        if fra_rep:
-            st.markdown("#### 🛣️ Free Route Airspace (FRA) vs. Structured ATS Airway Snapping")
-            fr1, fr2, fr3, fr4 = st.columns(4)
-            fr1.metric("FRA Directness Index", f"{fra_rep.fra_directness_index_pct:.1f}%", f"{fra_rep.fra_direct_distance_nm:.0f} nm DCT")
-            fr2.metric("ATS Airway Adherence", f"{fra_rep.ats_airway_adherence_pct:.1f}%", f"{fra_rep.ats_airway_distance_nm:.0f} nm")
-            fr3.metric("Snapped ATS Airways", f"{len(fra_rep.distinct_airways_used)}", ", ".join(fra_rep.distinct_airways_used[:4]) or "DCT Only")
-            fr4.metric("Snapped 5-Letter Fixes", f"{len(fra_rep.sample_snapped_fixes)}", ", ".join(fra_rep.sample_snapped_fixes[:4]) or "—")
-
-        if ds.has_fir_traversals():
-            st.markdown("#### 🧭 En-Route Sector Traversal & Dwell Efficiency")
-            dwell_res = calculate_flight_fir_dwell_inefficiency(ds, int(active_flight_id))
-            if dwell_res.get("has_data") and dwell_res.get("sectors"):
-                st.caption(f"**Verdict:** {dwell_res['verdict']}")
-                c_dw1, c_dw2, c_dw3 = st.columns(3)
-                c_dw1.metric("Total Actual Dwell", f"{dwell_res['total_actual_dwell_min']} min")
-                c_dw2.metric("Total Filed Dwell", f"{dwell_res['total_filed_dwell_min']} min")
-                c_dw3.metric("Net Sector Dwell Delta", f"{dwell_res['net_dwell_diff_min']:+.1f} min")
-                st.dataframe(pd.DataFrame(dwell_res["sectors"]), use_container_width=True)
-
-        if ds.has_aua_traversals():
-            st.markdown("#### 📡 ATC Unit Airspace (AUA: TMA / CTA / UTA) Traversal & Dwell Breakdown")
-            aua_dwell = calculate_flight_aua_dwell_inefficiency(ds, int(active_flight_id))
-            if aua_dwell.get("has_data") and aua_dwell.get("sectors"):
-                ca1, ca2, ca3, ca4 = st.columns(4)
-                ca1.metric("Actual AUA Dwell", f"{aua_dwell['total_actual_aua_min']:.1f} min")
-                ca2.metric("Filed AUA Dwell", f"{aua_dwell['total_filed_aua_min']:.1f} min")
-                ca3.metric("TMA (Terminal) Delta", f"{aua_dwell['tma_dwell_delta_min']:+.1f} min")
-                ca4.metric("CTA/UTA (En-Route) Delta", f"{aua_dwell['enroute_cta_uta_dwell_delta_min']:+.1f} min")
-                st.dataframe(pd.DataFrame(aua_dwell["sectors"]), use_container_width=True)
-    else:
-        st.warning(f"Flight ID {active_flight_id} not found in period {selected_period}.")
-
-# ----------------- TAB WORLD NAV: Global Navaids World Map Explorer -----------------
-with tab_world_nav:
-    st.header("🌍 Global Radio Navaids World Map & Station Directory")
-    render_page_export_bar("global_navaids", "tab_world_nav")
-    st.markdown(
-        "Explore **all global terrestrial radio navigation aids** (`VOR-DME / VORTAC`, `DME / TACAN`, `VOR`, `ILS / LOC`, and `NDB`) "
-        "fused across the X-Plane 1100 global navigation database and OurAirports navaid registry. "
-        "Filter by navaid type, geographic region/viewport, or station identifier."
-    )
-
-    WORLD_REGIONS: dict[str, tuple[float, float, float, float, float, float, int]] = {
-        "🌍 Entire World": (-85.0, 85.0, -180.0, 180.0, 25.0, 10.0, 2),
-        "🇪🇺 Europe & North Atlantic": (34.0, 72.0, -25.0, 45.0, 50.0, 10.0, 4),
-        "🌎 North America": (15.0, 72.0, -170.0, -50.0, 40.0, -98.0, 3),
-        "🌏 Asia-Pacific": (-48.0, 60.0, 65.0, 180.0, 22.0, 118.0, 3),
-        "🌍 Middle East & Africa": (-38.0, 40.0, -20.0, 65.0, 12.0, 25.0, 3),
-        "🌎 South & Central America": (-58.0, 15.0, -95.0, -30.0, -18.0, -60.0, 3),
-    }
-
-    wn_c1, wn_c2, wn_c3, wn_c4 = st.columns([2, 2, 1.5, 1.5])
-    with wn_c1:
-        wn_types = st.multiselect(
-            "Filter Navaid Types",
-            options=["VOR-DME", "DME", "VOR", "ILS_LOC", "NDB"],
-            default=["VOR-DME", "DME", "VOR"],
-            key=f"wn_types_{selected_period}",
-            help="Select which navaid categories to render on the global map (VOR-DME/VORTAC, standalone DME/TACAN, VOR, ILS/LOC, NDB).",
-        )
-    with wn_c2:
-        wn_region = st.selectbox(
-            "Geographic Region / Viewport",
-            options=list(WORLD_REGIONS.keys()),
-            index=0,
-            key=f"wn_region_{selected_period}",
-        )
-    with wn_c3:
-        wn_search = st.text_input(
-            "Search Ident or Name",
-            value="",
-            placeholder="e.g. BPK, LAM, FRANKFURT",
-            key=f"wn_search_{selected_period}",
-        ).strip()
-    with wn_c4:
-        wn_limit = st.slider(
-            "Max Map Markers",
-            min_value=500,
-            max_value=6000,
-            value=2500,
-            step=500,
-            key=f"wn_limit_{selected_period}",
-            help="Maximum number of navaid markers rendered simultaneously on the HTML5 Canvas world map.",
-        )
-
-    min_lat, max_lat, min_lon, max_lon, c_lat, c_lon, z_lvl = WORLD_REGIONS[wn_region]
-    world_nav_df = _cached_world_navaids(
-        selected_period,
-        min_lat=min_lat,
-        max_lat=max_lat,
-        min_lon=min_lon,
-        max_lon=max_lon,
-        nav_types_tuple=tuple(wn_types if wn_types else ["NONE"]),
-        search_query=wn_search if wn_search else None,
-        limit=wn_limit,
-    )
-
-    # Compute breakdown metrics
-    vordme_cnt = int((world_nav_df["nav_type"] == "VOR-DME").sum()) if not world_nav_df.empty else 0
-    dme_cnt = int((world_nav_df["nav_type"] == "DME").sum()) if not world_nav_df.empty else 0
-    vor_cnt = int((world_nav_df["nav_type"] == "VOR").sum()) if not world_nav_df.empty else 0
-    ils_cnt = int((world_nav_df["nav_type"] == "ILS_LOC").sum()) if not world_nav_df.empty else 0
-    ndb_cnt = int((world_nav_df["nav_type"] == "NDB").sum()) if not world_nav_df.empty else 0
-
-    wm1, wm2, wm3, wm4, wm5, wm6 = st.columns(6)
-    wm1.metric("Stations Rendered", f"{len(world_nav_df):,}")
-    wm2.metric("🔵 VOR-DME / VORTAC", f"{vordme_cnt:,}")
-    wm3.metric("🔷 DME / TACAN", f"{dme_cnt:,}")
-    wm4.metric("🟢 VOR", f"{vor_cnt:,}")
-    wm5.metric("🟣 ILS / LOC", f"{ils_cnt:,}")
-    wm6.metric("🟠 NDB", f"{ndb_cnt:,}")
-
-    world_map = create_world_navaids_map(
-        world_nav_df,
-        center_lat=c_lat,
-        center_lon=c_lon,
-        zoom_start=z_lvl,
-    )
-    st_folium(
-        world_map,
-        width=1200,
-        height=560,
-        returned_objects=[],
-        key=f"world_nav_map_{selected_period}_{wn_region}_{'_'.join(wn_types)}_{wn_search}_{wn_limit}",
-    )
-
-    with st.expander(f"📋 View Filtered Global Navaids Station Directory ({len(world_nav_df):,} stations)", expanded=False):
-        if not world_nav_df.empty:
-            disp_nav_df = world_nav_df[
-                ["ident", "name", "nav_type", "frequency_mhz", "range_nm", "elevation_ft", "latitude", "longitude"]
-            ].rename(
-                columns={
-                    "ident": "Ident",
-                    "name": "Station Name",
-                    "nav_type": "Navaid Type",
-                    "frequency_mhz": "Freq (MHz)",
-                    "range_nm": "Range (nm)",
-                    "elevation_ft": "Elevation (ft)",
-                    "latitude": "Latitude",
-                    "longitude": "Longitude",
-                }
-            )
-            st.dataframe(disp_nav_df, use_container_width=True)
-        else:
-            st.info("No navaids match the current filter selection.")
-
-# ----------------- TAB 3: Recurring Series & Diurnal Trends -----------------
-with tab3:
-    st.header("📅 Recurring Flight Series & Diurnal Time-of-Day Assessment")
-    st.markdown(
-        "Track and compare the same flight (or very similar flights on the same city pair) as they occurred each day. "
-        "Evaluates day-over-day operational variability, flown distance dispersion, and diurnal congestion escalation across morning, afternoon, and evening departure banks."
-    )
-    col_r1, col_r2, col_r3 = st.columns(3)
-    r_adep = col_r1.text_input("Origin (ADEP)", value="EGLL", key=f"r_adep_{selected_period}").strip().upper()
-    r_ades = col_r2.text_input("Destination (ADES)", value="KORD", key=f"r_ades_{selected_period}").strip().upper()
-    r_op = col_r3.text_input("Airline Operator (Optional)", value="BAW", key=f"r_op_{selected_period}").strip().upper()
-
-    col_r4, col_r5 = st.columns(2)
-    r_ac = col_r4.text_input("Aircraft Type (Optional)", value="", placeholder="e.g. B77W, B744, A320", key=f"r_ac_{selected_period}").strip().upper()
-    r_tod = col_r5.selectbox(
-        "Time-of-Day Bank Filter",
-        ["All", "Morning (06:00-12:00)", "Afternoon (12:00-18:00)", "Evening (18:00-24:00)", "Night (00:00-06:00)"],
-        key=f"r_tod_{selected_period}",
-    )
-
-    if st.button("Analyze Recurring Series Across Period", key=f"btn_rec_series_{selected_period}"):
-        with st.spinner(f"Extracting longitudinal recurring series for {r_adep} ➔ {r_ades}..."):
-            rep = analyze_recurring_flight_series(
-                ds,
-                adep=r_adep,
-                ades=r_ades,
-                operator=r_op if r_op else None,
-                ac_type=r_ac if r_ac else None,
-                time_of_day=r_tod,
-            )
-
-        if not rep:
-            st.warning(f"Not enough recurring flights found for corridor {r_adep} ➔ {r_ades} in period {selected_period}.")
-        else:
-            rm1, rm2, rm3, rm4 = st.columns(4)
-            rm1.metric("Occurrences Analyzed", f"{rep.total_flights} flights")
-            rm2.metric("Mean Arrival Delay", f"{rep.mean_arr_delay_min:+.1f} min", f"±{rep.std_arr_delay_min:.1f}m (std)")
-            rm3.metric("Flown Distance Span", f"{rep.mean_distance_nm:.0f} nm", f"Δ{rep.distance_span_nm:.0f} nm span")
-            rm4.metric("Air Time Dispersion", f"{rep.mean_air_time_min:.0f} min", f"Δ{rep.air_time_span_min:.0f} min span")
-
-            col_best, col_worst = st.columns(2)
-            col_best.success(
-                f"🏆 **Best Performing Day:** `{rep.best_performing_day['date']}` "
-                f"({rep.best_performing_day['flights']} flights, avg delay **{rep.best_performing_day['avg_arr_delay_min']:+.1f} min**)"
-            )
-            col_worst.error(
-                f"⚠️ **Worst Performing Day:** `{rep.worst_performing_day['date']}` "
-                f"({rep.worst_performing_day['flights']} flights, avg delay **{rep.worst_performing_day['avg_arr_delay_min']:+.1f} min**)"
-            )
-
-            st.subheader("Diurnal Time-of-Day Departure Bank Congestion Profile")
-            diurnal_data = [
-                {
-                    "Departure Bank": b.bank_name,
-                    "Flights": b.flight_count,
-                    "Avg Departure Delay": f"{b.avg_dep_delay_min:+.1f} min",
-                    "Avg Arrival Delay": f"{b.avg_arr_delay_min:+.1f} min",
-                    "Avg Air Time": f"{b.avg_air_time_min:.1f} min",
-                }
-                for b in rep.diurnal_banks
-            ]
-            st.dataframe(pd.DataFrame(diurnal_data), use_container_width=True)
-
-            if rep.hourly_delay_curve:
-                st.subheader("Hourly Departure Delay Escalation Curve (UTC Departure Hour)")
-                h_df = pd.DataFrame(rep.hourly_delay_curve).set_index("hour")
-                st.line_chart(h_df[["avg_arr_delay_min", "avg_dep_delay_min"]])
-
-            st.subheader("Day-by-Day Recurring Occurrences")
-            occ_df = pd.DataFrame([
-                {
-                    "Flight ID": o.ectrl_id,
-                    "Date": o.date_str,
-                    "Off-Block (UTC)": o.off_block_time,
-                    "Bank": o.time_of_day_bank,
-                    "Operator": o.ac_operator,
-                    "Aircraft": o.ac_type,
-                    "Tail": o.ac_reg,
-                    "Distance (nm)": f"{o.actual_distance_nm:.0f}",
-                    "Air Time (min)": f"{o.actual_air_time_min:.1f}",
-                    "Arr Delay (min)": f"{o.arr_delay_min:+.1f}",
-                }
-                for o in rep.occurrences
-            ])
-            st.dataframe(occ_df, use_container_width=True)
-
-# ----------------- TAB 4: Vertical Profile: CDO & CCO -----------------
-with tab4:
-    st.header("Vertical Flight Efficiency: Continuous Descent (CDO), Climb (CCO) & Level-Capping")
-    st.markdown(
-        "Identifies inefficient staircase descents, intermediate climb/descent level-offs, altitude reversals, and en-route cruise level caps. "
-        "Uninterrupted continuous climb and 3° idle-thrust descent profiles minimize fuel burn, noise, and emissions."
-    )
-    flight = ds.get_flight(int(active_flight_id))
-    if not flight:
-        st.warning(f"Flight ID {active_flight_id} not found in period {selected_period}.")
-    else:
-        st.info(f"📍 **Active Flight:** `{ds.format_flight_label(flight)}`")
-        with st.spinner("Analyzing vertical descent profile and level-off segments..."):
-            cdo_rep = analyze_cdo_descent(ds, int(active_flight_id))
-
-        if not cdo_rep:
-            st.warning(f"No completed descent profile detected for flight {active_flight_id}.")
-        else:
-            col_c1, col_c2, col_c3, col_c4 = st.columns(4)
-            col_c1.metric("CDO Compliance Score", f"{cdo_rep.cdo_compliance_score:.1f}%")
-            col_c2.metric("Descent Duration", f"{cdo_rep.total_descent_duration_min:.1f} min")
-            col_c3.metric("Level-Off Inefficiencies", f"{cdo_rep.inefficiency_events_count} events")
-            col_c4.metric("Excess Descent Fuel", f"{cdo_rep.excess_fuel_burned_kg:.1f} kg")
-
-            st.markdown(
-                f"**Route:** `{cdo_rep.adep}` ➔ `{cdo_rep.ades}` | **Aircraft:** `{cdo_rep.ac_type}` | "
-                f"**Cruise Flight Level:** `FL{cdo_rep.cruise_flight_level:.0f}` | "
-                f"**Un-optimized Level Flight:** `{cdo_rep.total_level_or_climb_min:.1f} min` | "
-                f"**Excess CO₂:** `{cdo_rep.excess_co2_kg:.1f} kg`"
-            )
-
-            # Trajectory vertical profile chart
-            trajs = ds.get_trajectory(int(active_flight_id))
-            if not trajs["actual"].empty:
-                chart_df = trajs["actual"][["time_over", "flight_level"]].copy()
-                chart_df["time_over"] = pd.to_datetime(chart_df["time_over"])
-                chart_df = chart_df.set_index("time_over")
-                st.subheader("Vertical Flight Profile (Altitude / FL vs Time)")
-                st.line_chart(chart_df)
-
-            if cdo_rep.inefficiency_events:
-                st.subheader("Detected Descent Inefficiency Events (Level-Offs & Climbing Reversals)")
-                ev_data = [
-                    {
-                        "Event": ev.event_type,
-                        "Start (UTC)": ev.start_time,
-                        "End (UTC)": ev.end_time,
-                        "Duration (min)": f"{ev.duration_min:.1f}",
-                        "Flight Level": f"FL{ev.flight_level:.0f}",
-                        "Latitude": f"{ev.latitude:.2f}°",
-                        "Longitude": f"{ev.longitude:.2f}°",
+                ].rename(
+                    columns={
+                        "cell_label": "5°×5° Square",
+                        "saturation_status": "Status",
+                        "avg_flights_per_hour": "Avg Flights / Hr",
+                        "peak_flights_per_hour": "Peak Flights / Hr",
+                        "vertical_transition_pct": "Vertical Climb/Desc (%)",
+                        "avg_flight_level": "Mean FL",
+                        "dynamic_complexity_score": "Complexity Index",
+                        "active_days": "Active Days",
                     }
-                    for ev in cdo_rep.inefficiency_events
-                ]
-                st.dataframe(pd.DataFrame(ev_data), use_container_width=True)
-
-            st.divider()
-            st.subheader("🛫 Continuous Climb Operations (KPI17 CCO) & KPI19 Cruise Level-Capping")
-            cco_rep = analyze_cco_climb(ds, int(active_flight_id))
-            pru_vert = compute_flight_pru_kpis(ds, int(active_flight_id))
-            if cco_rep:
-                cc1, cc2, cc3, cc4 = st.columns(4)
-                cc1.metric("CCO Climb Compliance", f"{cco_rep.cco_compliance_score:.1f}%")
-                cc2.metric("Climb Duration to TOC", f"{cco_rep.total_climb_duration_min:.1f} min")
-                cc3.metric("Climb Level-Offs", f"{cco_rep.inefficiency_events_count} ({cco_rep.total_level_off_min:.1f}m)")
-                cc4.metric("Excess Climb Fuel", f"{cco_rep.excess_fuel_burned_kg:.1f} kg", f"{cco_rep.excess_co2_kg:.1f} kg CO₂")
-            if pru_vert:
-                st.caption(
-                    f"📏 **KPI19 Cruise Level-Capping:** Requested `FL{pru_vert.requested_fl:.0f}` vs. Actual Max `FL{pru_vert.max_actual_fl:.0f}` "
-                    f"(Deficit: `-{pru_vert.level_cap_delta_fl:.0f} FL`, Level-Capped: `{pru_vert.is_level_capped}`, "
-                    f"Estimated Cruise Cap Penalty: `+{pru_vert.level_cap_excess_fuel_kg:.1f} kg Jet-A`)"
                 )
-
-    with st.expander("🌐 Network-Wide KPI19 Cruise Level-Capping Corridors (Top Capped City Pairs)", expanded=False):
-        cap_res = analyze_network_level_capping(ds, top_n=12)
-        if cap_res.get("top_capped_corridors"):
-            st.caption(
-                f"Evaluated **{cap_res.get('analyzed_flights', 0):,}** flights "
-                f"(**{cap_res.get('level_capped_flights', 0):,}** capped / **{cap_res.get('level_capped_pct', 0.0):.1f}%**, "
-                f"mean deficit **-{cap_res.get('mean_fl_deficit', 0.0):.1f} FL**). "
-                "Identifies city pairs where ATC tactical or RAD restrictions systematically cap aircraft ≥2,000 ft below their filed optimal cruise flight level."
-            )
-            st.dataframe(pd.DataFrame(cap_res["top_capped_corridors"]), use_container_width=True)
-
-# ----------------- TAB 5: Delay & Runway Diagnostics -----------------
-with tab5:
-    st.header("Multi-Factor Delay Root-Cause Attribution & Runway Braking Safety")
-    flight = ds.get_flight(int(active_flight_id))
-    if not flight:
-        st.warning(f"Flight ID {active_flight_id} not found in period {selected_period}.")
-    else:
-        st.info(f"📍 **Active Flight:** `{ds.format_flight_label(flight)}`")
-        if st.button("Run Diagnostic Lab for Active Flight", key=f"btn_diag_{selected_period}"):
-            with st.spinner("Analyzing weather, tail turns, and holding stacks..."):
-                diag = diagnose_flight_bottlenecks(ds, metar_client, int(active_flight_id))
-
-            st.subheader(f"Diagnostic Report: ECTRL {diag.ectrl_id}")
-            dc1, dc2, dc3 = st.columns(3)
-            dc1.metric("Arrival Delay", f"{diag.total_arr_delay_min} min")
-            dc2.metric("Departure Delay", f"{diag.total_dep_delay_min} min")
-            dc3.metric("Primary Factor", diag.primary_bottleneck_factor)
-
-            st.info(f"💡 **Mitigation Recommendation:** {diag.mitigation_recommendation}")
-            st.json(diag.to_dict())
+                st.dataframe(sq_df, use_container_width=True)
 
         st.divider()
-        st.subheader("🛬 Arrival Runway Braking, Density Altitude & Overrun Safety Margin")
-        rwy_saf = assess_flight_runway_safety(ds, metar_client=None, ectrl_id=int(active_flight_id), fetch_live_metar=False)
-        if rwy_saf:
-            rs1, rs2, rs3, rs4 = st.columns(4)
-            rs1.metric("Recommended Runway", f"RWY {rwy_saf.recommended_runway}", rwy_saf.ils_precision_category)
-            rs2.metric("Density Altitude", f"{rwy_saf.density_altitude_ft:,.0f} ft", f"ISA {rwy_saf.isa_temp_deviation_c:+.1f}°C")
-            rs3.metric("Stopping Safety Margin", f"+{rwy_saf.landing_distance_safety_margin_m:,.0f} m", f"{rwy_saf.lda_utilization_pct:.1f}% of LDA")
-            rs4.metric("Runway Safety Risk", rwy_saf.safety_risk_level, rwy_saf.braking_action_code)
+        col_left, col_right = st.columns(2)
+        with col_left:
+            st.subheader("Busiest Hubs by Departures")
+            top_apt = ds.get_top_airports(10)
+            st.dataframe(top_apt, use_container_width=True)
 
-# ----------------- TAB 6: Fuel, Carbon & Route Charges -----------------
-with tab6:
-    st.header("Environmental, Surface LTO, Contrail & Eurocontrol CRCO Cost Quantification (€)")
-    flight = ds.get_flight(int(active_flight_id))
-    if not flight:
-        st.warning(f"Flight ID {active_flight_id} not found in period {selected_period}.")
-    else:
-        st.info(f"📍 **Active Flight:** `{ds.format_flight_label(flight)}`")
-        try:
-            impact = compute_flight_fuel_and_emissions(ds, int(active_flight_id))
-            fc1, fc2, fc3, fc4 = st.columns(4)
-            fc1.metric("Excess Distance", f"{impact.excess_distance_nm:.1f} nm")
-            fc2.metric("Excess Fuel Burned", f"{impact.total_excess_fuel_kg:,.1f} kg")
-            fc3.metric("Excess CO₂ Emitted", f"{impact.excess_co2_kg:,.1f} kg")
-            fc4.metric("Excess Fuel Cost", f"€{impact.estimated_excess_fuel_cost_eur:,.2f}")
-
-            price_gal = getattr(impact, "fuel_price_eur_per_gallon", 1.265 if selected_period == "201611" else 1.992)
-            price_kg = getattr(impact, "fuel_price_eur_per_kg", price_gal / 3.043)
-            price_week = getattr(impact, "fuel_price_week", "Weekly Spot Price")
-            price_source = getattr(impact, "fuel_price_source", "EIA Weekly Spot Price (EUR Converted)")
-
-            st.caption(
-                f"⛽ **Weekly Jet Fuel Pricing Applied:** `€{price_gal:.3f}/gal` "
-                f"(`€{price_kg:.4f}/kg`) | **Week:** `{price_week}` "
-                f"| **Benchmark:** `{price_source}`"
-            )
-        except Exception as e:
-            st.error(f"Error computing emissions for flight {active_flight_id}: {e}")
+        with col_right:
+            st.subheader("Worst Delayed Corridors")
+            top_delays = ds.get_top_delayed_routes(min_flights=50, limit=10)
+            st.dataframe(top_delays, use_container_width=True)
 
         if ds.has_fir_traversals():
-            taxi_rep = analyze_flight_taxi_out(ds, int(active_flight_id))
-            if taxi_rep:
-                st.divider()
-                st.subheader("🛞 Departure Surface Movement (TAXI_OUT) & ICAO EDB v32B LTO Idle Emissions")
-                tx1, tx2, tx3, tx4 = st.columns(4)
-                tx1.metric("Actual Taxi-Out", f"{taxi_rep.actual_taxi_out_min:.1f} min", f"UTOT p20: {taxi_rep.unimpeded_utot_min:.1f}m")
-                tx2.metric("ICAO KPI02 ATOT", f"+{taxi_rep.additional_atot_min:.1f} min", taxi_rep.congestion_status)
-                tx3.metric("Excess Queue Fuel & CO₂", f"{taxi_rep.excess_atot_fuel_kg:,.1f} kg", f"{taxi_rep.excess_co2_kg:,.1f} kg CO₂")
-                tx4.metric(
-                    "Excess LTO NOx / CO / nvPM",
-                    f"{taxi_rep.excess_nox_g:,.0f}g NOx / {taxi_rep.excess_co_g:,.0f}g CO",
-                    f"{taxi_rep.excess_nvpm_mg:,.0f} mg nvPM soot",
+            st.subheader("🌐 En-Route FIR Sector Hourly Saturation & Bottlenecks")
+            col_s1, col_s2 = st.columns([1, 3])
+            with col_s1:
+                sat_thresh = st.slider("Saturation Threshold (flts/hr)", 20, 100, 40, key=f"fir_thresh_{selected_period}")
+            sat_data = calculate_fir_hourly_saturation(ds, threshold_flights_per_hr=sat_thresh, top_n=10)
+            if sat_data.get("top_saturated_firs"):
+                sat_df = pd.DataFrame(sat_data["top_saturated_firs"])
+                st.dataframe(sat_df, use_container_width=True)
+
+            if ds.has_aua_traversals():
+                st.subheader("📡 ATC Unit Airspaces (AUA: TMA / CTA / UTA) Saturation")
+                col_a1, col_a2 = st.columns([1, 2])
+                with col_a1:
+                    aua_type_sel = st.selectbox(
+                        "Filter AUA Type",
+                        ["All (TMA/CTA/UTA)", "TMA", "CTA", "UTA"],
+                        key=f"aua_type_{selected_period}",
+                    )
+                with col_a2:
+                    aua_thresh = st.slider(
+                        "AUA Hourly Saturation Threshold (flts/hr)",
+                        15,
+                        90,
+                        30,
+                        key=f"aua_thresh_{selected_period}",
+                    )
+                aua_filter = None if aua_type_sel.startswith("All") else aua_type_sel
+                aua_sat = calculate_aua_hourly_saturation(
+                    ds, aua_type=aua_filter, threshold_flights_per_hr=aua_thresh, top_n=10
                 )
+                if aua_sat.get("top_saturated_auas"):
+                    st.dataframe(pd.DataFrame(aua_sat["top_saturated_auas"]), use_container_width=True)
+
+            st.subheader("🛞 Airport Surface Movement & ICAO KPI02 Additional Taxi-Out Time (ATOT)")
+            taxi_res = analyze_airport_taxi_out_performance(ds, min_flights=50, top_n=12)
+            if taxi_res.get("airports"):
                 st.caption(
-                    f"🔧 **Engine Profile:** `{taxi_rep.ac_type}` (Wake `{taxi_rep.wake_category}`, Default Engine `{taxi_rep.default_engine}`) "
-                    f"| **7% Idle + APU Rate:** `{taxi_rep.idle_fuel_rate_kg_min:.2f} kg/min` "
-                    f"| **Excess Queue Cost:** `€{taxi_rep.excess_fuel_cost_eur:,.2f} EUR`"
+                    "UTOT = 20th-percentile unimpeded taxi-out baseline per (airport, wake category) | "
+                    "ATOT = Additional Taxi-Out Time (ICAO GANP KPI02) | LTO Idle Emissions via ICAO EDB v32B"
                 )
-
-        crco_rep = compute_flight_crco_charges(ds, int(active_flight_id))
-        if crco_rep:
-            st.divider()
-            st.subheader("💶 Eurocontrol CRCO En-Route Navigation Charges & Direct Operating Cost (€)")
-            cr1, cr2, cr3, cr4 = st.columns(4)
-            cr1.metric("Aircraft Weight Factor", f"{crco_rep.crco_weight_factor:.3f}", f"MTOW: {crco_rep.mtow_tons:.1f} t")
-            cr2.metric("CRCO Service Units", f"{crco_rep.total_service_units:.2f} SU", f"{crco_rep.actual_distance_km:.0f} km")
-            cr3.metric("Actual CRCO Fee", f"€{crco_rep.actual_crco_charge_eur:,.2f}", f"Filed: €{crco_rep.filed_crco_charge_eur:,.2f}")
-            cr4.metric(
-                "Total Direct Route Cost",
-                f"€{crco_rep.total_direct_route_cost_eur:,.2f}",
-                f"{crco_rep.crco_share_of_direct_cost_pct:.1f}% CRCO share",
-            )
-            if crco_rep.fir_breakdown:
-                st.dataframe(pd.DataFrame([b.__dict__ for b in crco_rep.fir_breakdown]), use_container_width=True)
-
-        contrail_rep = analyze_flight_wind_and_contrails(ds, int(active_flight_id))
-        if contrail_rep:
-            st.divider()
-            st.subheader("🌬️ Upper-Air Winds & Persistent Contrail (ISSR) Climate Impact")
-            ct1, ct2, ct3, ct4 = st.columns(4)
-            ct1.metric("Avg GS vs TAS", f"{contrail_rep.avg_groundspeed_kts:.0f} kts GS", f"TAS: {contrail_rep.avg_true_airspeed_kts:.0f} kts")
-            ct2.metric("Net Upper-Air Wind", f"{contrail_rep.avg_tailwind_component_kts:+.1f} kts", f"{contrail_rep.wind_time_savings_min:+.1f}m wind time")
-            ct3.metric("Persistent Contrail (ISSR)", f"{contrail_rep.persistent_contrail_distance_nm:.1f} nm", f"{contrail_rep.persistent_contrail_pct:.1f}% of cruise")
-            ct4.metric(
-                "Total Climate Multiplier",
-                f"{contrail_rep.total_climate_co2e_multiplier:.2f}x CO₂e",
-                f"+{contrail_rep.contrail_co2e_tons:.2f}t contrail CO₂e",
-            )
-            if contrail_rep.issr_segments:
-                st.dataframe(pd.DataFrame([s.__dict__ for s in contrail_rep.issr_segments]), use_container_width=True)
-
-    st.divider()
-    with st.expander("💶 Corridor Route-Charge Avoidance vs. Extra Fuel Burn Trade-Off Scanner", expanded=False):
-        st.markdown(
-            "Analyzes city-pair corridors to detect whether longer horizontal routes are driven by **CRCO navigation charge avoidance** "
-            "(flying around high-unit-rate FIRs) versus ATC tactical weather/congestion detours."
-        )
-        col_rc1, col_rc2, col_rc3 = st.columns(3)
-        rc_adep = col_rc1.text_input("Origin (ADEP)", value="EGLL", key=f"rc_adep_{selected_period}").strip().upper()
-        rc_ades = col_rc2.text_input("Destination (ADES)", value="LIRF", key=f"rc_ades_{selected_period}").strip().upper()
-        rc_ac = col_rc3.text_input("Aircraft Type (Optional)", value="A320", key=f"rc_ac_{selected_period}").strip().upper()
-        if st.button("Analyze Corridor CRCO Economics", key=f"btn_crco_corridor_{selected_period}"):
-            crco_corr = detect_route_charge_avoidance(
-                ds, adep=rc_adep, ades=rc_ades, ac_type=rc_ac if rc_ac else None
-            )
-            if not crco_corr.get("flights"):
-                st.warning(f"No matching flights found on corridor `{rc_adep} ➔ {rc_ades}`.")
-            else:
-                cc_m1, cc_m2, cc_m3, cc_m4 = st.columns(4)
-                cc_m1.metric("Flights Analyzed", f"{crco_corr['analyzed_flights']}")
-                cc_m2.metric("Shortest Route Dist", f"{crco_corr['shortest_route_distance_nm']:.1f} nm")
-                cc_m3.metric("Shortest Route CRCO Fee", f"€{crco_corr['shortest_route_crco_eur']:,.2f} EUR")
-                cc_m4.metric("Avoidance Detour Candidates", f"{crco_corr['avoidance_candidates_count']} flights")
-                st.dataframe(pd.DataFrame(crco_corr["flights"]), use_container_width=True)
-
-    with st.expander(f"📊 View Weekly Average Jet Fuel Spot Prices in Euros ({selected_period})", expanded=False):
-        all_fuel_df = get_all_weekly_fuel_prices_df()
-        period_fuel_df = all_fuel_df[all_fuel_df["period_id"] == selected_period]
-        if not period_fuel_df.empty:
-            st.dataframe(
-                period_fuel_df[["week_label", "price_eur_per_gallon", "price_eur_per_kg", "price_eur_per_metric_ton", "source"]],
-                use_container_width=True,
-            )
+                st.dataframe(pd.DataFrame(taxi_res["airports"]), use_container_width=True)
         else:
-            st.dataframe(all_fuel_df, use_container_width=True)
+            st.subheader("Top Congested European FIR Airspace Sectors")
+            fir_df = analyze_fir_bottlenecks(ds, limit=8)
+            st.dataframe(fir_df, use_container_width=True)
 
-# ----------------- TAB 7: Twin-Flight Efficiency Benchmarking -----------------
-with tab7:
-    st.header("Twin-Flight Efficiency Benchmarking & Dual-Trajectory Map")
-    st.markdown(
-        "Compare and contrast the most and least efficient flights between the same city pair operating the same aircraft type. "
-        "Reveals route detours, airspace bypasses, divergence coordinates, and excess fuel consumption in Euros (`€`)."
-    )
-    col_t1, col_t2, col_t3 = st.columns(3)
-    t_adep = col_t1.text_input("Origin (ADEP)", "RKSI", key=f"t_adep_{selected_period}").strip().upper()
-    t_ades = col_t2.text_input("Destination (ADES)", "EGLL", key=f"t_ades_{selected_period}").strip().upper()
-    t_ac = col_t3.text_input("Aircraft Type", "B77W", key=f"t_ac_{selected_period}").strip().upper()
+        with st.expander("📻 ATC Controller-Pilot VHF Radio Frequency Workload & Comms Occupancy", expanded=False):
+            col_rad1, col_rad2 = st.columns([1, 3])
+            with col_rad1:
+                rad_apt = st.text_input("Airport ICAO", value="EGLL", key=f"rad_apt_{selected_period}").strip().upper()
+            rad_res = estimate_airport_and_sector_radio_workload(ds, airport_icao=rad_apt)
+            rc1, rc2, rc3, rc4 = st.columns(4)
+            rc1.metric("Peak Movements / Hr", f"{rad_res['peak_hourly_movements']}")
+            rc2.metric("Cataloged VHF Channels", f"{rad_res['total_vhf_channels_cataloged']}")
+            rc3.metric("Terminal ILS/VOR/DME", f"{rad_res['associated_ils_vor_dme_count']}")
+            rc4.metric("Primary Comms Bottleneck", rad_res["primary_comms_bottleneck"], f"{rad_res['peak_voice_occupancy_pct']:.1f}% occ")
+            st.dataframe(pd.DataFrame(rad_res["positions"]), use_container_width=True)
 
-    twin_comp = compare_twin_flights(ds, adep=t_adep, ades=t_ades, ac_type=t_ac)
-    if not twin_comp:
-        st.warning(f"Not enough matching flights for `{t_adep} ➔ {t_ades}` (`{t_ac}`) in period `{selected_period}`. Try another city pair or aircraft type.")
-    else:
-        col_b1, col_b2, col_b3, col_b4 = st.columns(4)
-        col_b1.metric("Distance Disparity", f"+{twin_comp.distance_penalty_nm:.1f} nm")
-        col_b2.metric("Air Time Disparity", f"+{twin_comp.air_time_penalty_min:.1f} min")
-        col_b3.metric("Excess Fuel Burned", f"+{twin_comp.excess_fuel_burned_kg:,.1f} kg")
-        col_b4.metric("Excess Fuel Cost", f"€{twin_comp.excess_fuel_cost_eur:,.2f}")
+        # ----------------- TAB 2: Trajectory Explorer -----------------
 
-        st.subheader("🗺️ Dual-Trajectory Comparison Map (Green = Most Efficient Twin | Red = Least Efficient Twin)")
-        twin_map = render_twin_comparison_map(ds, twin_comp)
-        st_folium(
-            twin_map,
-            width=1200,
-            height=500,
-            returned_objects=[],
-            key=f"twin_map_{selected_period}_{twin_comp.fast_id}_{twin_comp.slow_id}",
+    with sys_sub2:
+        st.header("Macro Evolution, FRA Structural Shift, Weather Correlation & AIRAC Diffing")
+        st.markdown(
+            "Compare two Eurocontrol monthly archives to uncover macro shifts in global air traffic, "
+            "airline market expansion, delay patterns, Free Route Airspace (`FRA`) adoption, and fleet modernization."
         )
 
-        if twin_comp.divergence_lat and twin_comp.divergence_lon:
-            st.warning(
-                f"⚠️ **Lateral Route Divergence Point:** `{twin_comp.divergence_lat:.3f}°, {twin_comp.divergence_lon:.3f}°` "
-                f"(marked in orange on the map where the two trajectories separate by >30 nm)."
-            )
+        col_p1, col_p2 = st.columns(2)
+        p1_val = col_p1.selectbox("Baseline Period", available_periods, index=0, key="macro_p1")
+        p2_val = col_p2.selectbox("Comparison Period", available_periods, index=min(1, len(available_periods) - 1), key="macro_p2")
 
-        st.subheader("Operational Disparity Breakdown")
-        twin_table = [
-            {
-                "Metric": "ECTRL Flight ID",
-                "High-Efficiency Flight (Green)": str(twin_comp.fast_id),
-                "Low-Efficiency Flight (Red)": str(twin_comp.slow_id),
-                "Delta": "-",
-            },
-            {
-                "Metric": "Airline Operator",
-                "High-Efficiency Flight (Green)": twin_comp.fast_operator,
-                "Low-Efficiency Flight (Red)": twin_comp.slow_operator,
-                "Delta": "-",
-            },
-            {
-                "Metric": "Flown Distance",
-                "High-Efficiency Flight (Green)": f"{twin_comp.fast_actual_distance_nm:.1f} nm",
-                "Low-Efficiency Flight (Red)": f"{twin_comp.slow_actual_distance_nm:.1f} nm",
-                "Delta": f"+{twin_comp.distance_penalty_nm:.1f} nm",
-            },
-            {
-                "Metric": "Air Time",
-                "High-Efficiency Flight (Green)": f"{twin_comp.fast_air_time_min:.1f} min",
-                "Low-Efficiency Flight (Red)": f"{twin_comp.slow_air_time_min:.1f} min",
-                "Delta": f"+{twin_comp.air_time_penalty_min:.1f} min",
-            },
-            {
-                "Metric": "Extension Ratio (KEA)",
-                "High-Efficiency Flight (Green)": f"{twin_comp.fast_extension_ratio:.3f}x",
-                "Low-Efficiency Flight (Red)": f"{twin_comp.slow_extension_ratio:.3f}x",
-                "Delta": f"+{twin_comp.slow_extension_ratio - twin_comp.fast_extension_ratio:.3f}x",
-            },
-            {
-                "Metric": "Fuel Burned",
-                "High-Efficiency Flight (Green)": f"{twin_comp.fast_fuel_kg:,.1f} kg",
-                "Low-Efficiency Flight (Red)": f"{twin_comp.slow_fuel_kg:,.1f} kg",
-                "Delta": f"+{twin_comp.excess_fuel_burned_kg:,.1f} kg",
-            },
-            {
-                "Metric": "Estimated Fuel Cost (€)",
-                "High-Efficiency Flight (Green)": "-",
-                "Low-Efficiency Flight (Red)": "-",
-                "Delta": f"+€{twin_comp.excess_fuel_cost_eur:,.2f} EUR",
-            },
-        ]
-        st.dataframe(pd.DataFrame(twin_table), use_container_width=True)
+        if st.button("Compare Monthly Archives", key="btn_compare_macro"):
+            with st.spinner(f"Performing macro comparative analytics {p1_val} vs {p2_val}..."):
+                comp = compare_aviation_periods(period1=p1_val, period2=p2_val)
 
-# ----------------- TAB 8: What-If & Stress Tests -----------------
-with tab8:
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric("Baseline Flights", f"{comp.total_flights_p1:,}")
+            mc2.metric("Comparison Flights", f"{comp.total_flights_p2:,}")
+            mc3.metric("Traffic Growth", f"{comp.traffic_growth_pct:+.1f}%")
+            mc4.metric("Delay Shift", f"{comp.delay_change_min:+.2f} min")
+
+            st.subheader("Airline Market Growth & Contraction")
+            if comp.top_growing_airlines:
+                st.dataframe(pd.DataFrame(comp.top_growing_airlines), use_container_width=True)
+
+            st.subheader("Fleet Modernization & Aircraft Family Shifts")
+            if comp.fleet_modernization_shifts:
+                st.dataframe(pd.DataFrame(comp.fleet_modernization_shifts), use_container_width=True)
+
+            st.subheader("Top Hub Movements Comparison")
+            if comp.busiest_airports_comparison:
+                st.dataframe(pd.DataFrame(comp.busiest_airports_comparison), use_container_width=True)
+
+        st.divider()
+        st.subheader("🛣️ Free Route Airspace (FRA) vs. Fixed ATS Airway Structural Evolution")
+        if st.button("Compare FRA Directness Evolution Across Archives", key="btn_fra_evo"):
+            with st.spinner(f"Sampling trajectories in {p1_val} and {p2_val} against 86,280 global waypoints & airways..."):
+                fra_evo = compare_fra_evolution(period1=p1_val, period2=p2_val, sample_flights=150)
+            fe1, fe2, fe3 = st.columns(3)
+            fe1.metric(f"{p1_val} FRA Direct Share", f"{fra_evo['period1']['fra_direct_pct']:.1f}%", f"{fra_evo['period1']['fra_dct_waypoints']:,} DCT pts")
+            fe2.metric(f"{p2_val} FRA Direct Share", f"{fra_evo['period2']['fra_direct_pct']:.1f}%", f"{fra_evo['period2']['fra_dct_waypoints']:,} DCT pts")
+            fe3.metric("FRA Structural Shift", f"{fra_evo['fra_shift_percentage_points']:+.1f} pp")
+
+        st.divider()
+        st.subheader("🌦️ European Hub Weather Disruption Correlation (Daily IFR/Wind vs. Arrival Delays)")
+        if st.button(f"Analyze Hub Weather vs. Delay Correlation ({selected_period})", key=f"btn_wx_corr_{selected_period}"):
+            with st.spinner("Correlating IEM ASOS METAR hub weather severity against daily arrival delays..."):
+                wx_rep = analyze_network_weather_impact(ds, metar_client)
+            wx1, wx2, wx3, wx4 = st.columns(4)
+            wx1.metric("Clear-Sky Baseline Delay", f"{wx_rep.clear_sky_baseline_delay_min:+.2f} min")
+            wx2.metric("Delay / Weather Severity Slope", f"{wx_rep.delay_sensitivity_minutes_per_severity_point:+.2f} min/pt")
+            wx3.metric("Delay vs IFR Correlation (r)", f"{wx_rep.pearson_corr_delay_vs_ifr:+.3f}")
+            wx4.metric("Worst Weather Day", f"{wx_rep.worst_weather_day['date']}", f"{wx_rep.worst_weather_day['avg_delay_min']:+.1f}m delay")
+            if wx_rep.daily_time_series:
+                st.dataframe(pd.DataFrame([r.__dict__ for r in wx_rep.daily_time_series]), use_container_width=True)
+
+        st.divider()
+
+        st.subheader("Aeronautical Configuration Diffing (AIRAC Cycles)")
+        st.markdown("Track airway commissionings, decommissionings, and FIR boundary revisions across cycles.")
+        col_a1, col_a2 = st.columns(2)
+        ac_c1 = col_a1.text_input("Cycle 1", "2509", key="airac_c1")
+        ac_c2 = col_a2.text_input("Cycle 2", "2510", key="airac_c2")
+
+        if st.button("Diff AIRAC Configurations", key="btn_airac_diff"):
+            with st.spinner(f"Diffing AIRAC {ac_c1} ➔ {ac_c2}..."):
+                diff_rep = compare_airac_cycles(cycle1=ac_c1, cycle2=ac_c2)
+
+            rc = diff_rep.route_changes
+            fc = diff_rep.fir_changes
+
+            ad1, ad2, ad3, ad4 = st.columns(4)
+            ad1.metric("Added Airways", f"+{rc.added_routes_count}")
+            ad2.metric("Deleted Airways", f"-{rc.deleted_routes_count}")
+            ad3.metric("Modified Airways", f"~{rc.modified_routes_count}")
+            ad4.metric("Re-profiled FIRs", f"~{fc.modified_boundaries_count}")
+
+            st.json(diff_rep.to_dict())
+
+        # ----------------- TAB 10: Methodology & KPI Reference -----------------
+
+# =============================================================================
+# 3. WHAT-IF SCENARIO VIEWS
+# =============================================================================
+with tab_cat_whatif:
+    st.caption(
+        "Prescriptive operations research and counterfactual airspace stress testing: turnaround buffers, "
+        "crosswind runway collapse, fleet infection fragility, hub tail swaps, 4D co-altitude proximity conflicts, and GDP arrival slots."
+    )
+    render_page_export_bar("what_if_scenarios", "cat_whatif")
     st.header("Counterfactual Simulations, Airspace Conflict Scanner & Operations Research")
     render_page_export_bar("what_if_stress_tests", "tab8")
 
@@ -1699,218 +1507,459 @@ with tab8:
     else:
         st.info(f"No arrivals found for `{gdp_apt}` in the selected UTC window `{gdp_window[0]:02d}:00–{gdp_window[1]:02d}:00`.")
 
-# ----------------- TAB 9: Macro Evolution & AIRAC Diff -----------------
-with tab9:
-    st.header("Macro Evolution, FRA Structural Shift, Weather Correlation & AIRAC Diffing")
-    st.markdown(
-        "Compare two Eurocontrol monthly archives to uncover macro shifts in global air traffic, "
-        "airline market expansion, delay patterns, Free Route Airspace (`FRA`) adoption, and fleet modernization."
+    # ----------------- TAB 9: Macro Evolution & AIRAC Diff -----------------
+
+# =============================================================================
+# 4. INFORMATION & MAP VIEWS
+# =============================================================================
+with tab_cat_maps:
+    st.caption(
+        "Dedicated geographic and aeronautical information visualization: 5°×5° European airspace saturation heatmaps, "
+        "4D co-altitude aircraft conflict radar, global radio navaids world directory, and regulatory KPI references."
     )
-
-    col_p1, col_p2 = st.columns(2)
-    p1_val = col_p1.selectbox("Baseline Period", available_periods, index=0, key="macro_p1")
-    p2_val = col_p2.selectbox("Comparison Period", available_periods, index=min(1, len(available_periods) - 1), key="macro_p2")
-
-    if st.button("Compare Monthly Archives", key="btn_compare_macro"):
-        with st.spinner(f"Performing macro comparative analytics {p1_val} vs {p2_val}..."):
-            comp = compare_aviation_periods(period1=p1_val, period2=p2_val)
-
-        mc1, mc2, mc3, mc4 = st.columns(4)
-        mc1.metric("Baseline Flights", f"{comp.total_flights_p1:,}")
-        mc2.metric("Comparison Flights", f"{comp.total_flights_p2:,}")
-        mc3.metric("Traffic Growth", f"{comp.traffic_growth_pct:+.1f}%")
-        mc4.metric("Delay Shift", f"{comp.delay_change_min:+.2f} min")
-
-        st.subheader("Airline Market Growth & Contraction")
-        if comp.top_growing_airlines:
-            st.dataframe(pd.DataFrame(comp.top_growing_airlines), use_container_width=True)
-
-        st.subheader("Fleet Modernization & Aircraft Family Shifts")
-        if comp.fleet_modernization_shifts:
-            st.dataframe(pd.DataFrame(comp.fleet_modernization_shifts), use_container_width=True)
-
-        st.subheader("Top Hub Movements Comparison")
-        if comp.busiest_airports_comparison:
-            st.dataframe(pd.DataFrame(comp.busiest_airports_comparison), use_container_width=True)
-
-    st.divider()
-    st.subheader("🛣️ Free Route Airspace (FRA) vs. Fixed ATS Airway Structural Evolution")
-    if st.button("Compare FRA Directness Evolution Across Archives", key="btn_fra_evo"):
-        with st.spinner(f"Sampling trajectories in {p1_val} and {p2_val} against 86,280 global waypoints & airways..."):
-            fra_evo = compare_fra_evolution(period1=p1_val, period2=p2_val, sample_flights=150)
-        fe1, fe2, fe3 = st.columns(3)
-        fe1.metric(f"{p1_val} FRA Direct Share", f"{fra_evo['period1']['fra_direct_pct']:.1f}%", f"{fra_evo['period1']['fra_dct_waypoints']:,} DCT pts")
-        fe2.metric(f"{p2_val} FRA Direct Share", f"{fra_evo['period2']['fra_direct_pct']:.1f}%", f"{fra_evo['period2']['fra_dct_waypoints']:,} DCT pts")
-        fe3.metric("FRA Structural Shift", f"{fra_evo['fra_shift_percentage_points']:+.1f} pp")
-
-    st.divider()
-    st.subheader("🌦️ European Hub Weather Disruption Correlation (Daily IFR/Wind vs. Arrival Delays)")
-    if st.button(f"Analyze Hub Weather vs. Delay Correlation ({selected_period})", key=f"btn_wx_corr_{selected_period}"):
-        with st.spinner("Correlating IEM ASOS METAR hub weather severity against daily arrival delays..."):
-            wx_rep = analyze_network_weather_impact(ds, metar_client)
-        wx1, wx2, wx3, wx4 = st.columns(4)
-        wx1.metric("Clear-Sky Baseline Delay", f"{wx_rep.clear_sky_baseline_delay_min:+.2f} min")
-        wx2.metric("Delay / Weather Severity Slope", f"{wx_rep.delay_sensitivity_minutes_per_severity_point:+.2f} min/pt")
-        wx3.metric("Delay vs IFR Correlation (r)", f"{wx_rep.pearson_corr_delay_vs_ifr:+.3f}")
-        wx4.metric("Worst Weather Day", f"{wx_rep.worst_weather_day['date']}", f"{wx_rep.worst_weather_day['avg_delay_min']:+.1f}m delay")
-        if wx_rep.daily_time_series:
-            st.dataframe(pd.DataFrame([r.__dict__ for r in wx_rep.daily_time_series]), use_container_width=True)
-
-    st.divider()
-
-    st.subheader("Aeronautical Configuration Diffing (AIRAC Cycles)")
-    st.markdown("Track airway commissionings, decommissionings, and FIR boundary revisions across cycles.")
-    col_a1, col_a2 = st.columns(2)
-    ac_c1 = col_a1.text_input("Cycle 1", "2509", key="airac_c1")
-    ac_c2 = col_a2.text_input("Cycle 2", "2510", key="airac_c2")
-
-    if st.button("Diff AIRAC Configurations", key="btn_airac_diff"):
-        with st.spinner(f"Diffing AIRAC {ac_c1} ➔ {ac_c2}..."):
-            diff_rep = compare_airac_cycles(cycle1=ac_c1, cycle2=ac_c2)
-
-        rc = diff_rep.route_changes
-        fc = diff_rep.fir_changes
-
-        ad1, ad2, ad3, ad4 = st.columns(4)
-        ad1.metric("Added Airways", f"+{rc.added_routes_count}")
-        ad2.metric("Deleted Airways", f"-{rc.deleted_routes_count}")
-        ad3.metric("Modified Airways", f"~{rc.modified_routes_count}")
-        ad4.metric("Re-profiled FIRs", f"~{fc.modified_boundaries_count}")
-
-        st.json(diff_rep.to_dict())
-
-# ----------------- TAB 10: Methodology & KPI Reference -----------------
-with tab10:
-    st.header("📖 Aviation Intelligence Methodology, Physics Models & KPI Reference")
-    st.markdown(
-        "Use this reference guide to look up the mathematical definitions, international standards "
-        "(**ICAO GANP**, **Eurocontrol PRU**, **Eurocontrol CRCO**, **ICAO Aircraft Engine Emissions Databank v32B**, and **OpenAP**), "
-        "and operations research algorithms powering every metric in the FlightML Workbench."
-    )
-
-    ref_sub1, ref_sub2, ref_sub3, ref_sub4, ref_sub5 = st.tabs(
+    render_page_export_bar("maps_navigation", "cat_maps")
+    map_sub1, map_sub2 = st.tabs(
         [
-            "📏 ICAO GANP & PRU KPIs",
-            "🗺️ Airspace Saturation & 4D Conflicts",
-            "🌱 Fuel, LTO Emissions & Contrails",
-            "💶 Eurocontrol CRCO & Cost Economics",
-            "🔮 Operations Research & Safety Models",
+            "📡 Global Radio Navaids World Map",
+            "📖 Methodology & KPI Reference",
         ]
     )
 
-    with ref_sub1:
-        st.subheader("ICAO Global Air Navigation Plan (GANP) & Eurocontrol PRU Indicators")
+    with map_sub1:
+        st.header("🌍 Global Radio Navaids World Map & Station Directory")
+        render_page_export_bar("global_navaids", "tab_world_nav")
         st.markdown(
-            """
-| KPI Code | Official Indicator Name | Mathematical Formulation & Operational Meaning |
-| :--- | :--- | :--- |
-| **KPI02 (ATOT)** | **Additional Taxi-Out Time** | $\\text{ATOT} = \\max(0,\\; \\text{Actual Taxi-Out} - \\text{UTOT}_{p20})$, where $\\text{UTOT}_{p20}$ is the **20th percentile unimpeded taxi-out time** for that specific `(airport, wake turbulence category)` pair. Measures departure runway queue congestion and surface hold time. |
-| **KPI04 (KEP)** | **Horizontal En-Route Flight Efficiency (Filed)** | $\\text{KEP (\\%)} = \\left(\\frac{L_{\\text{filed, >40nm}} - D_{\\text{GCD, >40nm}}}{D_{\\text{GCD, >40nm}}}\\right) \\times 100$. Evaluates how much extra distance the airline's filed flight plan adds outside the 40 nm origin and destination terminal cylinders relative to the achieved Great Circle Distance ($D_{\\text{GCD}}$). Indicates structural route availability, RAD restrictions, or route-charge avoidance. |
-| **KPI05 (KEA)** | **Horizontal En-Route Flight Efficiency (Actual)** | $\\text{KEA (\\%)} = \\left(\\frac{L_{\\text{actual, >40nm}} - D_{\\text{GCD, >40nm}}}{D_{\\text{GCD, >40nm}}}\\right) \\times 100$. Measures the actual flown en-route distance extension outside the 40 nm cylinders. **Tactical ATC Attribution ($\\text{KEA} - \\text{KEP}$)**: When $\\text{KEA} < \\text{KEP}$, ATC cleared tactical directs (`DCT`); when $\\text{KEA} > \\text{KEP}$, tactical vectoring or weather deviations lengthened the flight. |
-| **KPI08 (ASMA)** | **Additional Time in Terminal Airspace (40 nm)** | $\\text{ASMA}_{\\text{add}} = \\max(0,\\; T_{\\text{40nm\\to ALDT}} - T_{\\text{unimpeded, p20}})$. Tracks arrival sequencing, trombone vectoring, and airborne holding inside the 40 nm Arrival Sequencing and Metering Area cylinder. |
-| **KPI17 (CCO)** | **Continuous Climb Operations (Climb Profile)** | Identifies intermediate level-offs ($|\\text{ROCD}| < 200\\text{ ft/min}$ for $\\ge 60\\text{ s}$) below Top of Climb (`TOC`). Level-offs at low/medium altitudes force high drag and higher specific fuel consumption compared to an uninterrupted climb to cruise altitude. |
-| **KPI19 (CDO & Level-Cap)** | **Continuous Descent Operations & Cruise Level-Capping** | **CDO** measures uninterrupted idle-thrust descent from Top of Descent (`TOD`) to landing without throttle-up level segments. **Cruise Level-Capping** compares the filed requested Flight Level ($\\text{FL}_{\\text{req}}$) against the maximum actual achieved cruise level ($\\text{FL}_{\\text{max,act}}$); a deficit $\\ge 20\\text{ FL}$ ($2,000\\text{ ft}$) increases cruise fuel burn by ~1.25% per $1,000\\text{ ft}$. |
-| **FRA vs. ATS** | **Free Route Airspace Directness Index** | Matches actual trajectory legs against **86,280 global 5-letter waypoints (`fix.dat`)**, **17,090 VHF navaids (`nav.dat`)**, and published ATS airways. Segments where consecutive waypoints lie on the same published airway are classified as **Structured ATS Airway**; off-airway point-to-point segments are classified as **Free Route Airspace (`FRA / DCT`)**. |
-| **RNP / RNAV & RLOS** | **Anticipated PBN Navigation Capability (ICAO Doc 9613)** | Evaluates terrestrial `DME`, `VOR`, `ILS/LOC`, and `NDB` stations within the VHF/UHF **Radio Line-of-Sight (`RLOS`)** horizon $D_{\\text{RLOS}} (\\text{nm}) = 1.23 \\times (\\sqrt{h_{\\text{ac, ft}}} + \\sqrt{h_{\\text{nav, ft}}})$ at each 4D waypoint: **`0.1 nm`** (`xLS / RNP AR APCH 0.1` with ILS/LOC lock), **`0.3 nm`** (`RNP APCH 0.3`), **`1.0 nm`** (`RNAV 1 / RNP 1` with $\\ge 2$–$3$ DMEs in RLOS), **`2.0 nm`** (`RNAV 2` dual-DME), **`5.0 nm`** (`RNAV 5 / B-RNAV` single VOR/DME), and **`10.0 nm`** (`RNP 4 / RNP 10` Oceanic/Remote beyond-RLOS relying on GNSS + IRS). |
-"""
+            "Explore **all global terrestrial radio navigation aids** (`VOR-DME / VORTAC`, `DME / TACAN`, `VOR`, `ILS / LOC`, and `NDB`) "
+            "fused across the X-Plane 1100 global navigation database and OurAirports navaid registry. "
+            "Filter by navaid type, geographic region/viewport, or station identifier."
         )
 
-    with ref_sub2:
-        st.subheader("5° × 5° Airspace Saturation, Dynamic Complexity & 4D Proximity Detection")
-        st.markdown(
-            """
-#### 1. 5° × 5° Hourly Grid Saturation (Period Average by Hour of Day)
-To give air navigation analysts a clear macro view of European traffic waves, trajectories across all days in the selected archive are bucketed into **$5^\\circ \\text{ Latitude} \\times 5^\\circ \\text{ Longitude}$ geographic squares** for each hour of the day (`00:00` to `23:00 UTC`):
-- **Average Flights / Hour ($\\bar{N}_{h}$)**: Total distinct aircraft traversing the $5^\\circ \\times 5^\\circ$ square during hour $h$ divided by the number of active days in the archive.
-- **Peak Flights / Hour ($N_{\\max,h}$)**: Highest single-day aircraft count in that square during hour $h$.
-- **Vertical Transition Share ($V_{\\%}$)**: Percentage of 4D trajectory points inside the square that are actively climbing or descending ($|\\Delta \\text{FL}| \\ge 5$) rather than in level cruise.
-- **Dynamic Complexity Index**:
-  $$\\text{Complexity Index} = \\bar{N}_{h} \\times \\left(1 + \\frac{V_{\\%}}{100}\\right)$$
-  Squares are classified into four operational tiers:
-  - 🔴 **`CRITICAL_SATURATION`**: $\\bar{N}_{h} \\ge 80\\text{ flts/hr}$ or $\\text{Complexity Index} \\ge 100$
-  - 🟠 **`HIGH_DENSITY`**: $\\bar{N}_{h} \\ge 40\\text{ flts/hr}$ or $\\text{Complexity Index} \\ge 55$
-  - 🟡 **`MODERATE_FLOW`**: $\\bar{N}_{h} \\ge 15\\text{ flts/hr}$
-  - 🟢 **`LOW_DENSITY`**: $< 15\\text{ flts/hr}$
+        WORLD_REGIONS: dict[str, tuple[float, float, float, float, float, float, int]] = {
+            "🌍 Entire World": (-85.0, 85.0, -180.0, 180.0, 25.0, 10.0, 2),
+            "🇪🇺 Europe & North Atlantic": (34.0, 72.0, -25.0, 45.0, 50.0, 10.0, 4),
+            "🌎 North America": (15.0, 72.0, -170.0, -50.0, 40.0, -98.0, 3),
+            "🌏 Asia-Pacific": (-48.0, 60.0, 65.0, 180.0, 22.0, 118.0, 3),
+            "🌍 Middle East & Africa": (-38.0, 40.0, -20.0, 65.0, 12.0, 25.0, 3),
+            "🌎 South & Central America": (-58.0, 15.0, -95.0, -30.0, -18.0, -60.0, 3),
+        }
 
-#### 2. FIR & AUA (TMA / CTA / UTA) Sector Dwell Inefficiency
-- **FIR (`Fir_Airspace`)**: National/regional Flight Information Regions (`EGTTFIR`, `LFFFFIR`, `EDGGFIR`).
-- **AUA (`AUA_Airspace`)**: Granular Air Traffic Control Unit Airspaces separating **Terminal Manoeuvring Areas (`TMA`)**, **Control Areas (`CTA`)**, and **Upper Control Areas (`UTA`)**. Comparing `entry_time`/`exit_time` between ` Actual ` and ` Filed ` traversals pinpoints whether excess dwell occurred in terminal approach airspace or en-route upper sectors.
+        wn_c1, wn_c2, wn_c3, wn_c4 = st.columns([2, 2, 1.5, 1.5])
+        with wn_c1:
+            wn_types = st.multiselect(
+                "Filter Navaid Types",
+                options=["VOR-DME", "DME", "VOR", "ILS_LOC", "NDB"],
+                default=["VOR-DME", "DME", "VOR"],
+                key=f"wn_types_{selected_period}",
+                help="Select which navaid categories to render on the global map (VOR-DME/VORTAC, standalone DME/TACAN, VOR, ILS/LOC, NDB).",
+            )
+        with wn_c2:
+            wn_region = st.selectbox(
+                "Geographic Region / Viewport",
+                options=list(WORLD_REGIONS.keys()),
+                index=0,
+                key=f"wn_region_{selected_period}",
+            )
+        with wn_c3:
+            wn_search = st.text_input(
+                "Search Ident or Name",
+                value="",
+                placeholder="e.g. BPK, LAM, FRANKFURT",
+                key=f"wn_search_{selected_period}",
+            ).strip()
+        with wn_c4:
+            wn_limit = st.slider(
+                "Max Map Markers",
+                min_value=500,
+                max_value=6000,
+                value=2500,
+                step=500,
+                key=f"wn_limit_{selected_period}",
+                help="Maximum number of navaid markers rendered simultaneously on the HTML5 Canvas world map.",
+            )
 
-#### 3. 4D Co-Altitude Airspace Proximity Scanner (Scenario E)
-- Trajectories are linearly interpolated in 4D `(latitude, longitude, flight_level, groundspeed, track)` at synchronized 1-minute UTC epochs (`:00`, `:15`, `:30`, `:45`).
-- Spatial bounding-box pruning followed by exact Haversine distance and altitude filtering flags every aircraft pair operating simultaneously within **$< 1,000\\text{ ft}$ vertical ($10\\text{ FL}$)** and **$\\le 5.0\\text{ nm}$ horizontal separation** (with `< 3.0 nm` flagged as a **Loss-of-Separation Alert**).
-
-#### 4. ATC VHF Radio Frequency Occupancy
-- Cross-references airport/TMA VHF voice channels (`apt_frequencies.csv`) and navaids (`nav.dat`) against peak hourly movements. Assuming 3.5 controller-pilot voice exchanges per flight in a sector at 9 seconds per exchange (including readback), occupancy above **60%** indicates controller voice saturation where an additional frequency split is required.
-"""
+        min_lat, max_lat, min_lon, max_lon, c_lat, c_lon, z_lvl = WORLD_REGIONS[wn_region]
+        world_nav_df = _cached_world_navaids(
+            selected_period,
+            min_lat=min_lat,
+            max_lat=max_lat,
+            min_lon=min_lon,
+            max_lon=max_lon,
+            nav_types_tuple=tuple(wn_types if wn_types else ["NONE"]),
+            search_query=wn_search if wn_search else None,
+            limit=wn_limit,
         )
 
-    with ref_sub3:
-        st.subheader("Fuel Burn, ICAO EDB v32B LTO Surface Emissions & Contrail Physics")
-        st.markdown(
-            """
-#### 1. OpenAP Aircraft-Specific Fuel Burn & Carbon Quantification
-- Each aircraft type (`B738`, `A320`, `A20N`, `B77W`, `A359`, etc.) is mapped to its **OpenAP** aerodynamic drag polar and engine fuel-flow model across climb, cruise, descent, and terminal holding regimes.
-- **Carbon Dioxide ($\\text{CO}_2$)**: Computed via the standard ICAO stoichometric Jet-A emission factor of **$3.16\\text{ kg CO}_2$ per $1.0\\text{ kg}$ of Jet-A fuel**.
+        # Compute breakdown metrics
+        vordme_cnt = int((world_nav_df["nav_type"] == "VOR-DME").sum()) if not world_nav_df.empty else 0
+        dme_cnt = int((world_nav_df["nav_type"] == "DME").sum()) if not world_nav_df.empty else 0
+        vor_cnt = int((world_nav_df["nav_type"] == "VOR").sum()) if not world_nav_df.empty else 0
+        ils_cnt = int((world_nav_df["nav_type"] == "ILS_LOC").sum()) if not world_nav_df.empty else 0
+        ndb_cnt = int((world_nav_df["nav_type"] == "NDB").sum()) if not world_nav_df.empty else 0
 
-#### 2. Surface Taxi-Out (`TAXI_OUT`) & ICAO Engine Emissions Databank (EDB v32B)
-- Ground movement between Actual Off-Block Time (`AOBT`) and Actual Take-Off Time (`ATOT`) operates main turbofan engines at **7% ICAO Landing/Take-Off (LTO) Idle thrust** plus an Auxiliary Power Unit (`APU`) fuel flow.
-- Using empirical emission indices from `data/external/icao_edb_emissions.parquet` (**ICAO EDB v32B**), FlightML quantifies exact ground-level airport air quality pollutants generated during excess departure queue delays:
-  - **Nitrogen Oxides ($\\text{NO}_x$)** in grams per kg fuel at 7% idle
-  - **Carbon Monoxide ($\\text{CO}$)** and **Unburned Hydrocarbons ($\\text{HC}$)** (which peak at low idle combustion temperatures)
-  - **Non-Volatile Particulate Matter ($\\text{nvPM}$ soot mass)** in milligrams
+        wm1, wm2, wm3, wm4, wm5, wm6 = st.columns(6)
+        wm1.metric("Stations Rendered", f"{len(world_nav_df):,}")
+        wm2.metric("🔵 VOR-DME / VORTAC", f"{vordme_cnt:,}")
+        wm3.metric("🔷 DME / TACAN", f"{dme_cnt:,}")
+        wm4.metric("🟢 VOR", f"{vor_cnt:,}")
+        wm5.metric("🟣 ILS / LOC", f"{ils_cnt:,}")
+        wm6.metric("🟠 NDB", f"{ndb_cnt:,}")
 
-#### 3. Upper-Air Winds & Persistent Contrail (ISSR) Climate Forcing
-- Compares 4D segment groundspeed ($\\text{GS}$) against aircraft True Airspeed ($\\text{TAS}$) to isolate the net **headwind/tailwind vector** along the flight path and cross-references live/cached **Open-Meteo ERA5 Upper-Air Pressure Levels (`300/250/200/150 hPa`)**.
-- **Schmidt-Appleman Criterion & Ice-Supersaturated Regions (`ISSR`)**: When a flight cruises between `FL280` and `FL430` in ambient temperatures $T < -40^\\circ\\text{C}$ ($233\\text{ K}$) and high relative humidity over ice ($\\text{RH}_{\\text{ice}} \\ge 100\\%$), exhaust water vapor nucleates into persistent contrail-cirrus clouds that trap outgoing longwave radiation, multiplying total radiative climate forcing (`CO₂e`).
-"""
+        world_map = create_world_navaids_map(
+            world_nav_df,
+            center_lat=c_lat,
+            center_lon=c_lon,
+            zoom_start=z_lvl,
+        )
+        st_folium(
+            world_map,
+            width=1200,
+            height=560,
+            returned_objects=[],
+            key=f"world_nav_map_{selected_period}_{wn_region}_{'_'.join(wn_types)}_{wn_search}_{wn_limit}",
         )
 
-    with ref_sub4:
-        st.subheader("Eurocontrol CRCO Route Charges & Direct Operating Cost Economics (€)")
+        with st.expander(f"📋 View Filtered Global Navaids Station Directory ({len(world_nav_df):,} stations)", expanded=False):
+            if not world_nav_df.empty:
+                disp_nav_df = world_nav_df[
+                    ["ident", "name", "nav_type", "frequency_mhz", "range_nm", "elevation_ft", "latitude", "longitude"]
+                ].rename(
+                    columns={
+                        "ident": "Ident",
+                        "name": "Station Name",
+                        "nav_type": "Navaid Type",
+                        "frequency_mhz": "Freq (MHz)",
+                        "range_nm": "Range (nm)",
+                        "elevation_ft": "Elevation (ft)",
+                        "latitude": "Latitude",
+                        "longitude": "Longitude",
+                    }
+                )
+                st.dataframe(disp_nav_df, use_container_width=True)
+            else:
+                st.info("No navaids match the current filter selection.")
+
+        # ----------------- TAB 3: Recurring Series & Diurnal Trends -----------------
+
+    with map_sub2:
+        st.header("📖 Aviation Intelligence Methodology, Physics Models & KPI Reference")
         st.markdown(
-            """
-#### 1. Eurocontrol Central Route Charges Office (CRCO) Formula
-Every commercial flight traversing European Flight Information Regions pays an en-route navigation charge billed in **Euros (`€`)** according to the official Eurocontrol CRCO formula:
-$$\\text{CRCO Charge (€)} = d_i \\times p \\times u_i$$
-where:
-- **Distance Factor ($d_i$)**: Entry-to-exit great-circle distance inside charging zone $i$ (in kilometers, minus $20\\text{ km}$ for each take-off or landing within the zone) divided by $100$:
-  $$d_i = \\frac{D_{i,\\text{km}}}{100}$$
-- **Aircraft Weight Factor ($p$)**: Derived from the aircraft type's certified Maximum Take-Off Weight ($\\text{MTOW}$ in metric tons) via OpenAP:
-  $$p = \\sqrt{\\frac{\\text{MTOW (tons)}}{50}}$$
-- **National Unit Rate ($u_i$)**: Official Eurocontrol CRCO unit rate in **Euros (`€`) per Service Unit (`SU`)** for FIR state $i$ (e.g., UK, Switzerland, Germany, France, Spain).
-- **Total Service Units (`SU`)**: $\\text{SU} = \\sum_i (d_i \\times p)$.
-
-#### 2. Weekly Jet-A Spot Fuel Pricing in Euros (`€`)
-- Historical U.S. Energy Information Administration (EIA) / Platts weekly Jet-A spot prices are matched to each flight's exact departure week and converted into **Euros (`€`)** using the historical ECB reference exchange rate for the archive period (`0.91 €/$` for November 2016; `0.92 €/$` for October 2025).
-
-#### 3. Route-Charge Avoidance vs. Fuel Burn Trade-Off
-- Airlines occasionally file longer horizontal routes (`KPI04 KEP`) to skirt FIRs with high unit rates ($u_i > €95/\\text{SU}$). The Corridor CRCO Economics scanner compares the shortest-path and longest-path flights on any city pair to test whether CRCO fee savings exceed or are outweighed by the extra Jet-A fuel cost (`€`) and $\\text{CO}_2$ emissions.
-"""
+            "Use this reference guide to look up the mathematical definitions, international standards "
+            "(**ICAO GANP**, **Eurocontrol PRU**, **Eurocontrol CRCO**, **ICAO Aircraft Engine Emissions Databank v32B**, and **OpenAP**), "
+            "and operations research algorithms powering every metric in the FlightML Workbench."
         )
 
-    with ref_sub5:
-        st.subheader("Prescriptive Operations Research & Runway Safety Physics")
-        st.markdown(
-            """
-#### 1. Turnaround Buffer & Reactionary Delay Contagion (Scenarios A & C)
-- Chains aircraft tail numbers (`AC_Registration`) chronologically across their daily multi-leg rotations.
-- **Reactionary Delay Propagation**: If inbound leg $k$ arrives with delay $D_{\\text{arr},k}$ and scheduled ground turnaround slack above the minimum aircraft turn time ($T_{\\min}$) is $S_k$, then downstream departure delay on leg $k+1$ is:
-  $$D_{\\text{react},k+1} = \\max(0,\\; D_{\\text{arr},k} - S_k)$$
-- **Cost of Delay**: Quantified at the Eurocontrol Standard Inputs benchmark of **€88.00 EUR per minute** of tactical delay (crew, passenger EU261 compensation, maintenance, and missed connections).
-
-#### 2. Prescriptive Hub Tail-Swap Recovery Optimizer (Scenario D)
-- Scans all turnarounds across hubs and dates to find pairs of same-operator, same-aircraft-type rotations (`Delayed Tail A ⇄ Donor Tail B`) on the ground simultaneously at the same hub.
-- Evaluates the counterfactual swap of outbound legs `(Leg A_out, Leg B_out)` and recommends every conflict-free swap that yields a strictly positive net reduction in total reactionary departure delay minutes and Euro (`€`) delay cost.
-
-#### 3. Ration-by-Schedule Ground Delay Program (`GDP` / ATFM Slot) Optimizer (Scenario F)
-- Models an arrival capacity constraint where hourly arrival demand exceeds the declared Airport Arrival Rate (`AAR`).
-- Assigns ground delay slots in **Ration-by-Schedule (`RBS`)** order so that excess arrival queuing is absorbed at the departure gate/ground (`7% idle/gate fuel rate`) rather than in airborne terminal holding stacks inside the 40nm ASMA cylinder (`100% holding flight fuel rate`), reporting net fuel (`kg`), $\\text{CO}_2$ (`kg`), and `€ EUR` savings.
-
-#### 4. Runway Crosswind Vector Decomposition & Braking Safety Margin (Scenario B & Tab 5)
-- Decomposes surface wind $(V_{\\text{wind}}, \\theta_{\\text{wind}})$ against each physical runway threshold heading $\\psi_{\\text{rwy}}$ from `runways.csv`:
-  $$V_{\\text{crosswind}} = |V_{\\text{wind}} \\cdot \\sin(\\theta_{\\text{wind}} - \\psi_{\\text{rwy}})|, \\qquad V_{\\text{headwind}} = V_{\\text{wind}} \\cdot \\cos(\\theta_{\\text{wind}} - \\psi_{\\text{rwy}})$$
-- Computes **Density Altitude** from airport elevation, QNH pressure altitude, and ISA temperature deviation, and scales dry vs. wet/contaminated Stopping Distance against the published Landing Distance Available (`LDA`).
-"""
+        ref_sub1, ref_sub2, ref_sub3, ref_sub4, ref_sub5 = st.tabs(
+            [
+                "📏 ICAO GANP & PRU KPIs",
+                "🗺️ Airspace Saturation & 4D Conflicts",
+                "🌱 Fuel, LTO Emissions & Contrails",
+                "💶 Eurocontrol CRCO & Cost Economics",
+                "🔮 Operations Research & Safety Models",
+            ]
         )
 
+        with ref_sub1:
+            st.subheader("ICAO Global Air Navigation Plan (GANP) & Eurocontrol PRU Indicators")
+            st.markdown(
+                """
+        | KPI Code | Official Indicator Name | Mathematical Formulation & Operational Meaning |
+        | :--- | :--- | :--- |
+        | **KPI02 (ATOT)** | **Additional Taxi-Out Time** | $\\text{ATOT} = \\max(0,\\; \\text{Actual Taxi-Out} - \\text{UTOT}_{p20})$, where $\\text{UTOT}_{p20}$ is the **20th percentile unimpeded taxi-out time** for that specific `(airport, wake turbulence category)` pair. Measures departure runway queue congestion and surface hold time. |
+        | **KPI04 (KEP)** | **Horizontal En-Route Flight Efficiency (Filed)** | $\\text{KEP (\\%)} = \\left(\\frac{L_{\\text{filed, >40nm}} - D_{\\text{GCD, >40nm}}}{D_{\\text{GCD, >40nm}}}\\right) \\times 100$. Evaluates how much extra distance the airline's filed flight plan adds outside the 40 nm origin and destination terminal cylinders relative to the achieved Great Circle Distance ($D_{\\text{GCD}}$). Indicates structural route availability, RAD restrictions, or route-charge avoidance. |
+        | **KPI05 (KEA)** | **Horizontal En-Route Flight Efficiency (Actual)** | $\\text{KEA (\\%)} = \\left(\\frac{L_{\\text{actual, >40nm}} - D_{\\text{GCD, >40nm}}}{D_{\\text{GCD, >40nm}}}\\right) \\times 100$. Measures the actual flown en-route distance extension outside the 40 nm cylinders. **Tactical ATC Attribution ($\\text{KEA} - \\text{KEP}$)**: When $\\text{KEA} < \\text{KEP}$, ATC cleared tactical directs (`DCT`); when $\\text{KEA} > \\text{KEP}$, tactical vectoring or weather deviations lengthened the flight. |
+        | **KPI08 (ASMA)** | **Additional Time in Terminal Airspace (40 nm)** | $\\text{ASMA}_{\\text{add}} = \\max(0,\\; T_{\\text{40nm\\to ALDT}} - T_{\\text{unimpeded, p20}})$. Tracks arrival sequencing, trombone vectoring, and airborne holding inside the 40 nm Arrival Sequencing and Metering Area cylinder. |
+        | **KPI17 (CCO)** | **Continuous Climb Operations (Climb Profile)** | Identifies intermediate level-offs ($|\\text{ROCD}| < 200\\text{ ft/min}$ for $\\ge 60\\text{ s}$) below Top of Climb (`TOC`). Level-offs at low/medium altitudes force high drag and higher specific fuel consumption compared to an uninterrupted climb to cruise altitude. |
+        | **KPI19 (CDO & Level-Cap)** | **Continuous Descent Operations & Cruise Level-Capping** | **CDO** measures uninterrupted idle-thrust descent from Top of Descent (`TOD`) to landing without throttle-up level segments. **Cruise Level-Capping** compares the filed requested Flight Level ($\\text{FL}_{\\text{req}}$) against the maximum actual achieved cruise level ($\\text{FL}_{\\text{max,act}}$); a deficit $\\ge 20\\text{ FL}$ ($2,000\\text{ ft}$) increases cruise fuel burn by ~1.25% per $1,000\\text{ ft}$. |
+        | **FRA vs. ATS** | **Free Route Airspace Directness Index** | Matches actual trajectory legs against **86,280 global 5-letter waypoints (`fix.dat`)**, **17,090 VHF navaids (`nav.dat`)**, and published ATS airways. Segments where consecutive waypoints lie on the same published airway are classified as **Structured ATS Airway**; off-airway point-to-point segments are classified as **Free Route Airspace (`FRA / DCT`)**. |
+        | **RNP / RNAV & RLOS** | **Anticipated PBN Navigation Capability (ICAO Doc 9613)** | Evaluates terrestrial `DME`, `VOR`, `ILS/LOC`, and `NDB` stations within the VHF/UHF **Radio Line-of-Sight (`RLOS`)** horizon $D_{\\text{RLOS}} (\\text{nm}) = 1.23 \\times (\\sqrt{h_{\\text{ac, ft}}} + \\sqrt{h_{\\text{nav, ft}}})$ at each 4D waypoint: **`0.1 nm`** (`xLS / RNP AR APCH 0.1` with ILS/LOC lock), **`0.3 nm`** (`RNP APCH 0.3`), **`1.0 nm`** (`RNAV 1 / RNP 1` with $\\ge 2$–$3$ DMEs in RLOS), **`2.0 nm`** (`RNAV 2` dual-DME), **`5.0 nm`** (`RNAV 5 / B-RNAV` single VOR/DME), and **`10.0 nm`** (`RNP 4 / RNP 10` Oceanic/Remote beyond-RLOS relying on GNSS + IRS). |
+        """
+            )
+
+        with ref_sub2:
+            st.subheader("5° × 5° Airspace Saturation, Dynamic Complexity & 4D Proximity Detection")
+            st.markdown(
+                """
+        #### 1. 5° × 5° Hourly Grid Saturation (Period Average by Hour of Day)
+        To give air navigation analysts a clear macro view of European traffic waves, trajectories across all days in the selected archive are bucketed into **$5^\\circ \\text{ Latitude} \\times 5^\\circ \\text{ Longitude}$ geographic squares** for each hour of the day (`00:00` to `23:00 UTC`):
+        - **Average Flights / Hour ($\\bar{N}_{h}$)**: Total distinct aircraft traversing the $5^\\circ \\times 5^\\circ$ square during hour $h$ divided by the number of active days in the archive.
+        - **Peak Flights / Hour ($N_{\\max,h}$)**: Highest single-day aircraft count in that square during hour $h$.
+        - **Vertical Transition Share ($V_{\\%}$)**: Percentage of 4D trajectory points inside the square that are actively climbing or descending ($|\\Delta \\text{FL}| \\ge 5$) rather than in level cruise.
+        - **Dynamic Complexity Index**:
+          $$\\text{Complexity Index} = \\bar{N}_{h} \\times \\left(1 + \\frac{V_{\\%}}{100}\\right)$$
+          Squares are classified into four operational tiers:
+          - 🔴 **`CRITICAL_SATURATION`**: $\\bar{N}_{h} \\ge 80\\text{ flts/hr}$ or $\\text{Complexity Index} \\ge 100$
+          - 🟠 **`HIGH_DENSITY`**: $\\bar{N}_{h} \\ge 40\\text{ flts/hr}$ or $\\text{Complexity Index} \\ge 55$
+          - 🟡 **`MODERATE_FLOW`**: $\\bar{N}_{h} \\ge 15\\text{ flts/hr}$
+          - 🟢 **`LOW_DENSITY`**: $< 15\\text{ flts/hr}$
+
+        #### 2. FIR & AUA (TMA / CTA / UTA) Sector Dwell Inefficiency
+        - **FIR (`Fir_Airspace`)**: National/regional Flight Information Regions (`EGTTFIR`, `LFFFFIR`, `EDGGFIR`).
+        - **AUA (`AUA_Airspace`)**: Granular Air Traffic Control Unit Airspaces separating **Terminal Manoeuvring Areas (`TMA`)**, **Control Areas (`CTA`)**, and **Upper Control Areas (`UTA`)**. Comparing `entry_time`/`exit_time` between ` Actual ` and ` Filed ` traversals pinpoints whether excess dwell occurred in terminal approach airspace or en-route upper sectors.
+
+        #### 3. 4D Co-Altitude Airspace Proximity Scanner (Scenario E)
+        - Trajectories are linearly interpolated in 4D `(latitude, longitude, flight_level, groundspeed, track)` at synchronized 1-minute UTC epochs (`:00`, `:15`, `:30`, `:45`).
+        - Spatial bounding-box pruning followed by exact Haversine distance and altitude filtering flags every aircraft pair operating simultaneously within **$< 1,000\\text{ ft}$ vertical ($10\\text{ FL}$)** and **$\\le 5.0\\text{ nm}$ horizontal separation** (with `< 3.0 nm` flagged as a **Loss-of-Separation Alert**).
+
+        #### 4. ATC VHF Radio Frequency Occupancy
+        - Cross-references airport/TMA VHF voice channels (`apt_frequencies.csv`) and navaids (`nav.dat`) against peak hourly movements. Assuming 3.5 controller-pilot voice exchanges per flight in a sector at 9 seconds per exchange (including readback), occupancy above **60%** indicates controller voice saturation where an additional frequency split is required.
+        """
+            )
+
+        with ref_sub3:
+            st.subheader("Fuel Burn, ICAO EDB v32B LTO Surface Emissions & Contrail Physics")
+            st.markdown(
+                """
+        #### 1. OpenAP Aircraft-Specific Fuel Burn & Carbon Quantification
+        - Each aircraft type (`B738`, `A320`, `A20N`, `B77W`, `A359`, etc.) is mapped to its **OpenAP** aerodynamic drag polar and engine fuel-flow model across climb, cruise, descent, and terminal holding regimes.
+        - **Carbon Dioxide ($\\text{CO}_2$)**: Computed via the standard ICAO stoichometric Jet-A emission factor of **$3.16\\text{ kg CO}_2$ per $1.0\\text{ kg}$ of Jet-A fuel**.
+
+        #### 2. Surface Taxi-Out (`TAXI_OUT`) & ICAO Engine Emissions Databank (EDB v32B)
+        - Ground movement between Actual Off-Block Time (`AOBT`) and Actual Take-Off Time (`ATOT`) operates main turbofan engines at **7% ICAO Landing/Take-Off (LTO) Idle thrust** plus an Auxiliary Power Unit (`APU`) fuel flow.
+        - Using empirical emission indices from `data/external/icao_edb_emissions.parquet` (**ICAO EDB v32B**), FlightML quantifies exact ground-level airport air quality pollutants generated during excess departure queue delays:
+          - **Nitrogen Oxides ($\\text{NO}_x$)** in grams per kg fuel at 7% idle
+          - **Carbon Monoxide ($\\text{CO}$)** and **Unburned Hydrocarbons ($\\text{HC}$)** (which peak at low idle combustion temperatures)
+          - **Non-Volatile Particulate Matter ($\\text{nvPM}$ soot mass)** in milligrams
+
+        #### 3. Upper-Air Winds & Persistent Contrail (ISSR) Climate Forcing
+        - Compares 4D segment groundspeed ($\\text{GS}$) against aircraft True Airspeed ($\\text{TAS}$) to isolate the net **headwind/tailwind vector** along the flight path and cross-references live/cached **Open-Meteo ERA5 Upper-Air Pressure Levels (`300/250/200/150 hPa`)**.
+        - **Schmidt-Appleman Criterion & Ice-Supersaturated Regions (`ISSR`)**: When a flight cruises between `FL280` and `FL430` in ambient temperatures $T < -40^\\circ\\text{C}$ ($233\\text{ K}$) and high relative humidity over ice ($\\text{RH}_{\\text{ice}} \\ge 100\\%$), exhaust water vapor nucleates into persistent contrail-cirrus clouds that trap outgoing longwave radiation, multiplying total radiative climate forcing (`CO₂e`).
+        """
+            )
+
+        with ref_sub4:
+            st.subheader("Eurocontrol CRCO Route Charges & Direct Operating Cost Economics (€)")
+            st.markdown(
+                """
+        #### 1. Eurocontrol Central Route Charges Office (CRCO) Formula
+        Every commercial flight traversing European Flight Information Regions pays an en-route navigation charge billed in **Euros (`€`)** according to the official Eurocontrol CRCO formula:
+        $$\\text{CRCO Charge (€)} = d_i \\times p \\times u_i$$
+        where:
+        - **Distance Factor ($d_i$)**: Entry-to-exit great-circle distance inside charging zone $i$ (in kilometers, minus $20\\text{ km}$ for each take-off or landing within the zone) divided by $100$:
+          $$d_i = \\frac{D_{i,\\text{km}}}{100}$$
+        - **Aircraft Weight Factor ($p$)**: Derived from the aircraft type's certified Maximum Take-Off Weight ($\\text{MTOW}$ in metric tons) via OpenAP:
+          $$p = \\sqrt{\\frac{\\text{MTOW (tons)}}{50}}$$
+        - **National Unit Rate ($u_i$)**: Official Eurocontrol CRCO unit rate in **Euros (`€`) per Service Unit (`SU`)** for FIR state $i$ (e.g., UK, Switzerland, Germany, France, Spain).
+        - **Total Service Units (`SU`)**: $\\text{SU} = \\sum_i (d_i \\times p)$.
+
+        #### 2. Weekly Jet-A Spot Fuel Pricing in Euros (`€`)
+        - Historical U.S. Energy Information Administration (EIA) / Platts weekly Jet-A spot prices are matched to each flight's exact departure week and converted into **Euros (`€`)** using the historical ECB reference exchange rate for the archive period (`0.91 €/$` for November 2016; `0.92 €/$` for October 2025).
+
+        #### 3. Route-Charge Avoidance vs. Fuel Burn Trade-Off
+        - Airlines occasionally file longer horizontal routes (`KPI04 KEP`) to skirt FIRs with high unit rates ($u_i > €95/\\text{SU}$). The Corridor CRCO Economics scanner compares the shortest-path and longest-path flights on any city pair to test whether CRCO fee savings exceed or are outweighed by the extra Jet-A fuel cost (`€`) and $\\text{CO}_2$ emissions.
+        """
+            )
+
+        with ref_sub5:
+            st.subheader("Prescriptive Operations Research & Runway Safety Physics")
+            st.markdown(
+                """
+        #### 1. Turnaround Buffer & Reactionary Delay Contagion (Scenarios A & C)
+        - Chains aircraft tail numbers (`AC_Registration`) chronologically across their daily multi-leg rotations.
+        - **Reactionary Delay Propagation**: If inbound leg $k$ arrives with delay $D_{\\text{arr},k}$ and scheduled ground turnaround slack above the minimum aircraft turn time ($T_{\\min}$) is $S_k$, then downstream departure delay on leg $k+1$ is:
+          $$D_{\\text{react},k+1} = \\max(0,\\; D_{\\text{arr},k} - S_k)$$
+        - **Cost of Delay**: Quantified at the Eurocontrol Standard Inputs benchmark of **€88.00 EUR per minute** of tactical delay (crew, passenger EU261 compensation, maintenance, and missed connections).
+
+        #### 2. Prescriptive Hub Tail-Swap Recovery Optimizer (Scenario D)
+        - Scans all turnarounds across hubs and dates to find pairs of same-operator, same-aircraft-type rotations (`Delayed Tail A ⇄ Donor Tail B`) on the ground simultaneously at the same hub.
+        - Evaluates the counterfactual swap of outbound legs `(Leg A_out, Leg B_out)` and recommends every conflict-free swap that yields a strictly positive net reduction in total reactionary departure delay minutes and Euro (`€`) delay cost.
+
+        #### 3. Ration-by-Schedule Ground Delay Program (`GDP` / ATFM Slot) Optimizer (Scenario F)
+        - Models an arrival capacity constraint where hourly arrival demand exceeds the declared Airport Arrival Rate (`AAR`).
+        - Assigns ground delay slots in **Ration-by-Schedule (`RBS`)** order so that excess arrival queuing is absorbed at the departure gate/ground (`7% idle/gate fuel rate`) rather than in airborne terminal holding stacks inside the 40nm ASMA cylinder (`100% holding flight fuel rate`), reporting net fuel (`kg`), $\\text{CO}_2$ (`kg`), and `€ EUR` savings.
+
+        #### 4. Runway Crosswind Vector Decomposition & Braking Safety Margin (Scenario B & Tab 5)
+        - Decomposes surface wind $(V_{\\text{wind}}, \\theta_{\\text{wind}})$ against each physical runway threshold heading $\\psi_{\\text{rwy}}$ from `runways.csv`:
+          $$V_{\\text{crosswind}} = |V_{\\text{wind}} \\cdot \\sin(\\theta_{\\text{wind}} - \\psi_{\\text{rwy}})|, \\qquad V_{\\text{headwind}} = V_{\\text{wind}} \\cdot \\cos(\\theta_{\\text{wind}} - \\psi_{\\text{rwy}})$$
+        - Computes **Density Altitude** from airport elevation, QNH pressure altitude, and ISA temperature deviation, and scales dry vs. wet/contaminated Stopping Distance against the published Landing Distance Available (`LDA`).
+        """
+            )
+
+
+# =============================================================================
+# 5. GENERAL ECONOMIC VIEWS (€)
+# =============================================================================
+with tab_cat_econ:
+    st.caption(
+        "Airspace economics, direct operating cost quantification, Eurocontrol CRCO navigation fee avoidance trade-offs, "
+        "twin-flight fuel disparity benchmarking, and longitudinal recurring series diurnal delay trends in Euros (€)."
+    )
+    render_page_export_bar("general_economics", "cat_econ")
+    econ_sub1, econ_sub2 = st.tabs(
+        [
+            "👯 Twin-Flight Efficiency Benchmark",
+            "📅 Recurring Series & Diurnal Trends",
+        ]
+    )
+
+    with econ_sub1:
+        st.header("Twin-Flight Efficiency Benchmarking & Dual-Trajectory Map")
+        st.markdown(
+            "Compare and contrast the most and least efficient flights between the same city pair operating the same aircraft type. "
+            "Reveals route detours, airspace bypasses, divergence coordinates, and excess fuel consumption in Euros (`€`)."
+        )
+        col_t1, col_t2, col_t3 = st.columns(3)
+        t_adep = col_t1.text_input("Origin (ADEP)", "RKSI", key=f"t_adep_{selected_period}").strip().upper()
+        t_ades = col_t2.text_input("Destination (ADES)", "EGLL", key=f"t_ades_{selected_period}").strip().upper()
+        t_ac = col_t3.text_input("Aircraft Type", "B77W", key=f"t_ac_{selected_period}").strip().upper()
+
+        twin_comp = compare_twin_flights(ds, adep=t_adep, ades=t_ades, ac_type=t_ac)
+        if not twin_comp:
+            st.warning(f"Not enough matching flights for `{t_adep} ➔ {t_ades}` (`{t_ac}`) in period `{selected_period}`. Try another city pair or aircraft type.")
+        else:
+            col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+            col_b1.metric("Distance Disparity", f"+{twin_comp.distance_penalty_nm:.1f} nm")
+            col_b2.metric("Air Time Disparity", f"+{twin_comp.air_time_penalty_min:.1f} min")
+            col_b3.metric("Excess Fuel Burned", f"+{twin_comp.excess_fuel_burned_kg:,.1f} kg")
+            col_b4.metric("Excess Fuel Cost", f"€{twin_comp.excess_fuel_cost_eur:,.2f}")
+
+            st.subheader("🗺️ Dual-Trajectory Comparison Map (Green = Most Efficient Twin | Red = Least Efficient Twin)")
+            twin_map = render_twin_comparison_map(ds, twin_comp)
+            st_folium(
+                twin_map,
+                width=1200,
+                height=500,
+                returned_objects=[],
+                key=f"twin_map_{selected_period}_{twin_comp.fast_id}_{twin_comp.slow_id}",
+            )
+
+            if twin_comp.divergence_lat and twin_comp.divergence_lon:
+                st.warning(
+                    f"⚠️ **Lateral Route Divergence Point:** `{twin_comp.divergence_lat:.3f}°, {twin_comp.divergence_lon:.3f}°` "
+                    f"(marked in orange on the map where the two trajectories separate by >30 nm)."
+                )
+
+            st.subheader("Operational Disparity Breakdown")
+            twin_table = [
+                {
+                    "Metric": "ECTRL Flight ID",
+                    "High-Efficiency Flight (Green)": str(twin_comp.fast_id),
+                    "Low-Efficiency Flight (Red)": str(twin_comp.slow_id),
+                    "Delta": "-",
+                },
+                {
+                    "Metric": "Airline Operator",
+                    "High-Efficiency Flight (Green)": twin_comp.fast_operator,
+                    "Low-Efficiency Flight (Red)": twin_comp.slow_operator,
+                    "Delta": "-",
+                },
+                {
+                    "Metric": "Flown Distance",
+                    "High-Efficiency Flight (Green)": f"{twin_comp.fast_actual_distance_nm:.1f} nm",
+                    "Low-Efficiency Flight (Red)": f"{twin_comp.slow_actual_distance_nm:.1f} nm",
+                    "Delta": f"+{twin_comp.distance_penalty_nm:.1f} nm",
+                },
+                {
+                    "Metric": "Air Time",
+                    "High-Efficiency Flight (Green)": f"{twin_comp.fast_air_time_min:.1f} min",
+                    "Low-Efficiency Flight (Red)": f"{twin_comp.slow_air_time_min:.1f} min",
+                    "Delta": f"+{twin_comp.air_time_penalty_min:.1f} min",
+                },
+                {
+                    "Metric": "Extension Ratio (KEA)",
+                    "High-Efficiency Flight (Green)": f"{twin_comp.fast_extension_ratio:.3f}x",
+                    "Low-Efficiency Flight (Red)": f"{twin_comp.slow_extension_ratio:.3f}x",
+                    "Delta": f"+{twin_comp.slow_extension_ratio - twin_comp.fast_extension_ratio:.3f}x",
+                },
+                {
+                    "Metric": "Fuel Burned",
+                    "High-Efficiency Flight (Green)": f"{twin_comp.fast_fuel_kg:,.1f} kg",
+                    "Low-Efficiency Flight (Red)": f"{twin_comp.slow_fuel_kg:,.1f} kg",
+                    "Delta": f"+{twin_comp.excess_fuel_burned_kg:,.1f} kg",
+                },
+                {
+                    "Metric": "Estimated Fuel Cost (€)",
+                    "High-Efficiency Flight (Green)": "-",
+                    "Low-Efficiency Flight (Red)": "-",
+                    "Delta": f"+€{twin_comp.excess_fuel_cost_eur:,.2f} EUR",
+                },
+            ]
+            st.dataframe(pd.DataFrame(twin_table), use_container_width=True)
+
+        # ----------------- TAB 8: What-If & Stress Tests -----------------
+
+    with econ_sub2:
+        st.header("📅 Recurring Flight Series & Diurnal Time-of-Day Assessment")
+        st.markdown(
+            "Track and compare the same flight (or very similar flights on the same city pair) as they occurred each day. "
+            "Evaluates day-over-day operational variability, flown distance dispersion, and diurnal congestion escalation across morning, afternoon, and evening departure banks."
+        )
+        col_r1, col_r2, col_r3 = st.columns(3)
+        r_adep = col_r1.text_input("Origin (ADEP)", value="EGLL", key=f"r_adep_{selected_period}").strip().upper()
+        r_ades = col_r2.text_input("Destination (ADES)", value="KORD", key=f"r_ades_{selected_period}").strip().upper()
+        r_op = col_r3.text_input("Airline Operator (Optional)", value="BAW", key=f"r_op_{selected_period}").strip().upper()
+
+        col_r4, col_r5 = st.columns(2)
+        r_ac = col_r4.text_input("Aircraft Type (Optional)", value="", placeholder="e.g. B77W, B744, A320", key=f"r_ac_{selected_period}").strip().upper()
+        r_tod = col_r5.selectbox(
+            "Time-of-Day Bank Filter",
+            ["All", "Morning (06:00-12:00)", "Afternoon (12:00-18:00)", "Evening (18:00-24:00)", "Night (00:00-06:00)"],
+            key=f"r_tod_{selected_period}",
+        )
+
+        if st.button("Analyze Recurring Series Across Period", key=f"btn_rec_series_{selected_period}"):
+            with st.spinner(f"Extracting longitudinal recurring series for {r_adep} ➔ {r_ades}..."):
+                rep = analyze_recurring_flight_series(
+                    ds,
+                    adep=r_adep,
+                    ades=r_ades,
+                    operator=r_op if r_op else None,
+                    ac_type=r_ac if r_ac else None,
+                    time_of_day=r_tod,
+                )
+
+            if not rep:
+                st.warning(f"Not enough recurring flights found for corridor {r_adep} ➔ {r_ades} in period {selected_period}.")
+            else:
+                rm1, rm2, rm3, rm4 = st.columns(4)
+                rm1.metric("Occurrences Analyzed", f"{rep.total_flights} flights")
+                rm2.metric("Mean Arrival Delay", f"{rep.mean_arr_delay_min:+.1f} min", f"±{rep.std_arr_delay_min:.1f}m (std)")
+                rm3.metric("Flown Distance Span", f"{rep.mean_distance_nm:.0f} nm", f"Δ{rep.distance_span_nm:.0f} nm span")
+                rm4.metric("Air Time Dispersion", f"{rep.mean_air_time_min:.0f} min", f"Δ{rep.air_time_span_min:.0f} min span")
+
+                col_best, col_worst = st.columns(2)
+                col_best.success(
+                    f"🏆 **Best Performing Day:** `{rep.best_performing_day['date']}` "
+                    f"({rep.best_performing_day['flights']} flights, avg delay **{rep.best_performing_day['avg_arr_delay_min']:+.1f} min**)"
+                )
+                col_worst.error(
+                    f"⚠️ **Worst Performing Day:** `{rep.worst_performing_day['date']}` "
+                    f"({rep.worst_performing_day['flights']} flights, avg delay **{rep.worst_performing_day['avg_arr_delay_min']:+.1f} min**)"
+                )
+
+                st.subheader("Diurnal Time-of-Day Departure Bank Congestion Profile")
+                diurnal_data = [
+                    {
+                        "Departure Bank": b.bank_name,
+                        "Flights": b.flight_count,
+                        "Avg Departure Delay": f"{b.avg_dep_delay_min:+.1f} min",
+                        "Avg Arrival Delay": f"{b.avg_arr_delay_min:+.1f} min",
+                        "Avg Air Time": f"{b.avg_air_time_min:.1f} min",
+                    }
+                    for b in rep.diurnal_banks
+                ]
+                st.dataframe(pd.DataFrame(diurnal_data), use_container_width=True)
+
+                if rep.hourly_delay_curve:
+                    st.subheader("Hourly Departure Delay Escalation Curve (UTC Departure Hour)")
+                    h_df = pd.DataFrame(rep.hourly_delay_curve).set_index("hour")
+                    st.line_chart(h_df[["avg_arr_delay_min", "avg_dep_delay_min"]])
+
+                st.subheader("Day-by-Day Recurring Occurrences")
+                occ_df = pd.DataFrame([
+                    {
+                        "Flight ID": o.ectrl_id,
+                        "Date": o.date_str,
+                        "Off-Block (UTC)": o.off_block_time,
+                        "Bank": o.time_of_day_bank,
+                        "Operator": o.ac_operator,
+                        "Aircraft": o.ac_type,
+                        "Tail": o.ac_reg,
+                        "Distance (nm)": f"{o.actual_distance_nm:.0f}",
+                        "Air Time (min)": f"{o.actual_air_time_min:.1f}",
+                        "Arr Delay (min)": f"{o.arr_delay_min:+.1f}",
+                    }
+                    for o in rep.occurrences
+                ])
+                st.dataframe(occ_df, use_container_width=True)
+
+        # ----------------- TAB 4: Vertical Profile: CDO & CCO -----------------
