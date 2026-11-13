@@ -1,18 +1,20 @@
 """
-4D Trajectory Active Navaid Selection & Anticipated RNP/RNAV Capability Analyzer.
+4D Trajectory Active Navaid Selection, Global Navaids Catalog & Anticipated RNP/RNAV Capability Analyzer.
 
-Evaluates radio navigation infrastructure (`nav_aids_xplane`: DME, VOR, ILS/LOC, NDB) along a
-flight's 4D trajectory (`latitude`, `longitude`, `flight_level`, `time_over`) using VHF/UHF
-Radio Line-of-Sight (RLOS) horizon physics:
+Evaluates radio navigation infrastructure (`nav_aids_xplane` + `raw_navaids`: VOR-DME, VORTAC, DME,
+TACAN, VOR, ILS/LOC, NDB) along a flight's 4D trajectory (`latitude`, `longitude`, `flight_level`,
+`time_over`) using VHF/UHF Radio Line-of-Sight (RLOS) horizon physics:
     D_RLOS (nm) = 1.23 * (sqrt(h_aircraft_ft) + sqrt(h_navaid_ft))
 
-Determines:
-1. Likely used (auto-tuned / corridor-active) ground navaids along the trajectory, classified by
-   type (`DME`, `VOR`, `ILS_LOC`, `NDB`) for rendering as color-coded dots on the trajectory map.
-2. Point-by-point anticipated RNP / RNAV navigation capability (in nautical miles: 0.1, 0.3, 1.0,
-   2.0, 5.0, 10.0 nm) along the vertical profile, together with the explicit technical reason why
-   that RNP/RNAV specification is available (DME/DME triangulation count, VOR/DME backup, ILS
-   approach lock, or Oceanic/Remote beyond-RLOS GNSS/IRS navigation).
+Key engineering features:
+1. Properly classifies X-Plane `row_code = 12` co-located transponders into `VOR-DME` / `VORTAC` /
+   `TACAN` en-route DMEs vs. terminal `DME_ILS`, and fuses `raw_navaids` (`data/navaids.csv`) so
+   en-route DME and VOR stations are never missing along any portion of a flight.
+2. Uses longitudinal along-track segment sampling (every ~35 nm along the trajectory) so active
+   DME and VOR stations are selected evenly from departure through cruise to arrival, preventing
+   dense terminal areas from starving en-route cruise segments.
+3. Computes point-by-point anticipated RNP / RNAV navigation capability (`0.1`, `0.3`, `1.0`,
+   `2.0`, `5.0`, `10.0` nm) and the explicit technical reason why that PBN specification is available.
 """
 
 from __future__ import annotations
@@ -28,11 +30,12 @@ from flightml.geo.geodesy import haversine_nm
 
 
 NAVAID_COLOR_MAP: dict[str, str] = {
-    "DME": "#00a8ff",       # Cyan / Dodger Blue — DME slant-range station
-    "VOR": "#00b894",       # Emerald Green — VOR / VOR-DME omnidirectional station
-    "ILS_LOC": "#8e44ad",   # Purple — ILS Localizer / Precision Approach
-    "LOC": "#8e44ad",       # Purple — Localizer
-    "DME_ILS": "#9b59b6",   # Violet — Approach DME paired with ILS
+    "VOR-DME": "#00a8ff",   # Cyan / Dodger Blue — Co-located VOR/DME or VORTAC
+    "DME": "#0097e6",       # Deep Cyan — Standalone DME / TACAN slant-range station
+    "VOR": "#00b894",       # Emerald Green — VHF Omnidirectional Range station
+    "ILS_LOC": "#ff2e93",   # High-contrast Magenta — ILS Localizer / Precision Approach
+    "LOC": "#ff2e93",       # High-contrast Magenta — Localizer
+    "DME_ILS": "#e056fd",   # Violet — Approach DME paired with ILS
     "NDB": "#f39c12",       # Amber Gold — Non-Directional Beacon
 }
 
@@ -48,6 +51,7 @@ class ActiveRouteNavaid:
     elevation_ft: float
     published_range_nm: float
     min_distance_to_track_nm: float
+    along_track_distance_nm: float
     aircraft_fl_at_closest: float
     closest_track_lat: float
     closest_track_lon: float
@@ -118,15 +122,139 @@ def compute_rlos_nm(flight_level: float, station_elev_ft: float) -> float:
     return 1.23 * (math.sqrt(h_ac) + math.sqrt(h_sta))
 
 
+def query_unified_navaids(
+    dataset: FlightDataset,
+    min_lat: float = -90.0,
+    max_lat: float = 90.0,
+    min_lon: float = -180.0,
+    max_lon: float = 180.0,
+    nav_types: list[str] | None = None,
+    search_query: str | None = None,
+    limit: int = 8000,
+) -> pd.DataFrame:
+    """
+    Return a unified, deduplicated DataFrame of global radio navigation aids combining
+    `nav_aids_xplane` (`nav.dat`) and `raw_navaids` (`navaids.csv`), normalized into canonical
+    categories: `VOR-DME`, `DME`, `VOR`, `ILS_LOC`, `NDB`.
+
+    Note: In X-Plane `nav.dat`, `row_code = 12` (`DME_ILS` raw label) contains BOTH terminal
+    ILS-DMEs (range <= 25 nm or 'ILS'/'LOC' in name) AND all co-located `VOR-DME` / `VORTAC` /
+    `TACAN` en-route DME transponders (range 40–130 nm). This query separates them accurately.
+    """
+    sql = """
+        WITH xp_classified AS (
+            SELECT
+                ident,
+                name,
+                CASE
+                    WHEN nav_type = 'DME_ILS' AND (
+                        upper(name) LIKE '%VOR%'
+                        OR upper(name) LIKE '%VORTAC%'
+                        OR upper(name) LIKE '%TACAN%'
+                    ) THEN 'VOR-DME'
+                    WHEN nav_type = 'DME_ILS' AND coalesce(range_nm, 0) > 28 AND upper(name) NOT LIKE '%ILS%' AND upper(name) NOT LIKE '%LOC%' THEN 'DME'
+                    WHEN nav_type IN ('ILS_LOC', 'LOC', 'DME_ILS') THEN 'ILS_LOC'
+                    WHEN nav_type = 'VOR' AND (upper(name) LIKE '%VOR-DME%' OR upper(name) LIKE '%VORTAC%' OR upper(name) LIKE '%VORDME%') THEN 'VOR-DME'
+                    ELSE nav_type
+                END AS canonical_type,
+                frequency_mhz,
+                latitude,
+                longitude,
+                coalesce(elevation_ft, 0.0) AS elevation_ft,
+                coalesce(range_nm, 40.0) AS range_nm
+            FROM nav_aids_xplane
+            WHERE nav_type IN ('DME', 'VOR', 'ILS_LOC', 'LOC', 'DME_ILS', 'NDB')
+              AND latitude BETWEEN ? AND ?
+              AND longitude BETWEEN ? AND ?
+        ),
+        oa_classified AS (
+            SELECT
+                ident,
+                name,
+                CASE
+                    WHEN type IN ('VOR-DME', 'VORTAC') THEN 'VOR-DME'
+                    WHEN type IN ('DME', 'TACAN', 'NDB-DME') THEN 'DME'
+                    WHEN type = 'VOR' THEN 'VOR'
+                    ELSE 'NDB'
+                END AS canonical_type,
+                CASE
+                    WHEN type = 'NDB' THEN round(frequency_khz / 1000.0, 4)
+                    ELSE round(frequency_khz / 1000.0, 2)
+                END AS frequency_mhz,
+                latitude_deg AS latitude,
+                longitude_deg AS longitude,
+                coalesce(elevation_ft, 0.0) AS elevation_ft,
+                CASE
+                    WHEN power = 'HIGH' THEN 130.0
+                    WHEN power = 'MEDIUM' THEN 60.0
+                    WHEN power = 'LOW' THEN 25.0
+                    ELSE 80.0
+                END AS range_nm
+            FROM raw_navaids
+            WHERE latitude_deg BETWEEN ? AND ?
+              AND longitude_deg BETWEEN ? AND ?
+        ),
+        combined AS (
+            SELECT * FROM xp_classified
+            UNION ALL
+            SELECT * FROM oa_classified
+        ),
+        deduped AS (
+            SELECT
+                ident,
+                first(name) AS name,
+                canonical_type AS nav_type,
+                first(frequency_mhz) AS frequency_mhz,
+                round(avg(latitude), 4) AS latitude,
+                round(avg(longitude), 4) AS longitude,
+                round(max(elevation_ft), 0) AS elevation_ft,
+                round(max(range_nm), 0) AS range_nm,
+                round(latitude, 1) AS lat_bin,
+                round(longitude, 1) AS lon_bin
+            FROM combined
+            WHERE ident IS NOT NULL AND length(trim(ident)) > 0
+            GROUP BY ident, canonical_type, round(latitude, 1), round(longitude, 1)
+        )
+        SELECT
+            ident,
+            name,
+            nav_type,
+            frequency_mhz,
+            latitude,
+            longitude,
+            elevation_ft,
+            range_nm
+        FROM deduped
+    """
+    params: list[Any] = [min_lat, max_lat, min_lon, max_lon, min_lat, max_lat, min_lon, max_lon]
+    where_clauses: list[str] = []
+
+    if nav_types:
+        placeholders = ", ".join(["?"] * len(nav_types))
+        where_clauses.append(f"nav_type IN ({placeholders})")
+        params.extend(nav_types)
+
+    if search_query and search_query.strip():
+        q = f"%{search_query.strip().upper()}%"
+        where_clauses.append("(upper(ident) LIKE ? OR upper(name) LIKE ?)")
+        params.extend([q, q])
+
+    if where_clauses:
+        sql += " WHERE " + " AND ".join(where_clauses)
+
+    sql += f" ORDER BY CASE nav_type WHEN 'VOR-DME' THEN 1 WHEN 'DME' THEN 2 WHEN 'VOR' THEN 3 WHEN 'ILS_LOC' THEN 4 ELSE 5 END, range_nm DESC LIMIT {int(limit)};"
+    return dataset.cursor.execute(sql, params).df()
+
+
 def analyze_flight_navaids_and_rnp(
     dataset: FlightDataset,
     ectrl_id: int,
-    corridor_half_width_nm: float = 35.0,
-    max_navaids_on_map: int = 45,
+    corridor_half_width_nm: float = 95.0,
+    max_navaids_on_map: int = 80,
 ) -> FlightNavaidRNPReport | None:
     """
-    Analyze active radio navigation aids (`DME`, `VOR`, `ILS_LOC`, `NDB`) along a flight's 4D
-    trajectory and compute the point-by-point anticipated RNP/RNAV capability and rationale.
+    Analyze active radio navigation aids (`VOR-DME`, `DME`, `VOR`, `ILS_LOC`, `NDB`) along a
+    flight's 4D trajectory and compute the point-by-point anticipated RNP/RNAV capability and rationale.
     """
     flight = dataset.get_flight(ectrl_id)
     if not flight:
@@ -144,37 +272,25 @@ def analyze_flight_navaids_and_rnp(
     ac_op = str(flight["ac_operator"])
     ac_type = str(flight["ac_type"])
 
-    # Bounding box around trajectory (+2.5 deg margin for RLOS navaid search)
-    min_lat = float(act_df["latitude"].min()) - 2.5
-    max_lat = float(act_df["latitude"].max()) + 2.5
-    min_lon = float(act_df["longitude"].min()) - 3.0
-    max_lon = float(act_df["longitude"].max()) + 3.0
+    # Bounding box around trajectory (+3.5 deg lat, +5.0 deg lon margin for RLOS at cruise FL)
+    min_lat = float(act_df["latitude"].min()) - 3.5
+    max_lat = float(act_df["latitude"].max()) + 3.5
+    min_lon = float(act_df["longitude"].min()) - 5.0
+    max_lon = float(act_df["longitude"].max()) + 5.0
 
-    nav_sql = """
-        SELECT
-            ident,
-            name,
-            nav_type,
-            frequency_mhz,
-            latitude,
-            longitude,
-            coalesce(elevation_ft, 0.0) AS elevation_ft,
-            coalesce(range_nm, 40.0) AS range_nm
-        FROM nav_aids_xplane
-        WHERE nav_type IN ('DME', 'VOR', 'ILS_LOC', 'LOC', 'DME_ILS', 'NDB')
-          AND latitude BETWEEN ? AND ?
-          AND longitude BETWEEN ? AND ?;
-    """
-    nav_df = dataset.cursor.execute(nav_sql, [min_lat, max_lat, min_lon, max_lon]).df()
+    nav_df = query_unified_navaids(
+        dataset,
+        min_lat=min_lat,
+        max_lat=max_lat,
+        min_lon=min_lon,
+        max_lon=max_lon,
+        limit=15000,
+    )
 
     # Pre-extract navaid records into a fast list of tuples for spatial evaluation
     # (ident, name, nav_type, freq, lat, lon, elev_ft, range_nm)
     navaids_raw: list[tuple[str, str, str, float | None, float, float, float, float]] = []
     if not nav_df.empty:
-        # Deduplicate co-located identical (ident, nav_type) within 0.02 deg
-        nav_df["lat_r"] = nav_df["latitude"].round(2)
-        nav_df["lon_r"] = nav_df["longitude"].round(2)
-        nav_df = nav_df.drop_duplicates(subset=["ident", "nav_type", "lat_r", "lon_r"])
         for r in nav_df.itertuples(index=False):
             freq_val = float(r.frequency_mhz) if pd.notna(r.frequency_mhz) else None
             navaids_raw.append(
@@ -204,9 +320,10 @@ def analyze_flight_navaids_and_rnp(
         cum_dists.append(cum_dists[-1] + seg_d)
     total_dist_nm = max(1.0, cum_dists[-1])
 
-    # Track closest approach of each navaid to the trajectory for the "Likely Used Navaids" map layer
-    # Key: (ident, nav_type, round(lat,2), round(lon,2))
+    # Track closest approach of each navaid to the trajectory
     closest_navaid_hits: dict[tuple[str, str, float, float], dict[str, Any]] = {}
+    # Also track the best serving VOR-DME / DME / VOR in every 35nm along-track bucket so no portion of the flight has missing navaids
+    bucket_best_keys: dict[tuple[int, str], tuple[float, tuple[str, str, float, float]]] = {}
 
     profile_points: list[TrajectoryRNPPoint] = []
 
@@ -216,6 +333,7 @@ def analyze_flight_navaids_and_rnp(
         fl_i = fls[i]
         dist_from_dep = cum_dists[i]
         dist_to_arr = max(0.0, total_dist_nm - dist_from_dep)
+        along_bucket = int(dist_from_dep // 35.0)
 
         # Determine flight phase
         if dist_from_dep <= 15.0 and fl_i < 80:
@@ -229,74 +347,90 @@ def analyze_flight_navaids_and_rnp(
         else:
             phase = "EN_ROUTE_CRUISE"
 
-        # Fast bounding box filter around waypoint (~2.2 deg lat, ~3.2 deg lon)
         dme_in_rlos: list[tuple[float, str]] = []
         vor_in_rlos: list[tuple[float, str]] = []
         ils_in_rlos: list[tuple[float, str]] = []
         ndb_in_rlos: list[tuple[float, str]] = []
 
+        # Latitude/longitude degree window scaled to RLOS (~3.5 deg lat, ~5.5 deg lon at mid/high latitudes)
         for ident, name, ntype, freq, nlat, nlon, nelev, nrng in navaids_raw:
-            if abs(nlat - lat_i) > 2.2 or abs(nlon - lon_i) > 3.2:
+            if abs(nlat - lat_i) > 3.5 or abs(nlon - lon_i) > 5.5:
                 continue
             d_nm = haversine_nm(lat_i, lon_i, nlat, nlon)
             rlos_nm = compute_rlos_nm(fl_i, nelev)
-            # Effective operational range is bounded by RLOS and published service volume
-            # (En-route VHF/UHF stations are reliably received up to min(RLOS, max(nrng, 130nm)))
-            if ntype in ("ILS_LOC", "LOC", "DME_ILS"):
+
+            if ntype == "ILS_LOC":
                 eff_range = min(rlos_nm, 25.0)
             elif ntype == "NDB":
-                eff_range = min(75.0, max(nrng, 35.0))
+                eff_range = min(85.0, max(nrng, 40.0))
             else:
-                eff_range = min(rlos_nm, max(nrng, 110.0), 160.0)
+                # VOR-DME, DME, VOR: at cruise FL, FMS receives en-route stations up to min(RLOS, 180 nm)
+                eff_range = min(rlos_nm, max(nrng * 1.4, 130.0), 185.0)
 
             if d_nm <= eff_range:
-                if ntype == "DME":
+                if ntype == "VOR-DME":
+                    dme_in_rlos.append((d_nm, ident))
+                    vor_in_rlos.append((d_nm, ident))
+                elif ntype == "DME":
                     dme_in_rlos.append((d_nm, ident))
                 elif ntype == "VOR":
                     vor_in_rlos.append((d_nm, ident))
-                elif ntype in ("ILS_LOC", "LOC", "DME_ILS"):
+                elif ntype == "ILS_LOC":
                     if dist_from_dep <= 25.0 or dist_to_arr <= 25.0:
                         ils_in_rlos.append((d_nm, ident))
                 elif ntype == "NDB":
                     ndb_in_rlos.append((d_nm, ident))
 
-                # Check if this navaid lies within the active route corridor for FMS auto-tuning
-                corridor_lim = 18.0 if ntype in ("ILS_LOC", "LOC", "DME_ILS") else (25.0 if ntype == "NDB" else corridor_half_width_nm)
+                # Corridor inclusion for map rendering
+                if ntype == "ILS_LOC":
+                    corridor_lim = 18.0 if ((dist_from_dep <= 22.0 and fl_i <= 100) or (dist_to_arr <= 22.0 and fl_i <= 100)) else -1.0
+                elif ntype == "NDB":
+                    corridor_lim = 30.0
+                else:
+                    # Dynamic corridor half-width for VOR-DME / DME / VOR (up to 95 nm in cruise so en-route legs always show their tuned stations)
+                    corridor_lim = corridor_half_width_nm if fl_i >= 180 else 45.0
+
                 if d_nm <= corridor_lim:
-                    if ntype in ("ILS_LOC", "LOC", "DME_ILS") and not (
-                        (dist_from_dep <= 20.0 and fl_i <= 100) or (dist_to_arr <= 20.0 and fl_i <= 100)
-                    ):
-                        pass
-                    else:
-                        key = (ident, ntype, round(nlat, 2), round(nlon, 2))
-                        prev = closest_navaid_hits.get(key)
-                        if prev is None or d_nm < prev["min_distance_to_track_nm"]:
-                            if ntype in ("ILS_LOC", "LOC", "DME_ILS"):
-                                role = "Terminal Precision Approach (ILS/LOC/DME)"
-                            elif ntype == "DME":
-                                role = "FMS Multi-DME Slant-Range Triangulation (DME/DME/IRU)"
-                            elif ntype == "VOR":
-                                role = "VHF Omnidirectional Airway & Rho-Theta Navigation (VOR/DME)"
-                            else:
-                                role = "Low/Medium Frequency Beacon Reference (NDB)"
-                            closest_navaid_hits[key] = {
-                                "ident": ident,
-                                "name": name,
-                                "nav_type": ntype,
-                                "frequency_mhz": freq,
-                                "latitude": nlat,
-                                "longitude": nlon,
-                                "elevation_ft": nelev,
-                                "published_range_nm": nrng,
-                                "min_distance_to_track_nm": round(d_nm, 2),
-                                "aircraft_fl_at_closest": round(fl_i, 0),
-                                "closest_track_lat": round(lat_i, 4),
-                                "closest_track_lon": round(lon_i, 4),
-                                "rlos_horizon_nm": round(rlos_nm, 1),
-                                "fms_navigation_role": role,
-                                "marker_color": NAVAID_COLOR_MAP.get(ntype, "#00a8ff"),
-                                "track_seq": i,
-                            }
+                    key = (ident, ntype, round(nlat, 2), round(nlon, 2))
+                    prev = closest_navaid_hits.get(key)
+                    if prev is None or d_nm < prev["min_distance_to_track_nm"]:
+                        if ntype == "ILS_LOC":
+                            role = "Terminal Precision Approach (ILS/LOC/DME)"
+                        elif ntype == "VOR-DME":
+                            role = "Co-Located VOR-DME / VORTAC (Multi-DME Slant-Range + VHF Azimuth)"
+                        elif ntype == "DME":
+                            role = "FMS Multi-DME Slant-Range Triangulation (DME/DME/IRU)"
+                        elif ntype == "VOR":
+                            role = "VHF Omnidirectional Airway & Rho-Theta Navigation (VOR)"
+                        else:
+                            role = "Low/Medium Frequency Beacon Reference (NDB)"
+
+                        closest_navaid_hits[key] = {
+                            "ident": ident,
+                            "name": name,
+                            "nav_type": ntype,
+                            "frequency_mhz": freq,
+                            "latitude": nlat,
+                            "longitude": nlon,
+                            "elevation_ft": nelev,
+                            "published_range_nm": nrng,
+                            "min_distance_to_track_nm": round(d_nm, 2),
+                            "along_track_distance_nm": round(dist_from_dep, 1),
+                            "aircraft_fl_at_closest": round(fl_i, 0),
+                            "closest_track_lat": round(lat_i, 4),
+                            "closest_track_lon": round(lon_i, 4),
+                            "rlos_horizon_nm": round(rlos_nm, 1),
+                            "fms_navigation_role": role,
+                            "marker_color": NAVAID_COLOR_MAP.get(ntype, "#00a8ff"),
+                            "track_seq": i,
+                        }
+
+                    # Record the closest VOR-DME/DME and VOR in each 35nm along-track bucket
+                    if ntype in ("VOR-DME", "DME", "VOR"):
+                        b_cat = "DME_GROUP" if ntype in ("VOR-DME", "DME") else "VOR_ONLY"
+                        b_key = (along_bucket, b_cat)
+                        if b_key not in bucket_best_keys or d_nm < bucket_best_keys[b_key][0]:
+                            bucket_best_keys[b_key] = (d_nm, key)
 
         dme_in_rlos.sort(key=lambda x: x[0])
         vor_in_rlos.sort(key=lambda x: x[0])
@@ -308,14 +442,12 @@ def analyze_flight_navaids_and_rnp(
         n_ils = len(ils_in_rlos)
         n_ndb = len(ndb_in_rlos)
 
-        # Build list of top primary tuned navaid idents at this waypoint
         tuned_idents: list[str] = []
         for _, idt in (ils_in_rlos[:1] + dme_in_rlos[:2] + vor_in_rlos[:2]):
             if idt not in tuned_idents:
                 tuned_idents.append(idt)
         primary_tuned_str = ", ".join(tuned_idents[:4]) if tuned_idents else "GNSS / IRS Only"
 
-        # Determine Anticipated RNP / RNAV Capability (in nm) and Why
         if phase == "FINAL_APPROACH":
             if n_ils >= 1:
                 rnp_nm = 0.1
@@ -343,7 +475,6 @@ def analyze_flight_navaids_and_rnp(
                 spec = "RNAV 2 (GNSS / IRU Terminal)"
                 why = "Terminal transition outside terrestrial DME/VOR line-of-sight; GNSS + IRU navigation"
         else:
-            # En-route cruise
             if n_dme >= 3:
                 rnp_nm = 1.0
                 spec = "RNAV 1 / RNP 1 (High-Density Multi-DME/IRU + GNSS)"
@@ -381,18 +512,23 @@ def analyze_flight_navaids_and_rnp(
             )
         )
 
-    # Sort discovered corridor navaids chronologically along the route (`track_seq`), prioritizing closest & key types
-    all_hits = list(closest_navaid_hits.values())
-    if len(all_hits) > max_navaids_on_map:
-        # Always keep ILS/LOC hits, and pick the closest DME/VOR/NDB distributed along the route
-        ils_hits = [h for h in all_hits if h["nav_type"] in ("ILS_LOC", "LOC", "DME_ILS")]
-        other_hits = [h for h in all_hits if h["nav_type"] not in ("ILS_LOC", "LOC", "DME_ILS")]
-        other_hits.sort(key=lambda h: h["min_distance_to_track_nm"])
-        selected_hits = (ils_hits + other_hits)[:max_navaids_on_map]
-    else:
-        selected_hits = all_hits
+    # Select navaids ensuring every along-track bucket keeps its best serving VOR-DME/DME and VOR stations
+    guaranteed_keys = {k for _, k in bucket_best_keys.values()}
+    for k, h in closest_navaid_hits.items():
+        if h["nav_type"] == "ILS_LOC":
+            guaranteed_keys.add(k)
 
-    selected_hits.sort(key=lambda h: (h["track_seq"], h["min_distance_to_track_nm"]))
+    guaranteed_hits = [closest_navaid_hits[k] for k in guaranteed_keys if k in closest_navaid_hits]
+    remaining_hits = [
+        h for k, h in closest_navaid_hits.items() if k not in guaranteed_keys
+    ]
+    # Prioritize VOR-DME, DME, VOR over NDB in remaining slots, sorted by proximity to track
+    remaining_hits.sort(
+        key=lambda h: (0 if h["nav_type"] in ("VOR-DME", "DME", "VOR") else 1, h["min_distance_to_track_nm"])
+    )
+
+    selected_hits = (guaranteed_hits + remaining_hits)[:max_navaids_on_map]
+    selected_hits.sort(key=lambda h: (h["along_track_distance_nm"], h["min_distance_to_track_nm"]))
 
     active_navaids = [
         ActiveRouteNavaid(
@@ -405,6 +541,7 @@ def analyze_flight_navaids_and_rnp(
             elevation_ft=h["elevation_ft"],
             published_range_nm=h["published_range_nm"],
             min_distance_to_track_nm=h["min_distance_to_track_nm"],
+            along_track_distance_nm=h["along_track_distance_nm"],
             aircraft_fl_at_closest=h["aircraft_fl_at_closest"],
             closest_track_lat=h["closest_track_lat"],
             closest_track_lon=h["closest_track_lon"],
@@ -415,9 +552,9 @@ def analyze_flight_navaids_and_rnp(
         for h in selected_hits
     ]
 
-    dme_cnt = sum(1 for a in active_navaids if a.nav_type == "DME")
-    vor_cnt = sum(1 for a in active_navaids if a.nav_type == "VOR")
-    ils_cnt = sum(1 for a in active_navaids if a.nav_type in ("ILS_LOC", "LOC", "DME_ILS"))
+    dme_cnt = sum(1 for a in active_navaids if a.nav_type in ("VOR-DME", "DME"))
+    vor_cnt = sum(1 for a in active_navaids if a.nav_type in ("VOR-DME", "VOR"))
+    ils_cnt = sum(1 for a in active_navaids if a.nav_type == "ILS_LOC")
     ndb_cnt = sum(1 for a in active_navaids if a.nav_type == "NDB")
 
     rnp_vals = [p.anticipated_rnp_nm for p in profile_points]

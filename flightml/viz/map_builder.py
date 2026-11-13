@@ -14,6 +14,7 @@ def create_trajectory_map(
     planned_df: pd.DataFrame,
     output_html_path: Path | str | None = None,
     active_navaids: list[Any] | None = None,
+    show_navaids: bool = True,
 ) -> folium.Map:
     """
     Generate an interactive Leaflet/Folium map visualizing:
@@ -152,8 +153,8 @@ def create_trajectory_map(
         ).add_to(m)
 
     # Add likely used route navaids as colored dots along the trajectory
-    if active_navaids:
-        nav_group = folium.FeatureGroup(name="📡 Active Route Navaids (DME / VOR / ILS / NDB)", show=True)
+    if active_navaids and show_navaids:
+        nav_group = folium.FeatureGroup(name="📡 Active Route Navaids (VOR-DME / DME / VOR / ILS / NDB)", show=True)
         for nav in active_navaids:
             nd = nav.to_dict() if hasattr(nav, "to_dict") else (nav if isinstance(nav, dict) else nav.__dict__)
             n_ident = str(nd.get("ident", "NAV"))
@@ -189,7 +190,7 @@ def create_trajectory_map(
             # Colored dot for the navaid station
             folium.CircleMarker(
                 location=[n_lat, n_lon],
-                radius=6.5 if n_type in ("DME", "VOR") else 7.5,
+                radius=7.0 if n_type in ("VOR-DME", "ILS_LOC") else 6.5,
                 color="#1e272e",
                 weight=1.5,
                 fill=True,
@@ -220,14 +221,15 @@ def create_trajectory_map(
     # Add title header box (bottom-left to avoid layer control collision)
     nav_legend_line = (
         '<br><b>Navaids:</b> '
-        '<span style="color: #00a8ff;">● DME</span> | '
+        '<span style="color: #00a8ff;">● VOR-DME</span> | '
+        '<span style="color: #0097e6;">● DME</span> | '
         '<span style="color: #00b894;">● VOR</span> | '
-        '<span style="color: #ff2e93;">● ILS/LOC</span> | '
+        '<span style="color: #ff2e93;">● ILS</span> | '
         '<span style="color: #f39c12;">● NDB</span>'
-        if active_navaids
+        if (active_navaids and show_navaids)
         else ""
     )
-    box_height = 138 if active_navaids else 115
+    box_height = 138 if (active_navaids and show_navaids) else 115
     title_html = f"""
     <div style="position: fixed;
                 bottom: 25px; left: 15px; width: 355px; height: {box_height}px;
@@ -409,3 +411,101 @@ def create_grid_saturation_map(
     """
     m.get_root().html.add_child(folium.Element(legend_html))
     return m
+
+
+def create_world_navaids_map(
+    navaids_df: pd.DataFrame,
+    center_lat: float = 30.0,
+    center_lon: float = 10.0,
+    zoom_start: int = 2,
+) -> folium.Map:
+    """
+    Render an interactive Canvas-accelerated Folium world map displaying all filtered global
+    radio navigation aids (VOR-DME / VORTAC, DME / TACAN, VOR, ILS / LOC, NDB) as color-coded dots.
+    """
+    m = folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=zoom_start,
+        tiles=None,
+        prefer_canvas=True,
+    )
+
+    folium.TileLayer(
+        tiles="https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+        attr="&copy; OpenStreetMap contributors, HOT style hosted by OpenStreetMap France",
+        name="Humanitarian (Unblocked)",
+        subdomains="abc",
+        show=True,
+        control=True,
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png",
+        attr="&copy; OpenStreetMap France & OpenStreetMap contributors",
+        name="OSM France (Unblocked)",
+        subdomains="abc",
+        show=False,
+        control=True,
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+        attr="Map data: &copy; OpenStreetMap contributors, SRTM | Map style: &copy; OpenTopoMap",
+        name="OpenTopoMap",
+        subdomains="abc",
+        show=False,
+        control=True,
+    ).add_to(m)
+
+    type_colors = {
+        "VOR-DME": "#00a8ff",
+        "DME": "#0097e6",
+        "VOR": "#00b894",
+        "ILS_LOC": "#ff2e93",
+        "NDB": "#f39c12",
+    }
+
+    if navaids_df is not None and not navaids_df.empty:
+        for _, row in navaids_df.iterrows():
+            lat = float(row["latitude"])
+            lon = float(row["longitude"])
+            ident = str(row.get("ident", "NAV"))
+            name = str(row.get("name", ""))
+            ntype = str(row.get("nav_type", "DME"))
+            raw_t = str(row.get("raw_type", ntype))
+            freq = row.get("frequency_mhz")
+            freq_str = f"{float(freq):.2f} MHz" if pd.notna(freq) and freq is not None else "UHF Ch"
+            rng = float(row.get("range_nm", 40.0)) if pd.notna(row.get("range_nm")) else 40.0
+            elev = float(row.get("elevation_ft", 0.0)) if pd.notna(row.get("elevation_ft")) else 0.0
+            col = type_colors.get(ntype, "#00a8ff")
+
+            folium.CircleMarker(
+                location=[lat, lon],
+                radius=5.0 if ntype in ("VOR-DME", "ILS_LOC") else 4.2,
+                color="#1e272e",
+                weight=1.0,
+                fill=True,
+                fill_color=col,
+                fill_opacity=0.88,
+                tooltip=f"📡 {ident} — {name} [{raw_t} | {freq_str} | Rng {rng:.0f} nm | Elev {elev:,.0f} ft]",
+            ).add_to(m)
+
+    folium.LayerControl(position="topright", collapsed=True).add_to(m)
+
+    total_shown = 0 if navaids_df is None else len(navaids_df)
+    legend_html = f"""
+    <div style="position: fixed; bottom: 20px; left: 15px; width: 395px;
+                background-color: white; border: 2px solid #bdc3c7; border-radius: 8px;
+                z-index: 9999; font-size: 12px; font-family: sans-serif;
+                padding: 10px; box-shadow: 2px 2px 6px rgba(0,0,0,0.2);">
+        <b style="font-size: 13.5px; color: #2c3e50;">🌍 Global Radio Navaids Atlas ({total_shown:,} stations shown)</b><br>
+        <span style="color: #00a8ff;">● VOR-DME / VORTAC</span> |
+        <span style="color: #0097e6;">● DME / TACAN</span> |
+        <span style="color: #00b894;">● VOR</span> |
+        <span style="color: #ff2e93;">● ILS / LOC</span> |
+        <span style="color: #f39c12;">● NDB</span>
+    </div>
+    """
+    m.get_root().html.add_child(folium.Element(legend_html))
+    return m
+

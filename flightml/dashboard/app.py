@@ -55,7 +55,10 @@ from flightml.geo.conflict_scanner import (
     compute_sector_complexity_index,
     compute_hourly_grid_saturation,
 )
-from flightml.geo.rnp_navaid_analyzer import analyze_flight_navaids_and_rnp
+from flightml.geo.rnp_navaid_analyzer import (
+    analyze_flight_navaids_and_rnp,
+    query_unified_navaids,
+)
 from flightml.weather.runway_safety import assess_flight_runway_safety
 from flightml.eval.contrail_climate import analyze_flight_wind_and_contrails
 from flightml.sim.tail_swap_optimizer import optimize_hub_tail_swaps
@@ -80,7 +83,11 @@ from flightml.eval.surface_taxi import (
     analyze_flight_taxi_out,
 )
 from flightml.eval.jet_fuel_prices import get_all_weekly_fuel_prices_df
-from flightml.viz.map_builder import create_trajectory_map, create_grid_saturation_map
+from flightml.viz.map_builder import (
+    create_trajectory_map,
+    create_grid_saturation_map,
+    create_world_navaids_map,
+)
 
 
 st.set_page_config(
@@ -248,20 +255,53 @@ st.markdown(
     f"Active dataset: **Eurocontrol Cycle {selected_period}**."
 )
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs(
+(
+    tab1,
+    tab2,
+    tab_world_nav,
+    tab_group_perf,
+    tab_group_bench,
+    tab8,
+    tab_group_macro,
+) = st.tabs(
     [
-        "🌐 Network Overview & Airspace Map",
-        "🗺️ 4D Trajectory & Holdings",
-        "📅 Recurring Series & Diurnal Trends",
-        "📉 Vertical Profile: CDO & CCO",
-        "🩺 Delay & Runway Diagnostics",
-        "🌱 Fuel, Carbon & Route Charges",
-        "👯 Twin-Flight Benchmark",
+        "🌐 Airspace & Sector Saturation",
+        "🗺️ 4D Trajectory & RNP",
+        "📡 Global Navaids World Map",
+        "📐 Flight Performance & Eco (€)",
+        "📊 Corridor & Twin Benchmarks",
         "🔮 What-If & Stress Tests",
-        "📈 Macro Evolution & AIRAC Diff",
-        "📖 Methodology & KPI Reference",
+        "📈 Macro & Reference Guide",
     ]
 )
+
+with tab_group_perf:
+    st.caption("Grouped Single-Flight Performance Views: Vertical Profile (CDO/CCO), Delay & Runway Safety Diagnostics, and Fuel/Carbon/CRCO (€) Accounting.")
+    tab4, tab5, tab6 = st.tabs(
+        [
+            "📉 Vertical Profile: CDO & CCO",
+            "🩺 Delay & Runway Diagnostics",
+            "🌱 Fuel, Carbon & Route Charges (€)",
+        ]
+    )
+
+with tab_group_bench:
+    st.caption("Grouped Corridor & City-Pair Benchmarking: Twin-Flight Efficiency Comparison and Longitudinal Recurring Series / Diurnal Bank Trends.")
+    tab7, tab3 = st.tabs(
+        [
+            "👯 Twin-Flight Efficiency Benchmark",
+            "📅 Recurring Series & Diurnal Trends",
+        ]
+    )
+
+with tab_group_macro:
+    st.caption("Grouped Structural & Documentation Views: Cross-Period Macro Evolution / AIRAC Diffing and Complete Methodology & KPI Reference.")
+    tab9, tab10 = st.tabs(
+        [
+            "📈 Macro Evolution & AIRAC Diff",
+            "📖 Methodology & KPI Reference",
+        ]
+    )
 
 # ----------------- TAB 1: Network Overview & Airspace Map -----------------
 with tab1:
@@ -417,18 +457,47 @@ with tab2:
         m4.metric("Inefficiency Ratio", f"{metrics.horizontal_extension_ratio:.3f}x")
         m5.metric("Holding Duration", f"{metrics.total_holding_duration_min:.1f} min")
 
+        col_nav_tog1, col_nav_tog2 = st.columns([1, 2])
+        with col_nav_tog1:
+            show_route_navaids = st.toggle(
+                "📡 Show Active Route Navaids on Map",
+                value=True,
+                key=f"tog_route_navaids_{selected_period}",
+                help="Toggle the colored navaid station icons and slant-range reception sightlines on or off.",
+            )
+        with col_nav_tog2:
+            route_nav_type_filter = st.multiselect(
+                "Filter Route Navaid Types Shown on Map",
+                options=["VOR-DME", "DME", "VOR", "ILS_LOC", "NDB"],
+                default=["VOR-DME", "DME", "VOR", "ILS_LOC", "NDB"],
+                disabled=not show_route_navaids,
+                key=f"flt_route_navaids_{selected_period}",
+            )
+
+        filtered_route_navaids = (
+            [n for n in nav_rnp_rep.active_navaids if n.nav_type in route_nav_type_filter]
+            if (nav_rnp_rep and nav_rnp_rep.active_navaids and show_route_navaids)
+            else []
+        )
+
         st.caption(
-            "🗺️ **Interactive 4D Route & Active Navaids Map:** Colored dots show ground radio navigation aids auto-tuned along the corridor "
-            "(🔵 **DME** slant-range stations | 🟢 **VOR** omnidirectional stations | 🟣 **ILS/LOC** precision approach | 🟠 **NDB** beacons) "
-            "with dashed sightlines to the aircraft's closest 4D trajectory pass."
+            "🗺️ **Interactive 4D Route & Active Navaids Map:** Colored dots show ground radio navigation aids auto-tuned along the entire corridor "
+            "(🔵 **VOR-DME / VORTAC** | 🔷 **DME / TACAN** | 🟢 **VOR** | 🟣 **ILS/LOC** | 🟠 **NDB**) "
+            "with dashed sightlines to the aircraft's closest 4D trajectory pass. Use the toggle above to switch navaid icons on or off."
         )
         m = create_trajectory_map(
             flight,
             trajs["actual"],
             trajs["planned"],
-            active_navaids=nav_rnp_rep.active_navaids if nav_rnp_rep else None,
+            active_navaids=filtered_route_navaids,
+            show_navaids=show_route_navaids,
         )
-        st_folium(m, width=1200, height=540, key=f"traj_map_{selected_period}_{active_flight_id}")
+        st_folium(
+            m,
+            width=1200,
+            height=540,
+            key=f"traj_map_{selected_period}_{active_flight_id}_{int(show_route_navaids)}_{len(filtered_route_navaids)}",
+        )
 
         if nav_rnp_rep and nav_rnp_rep.profile_points:
             st.markdown("#### 📡 Active Route Navaids & Anticipated RNP/RNAV Capability vs. Vertical Profile")
@@ -640,6 +709,118 @@ with tab2:
                 st.dataframe(pd.DataFrame(aua_dwell["sectors"]), use_container_width=True)
     else:
         st.warning(f"Flight ID {active_flight_id} not found in period {selected_period}.")
+
+# ----------------- TAB WORLD NAV: Global Navaids World Map Explorer -----------------
+with tab_world_nav:
+    st.header("🌍 Global Radio Navaids World Map & Station Directory")
+    st.markdown(
+        "Explore **all global terrestrial radio navigation aids** (`VOR-DME / VORTAC`, `DME / TACAN`, `VOR`, `ILS / LOC`, and `NDB`) "
+        "fused across the X-Plane 1100 global navigation database and OurAirports navaid registry. "
+        "Filter by navaid type, geographic region/viewport, or station identifier."
+    )
+
+    WORLD_REGIONS: dict[str, tuple[float, float, float, float, float, float, int]] = {
+        "🌍 Entire World": (-85.0, 85.0, -180.0, 180.0, 25.0, 10.0, 2),
+        "🇪🇺 Europe & North Atlantic": (34.0, 72.0, -25.0, 45.0, 50.0, 10.0, 4),
+        "🌎 North America": (15.0, 72.0, -170.0, -50.0, 40.0, -98.0, 3),
+        "🌏 Asia-Pacific": (-48.0, 60.0, 65.0, 180.0, 22.0, 118.0, 3),
+        "🌍 Middle East & Africa": (-38.0, 40.0, -20.0, 65.0, 12.0, 25.0, 3),
+        "🌎 South & Central America": (-58.0, 15.0, -95.0, -30.0, -18.0, -60.0, 3),
+    }
+
+    wn_c1, wn_c2, wn_c3, wn_c4 = st.columns([2, 2, 1.5, 1.5])
+    with wn_c1:
+        wn_types = st.multiselect(
+            "Filter Navaid Types",
+            options=["VOR-DME", "DME", "VOR", "ILS_LOC", "NDB"],
+            default=["VOR-DME", "DME", "VOR"],
+            key=f"wn_types_{selected_period}",
+            help="Select which navaid categories to render on the global map (VOR-DME/VORTAC, standalone DME/TACAN, VOR, ILS/LOC, NDB).",
+        )
+    with wn_c2:
+        wn_region = st.selectbox(
+            "Geographic Region / Viewport",
+            options=list(WORLD_REGIONS.keys()),
+            index=0,
+            key=f"wn_region_{selected_period}",
+        )
+    with wn_c3:
+        wn_search = st.text_input(
+            "Search Ident or Name",
+            value="",
+            placeholder="e.g. BPK, LAM, FRANKFURT",
+            key=f"wn_search_{selected_period}",
+        ).strip()
+    with wn_c4:
+        wn_limit = st.slider(
+            "Max Map Markers",
+            min_value=500,
+            max_value=6000,
+            value=2500,
+            step=500,
+            key=f"wn_limit_{selected_period}",
+            help="Maximum number of navaid markers rendered simultaneously on the HTML5 Canvas world map.",
+        )
+
+    min_lat, max_lat, min_lon, max_lon, c_lat, c_lon, z_lvl = WORLD_REGIONS[wn_region]
+    world_nav_df = query_unified_navaids(
+        ds,
+        min_lat=min_lat,
+        max_lat=max_lat,
+        min_lon=min_lon,
+        max_lon=max_lon,
+        nav_types=wn_types if wn_types else ["NONE"],
+        search_query=wn_search if wn_search else None,
+        limit=wn_limit,
+    )
+
+    # Compute breakdown metrics
+    vordme_cnt = int((world_nav_df["nav_type"] == "VOR-DME").sum()) if not world_nav_df.empty else 0
+    dme_cnt = int((world_nav_df["nav_type"] == "DME").sum()) if not world_nav_df.empty else 0
+    vor_cnt = int((world_nav_df["nav_type"] == "VOR").sum()) if not world_nav_df.empty else 0
+    ils_cnt = int((world_nav_df["nav_type"] == "ILS_LOC").sum()) if not world_nav_df.empty else 0
+    ndb_cnt = int((world_nav_df["nav_type"] == "NDB").sum()) if not world_nav_df.empty else 0
+
+    wm1, wm2, wm3, wm4, wm5, wm6 = st.columns(6)
+    wm1.metric("Stations Rendered", f"{len(world_nav_df):,}")
+    wm2.metric("🔵 VOR-DME / VORTAC", f"{vordme_cnt:,}")
+    wm3.metric("🔷 DME / TACAN", f"{dme_cnt:,}")
+    wm4.metric("🟢 VOR", f"{vor_cnt:,}")
+    wm5.metric("🟣 ILS / LOC", f"{ils_cnt:,}")
+    wm6.metric("🟠 NDB", f"{ndb_cnt:,}")
+
+    world_map = create_world_navaids_map(
+        world_nav_df,
+        center_lat=c_lat,
+        center_lon=c_lon,
+        zoom_start=z_lvl,
+    )
+    st_folium(
+        world_map,
+        width=1200,
+        height=560,
+        key=f"world_nav_map_{selected_period}_{wn_region}_{'_'.join(wn_types)}_{wn_search}_{wn_limit}",
+    )
+
+    with st.expander(f"📋 View Filtered Global Navaids Station Directory ({len(world_nav_df):,} stations)", expanded=False):
+        if not world_nav_df.empty:
+            disp_nav_df = world_nav_df[
+                ["ident", "name", "nav_type", "frequency_mhz", "range_nm", "elevation_ft", "latitude", "longitude"]
+            ].rename(
+                columns={
+                    "ident": "Ident",
+                    "name": "Station Name",
+                    "nav_type": "Navaid Type",
+                    "frequency_mhz": "Freq (MHz)",
+                    "range_nm": "Range (nm)",
+                    "elevation_ft": "Elevation (ft)",
+                    "latitude": "Latitude",
+                    "longitude": "Longitude",
+                }
+            )
+            st.dataframe(disp_nav_df, use_container_width=True)
+        else:
+            st.info("No navaids match the current filter selection.")
 
 # ----------------- TAB 3: Recurring Series & Diurnal Trends -----------------
 with tab3:

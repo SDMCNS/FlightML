@@ -28,6 +28,7 @@ from flightml.geo.conflict_scanner import (
 )
 from flightml.geo.rnp_navaid_analyzer import (
     analyze_flight_navaids_and_rnp,
+    query_unified_navaids,
     FlightNavaidRNPReport,
     ActiveRouteNavaid,
     TrajectoryRNPPoint,
@@ -98,7 +99,11 @@ from flightml.sim.tail_swap_optimizer import (
 )
 
 # Visualization
-from flightml.viz.map_builder import create_trajectory_map, create_grid_saturation_map
+from flightml.viz.map_builder import (
+    create_trajectory_map,
+    create_grid_saturation_map,
+    create_world_navaids_map,
+)
 
 __all__ = [
     "__version__",
@@ -121,6 +126,7 @@ __all__ = [
     "compute_hourly_grid_saturation",
     "ProximityReport",
     "analyze_flight_navaids_and_rnp",
+    "query_unified_navaids",
     "FlightNavaidRNPReport",
     "ActiveRouteNavaid",
     "TrajectoryRNPPoint",
@@ -184,4 +190,5 @@ __all__ = [
     # Viz
     "create_trajectory_map",
     "create_grid_saturation_map",
+    "create_world_navaids_map",
 ]
