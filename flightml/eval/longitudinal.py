@@ -142,6 +142,9 @@ class YearOverYearDelta:
     top_growing_airlines: list[dict[str, Any]]
     top_aircraft_type_shifts: list[dict[str, Any]]
     top_city_pairs_evolution: list[dict[str, Any]]
+    is_matched_season: bool = True
+    year_gap: int = 1
+    is_yoy_capable: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -341,11 +344,70 @@ class LongitudinalEngine:
         """Return macro metrics across all available periods."""
         return [self.get_period_metrics(p) for p in self.available_periods]
 
-    def get_timeline_dataframe(self) -> pd.DataFrame:
-        """Return a structured tabular timeline dataframe across all available periods."""
-        metrics_list = self.get_all_period_metrics()
+    def get_yoy_capable_periods(self) -> list[str]:
+        """
+        Return only periods that belong to years with matching multi-season YoY capability (e.g. 2024 and 2025).
+        Excludes isolated historical anchor archives like 201611 that lack matching seasonal pairs.
+        """
+        periods_by_month: dict[int, list[str]] = {}
+        for p in self.available_periods:
+            m = PeriodMetadata.from_period_id(p)
+            periods_by_month.setdefault(m.month, []).append(p)
+
+        yoy_periods = []
+        for p in self.available_periods:
+            m = PeriodMetadata.from_period_id(p)
+            if len(periods_by_month.get(m.month, [])) >= 2:
+                yoy_periods.append(p)
+
+        return sorted(yoy_periods)
+
+    def get_yoy_matching_pairs(self) -> list[dict[str, str]]:
+        """
+        Return strictly paired Year-over-Year periods sharing the exact same seasonal month
+        (e.g. 202402 -> 202502, 202406 -> 202506, 202410 -> 202510).
+        """
+        pairs = []
+        yoy_periods = self.get_yoy_capable_periods()
+        by_month: dict[int, list[str]] = {}
+        for p in yoy_periods:
+            m = PeriodMetadata.from_period_id(p)
+            by_month.setdefault(m.month, []).append(p)
+
+        for month, plist in sorted(by_month.items()):
+            s_plist = sorted(plist)
+            for i in range(len(s_plist) - 1):
+                p_base = s_plist[i]
+                p_targ = s_plist[i + 1]
+                meta_base = PeriodMetadata.from_period_id(p_base)
+                meta_targ = PeriodMetadata.from_period_id(p_targ)
+                pairs.append({
+                    "baseline": p_base,
+                    "target": p_targ,
+                    "season": meta_targ.season_label,
+                    "month": str(month),
+                    "label": f"{meta_targ.season_label}: {p_base} ➔ {p_targ}",
+                })
+        return pairs
+
+    def get_timeline_dataframe(self, cohort: str = "all") -> pd.DataFrame:
+        """
+        Return a structured tabular timeline dataframe.
+        cohort: 'all' (all periods), 'yoy' (only continuous YoY-capable periods 2024-2025),
+                or 'baseline' (only historical single baseline periods like 2016).
+        """
+        yoy_capable = set(self.get_yoy_capable_periods())
+        if cohort in ("yoy", "contemporary"):
+            periods_to_use = [p for p in self.available_periods if p in yoy_capable]
+        elif cohort in ("baseline", "historical"):
+            periods_to_use = [p for p in self.available_periods if p not in yoy_capable]
+        else:
+            periods_to_use = self.available_periods
+
+        metrics_list = [self.get_period_metrics(p) for p in periods_to_use]
         rows = []
         for m in metrics_list:
+            is_yoy = m.period_id in yoy_capable
             rows.append({
                 "period_id": m.period_id,
                 "year": m.metadata.year,
@@ -360,12 +422,14 @@ class LongitudinalEngine:
                 "avg_distance_nm": m.avg_distance_nm,
                 "avg_air_time_min": m.avg_air_time_min,
                 "newgen_share_pct": m.newgen_share_pct,
+                "is_yoy_cohort": is_yoy,
+                "cohort_type": "Contemporary YoY (2024–2025)" if is_yoy else "Historical Reference (2016)",
             })
         return pd.DataFrame(rows).sort_values("period_id").reset_index(drop=True)
 
-    def build_longitudinal_timeline(self) -> pd.DataFrame:
+    def build_longitudinal_timeline(self, cohort: str = "all") -> pd.DataFrame:
         """Alias for get_timeline_dataframe for backward compatibility."""
-        return self.get_timeline_dataframe()
+        return self.get_timeline_dataframe(cohort=cohort)
 
     def compare_yoy(
         self, period_baseline: str, period_target: str
@@ -493,6 +557,10 @@ class LongitudinalEngine:
         """).df()
         top_city_pairs = city_pair_df.to_dict(orient="records")
 
+        is_matched_season = (m_base.metadata.month == m_targ.metadata.month)
+        year_gap = m_targ.metadata.year - m_base.metadata.year
+        is_yoy_capable = is_matched_season and (year_gap == 1)
+
         return YearOverYearDelta(
             period_baseline=period_baseline,
             period_target=period_target,
@@ -519,6 +587,9 @@ class LongitudinalEngine:
             top_growing_airlines=top_growing_airlines,
             top_aircraft_type_shifts=top_ac_shifts,
             top_city_pairs_evolution=top_city_pairs,
+            is_matched_season=is_matched_season,
+            year_gap=year_gap,
+            is_yoy_capable=is_yoy_capable,
         )
 
     def decompose_seasonality(self, year: int) -> AnnualSeasonalDecomposition:

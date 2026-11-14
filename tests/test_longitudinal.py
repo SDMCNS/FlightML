@@ -113,3 +113,32 @@ def test_get_fleet_evolution_timeline(engine):
     assert p2016["airbus_neo_flights"] == 0
     assert p2025["airbus_neo_flights"] > 100_000
     assert p2025["newgen_share_pct"] > p2016["newgen_share_pct"]
+
+
+def test_yoy_capable_periods_and_cohort_filter(engine):
+    yoy_periods = engine.get_yoy_capable_periods()
+    assert "201611" not in yoy_periods  # Isolated anchor without matching month
+    assert "202402" in yoy_periods
+    assert "202502" in yoy_periods
+    assert "202406" in yoy_periods
+    assert "202506" in yoy_periods
+    assert "202410" in yoy_periods
+    assert "202510" in yoy_periods
+
+    pairs = engine.get_yoy_matching_pairs()
+    assert len(pairs) >= 3
+    pair_labels = [p["label"] for p in pairs]
+    assert any("202402 ➔ 202502" in l for l in pair_labels)
+    assert any("202406 ➔ 202506" in l for l in pair_labels)
+    assert any("202410 ➔ 202510" in l for l in pair_labels)
+
+    # Filtered timeline cohort
+    tl_yoy = engine.get_timeline_dataframe(cohort="yoy")
+    assert len(tl_yoy) == 6
+    assert "201611" not in tl_yoy["period_id"].values
+    assert all(tl_yoy["is_yoy_cohort"])
+
+    # Baseline-only cohort
+    tl_base = engine.get_timeline_dataframe(cohort="baseline")
+    assert "201611" in tl_base["period_id"].values
+    assert not any(tl_base["is_yoy_cohort"])

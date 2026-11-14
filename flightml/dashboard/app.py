@@ -1820,22 +1820,38 @@ with tab_cat_longitudinal:
         st.markdown(
             "Synthesizes cross-sectional operational metrics, daily traffic patterns, mean arrival delays, "
             "environmental CO₂ footprints, and the market penetration of new-generation eco-efficient aircraft "
-            "(A320neo, A321neo, B737 MAX, A220/BCS3, A350, B787) across all ingested Eurocontrol historical archives."
+            "(A320neo, A321neo, B737 MAX, A220/BCS3, A350, B787) across historical archives."
         )
 
         @st.cache_data(show_spinner=False)
-        def _get_cached_longitudinal_df():
+        def _get_cached_longitudinal_df(cohort: str = "all"):
             eng = LongitudinalEngine()
-            return eng.get_timeline_dataframe()
+            return eng.get_timeline_dataframe(cohort=cohort)
 
-        with st.spinner("Compiling multi-period longitudinal timeline across archives..."):
-            t_df = _get_cached_longitudinal_df()
+        col_scope_sel, col_scope_info = st.columns([2, 3])
+        with col_scope_sel:
+            cohort_choice = st.radio(
+                "Cohort Scope",
+                ["✈️ Contemporary YoY Cohort (2024–2025)", "🏛️ All Archives (Include 2016 Baseline)"],
+                horizontal=True,
+                key="tl_cohort_choice",
+            )
+        is_yoy_only = "Contemporary" in cohort_choice
+        with col_scope_info:
+            if is_yoy_only:
+                st.info("💡 **YoY Continuous Processing**: Showing the balanced 2024–2025 multi-season archives. The 2016 archive is an isolated 9-year historical benchmark.")
+            else:
+                st.caption("Showing all indexed historical periods including the 2016 historical reference.")
 
-        if t_df.empty:
+        with st.spinner("Compiling longitudinal timeline..."):
+            raw_tl_df = _get_cached_longitudinal_df(cohort="yoy" if is_yoy_only else "all")
+
+        if raw_tl_df.empty:
             st.warning("No longitudinal archive periods currently detected in database.")
         else:
+            t_df = raw_tl_df.copy()
             col_tl1, col_tl2, col_tl3, col_tl4 = st.columns(4)
-            col_tl1.metric("Indexed Periods", f"{len(t_df)} archives", "2016 – 2025")
+            col_tl1.metric("Indexed Periods", f"{len(t_df)} archives", "2024 – 2025" if is_yoy_only else "2016 – 2025")
             latest_row = t_df.iloc[-1]
             earliest_row = t_df.iloc[0]
             col_tl2.metric(
@@ -1867,6 +1883,7 @@ with tab_cat_longitudinal:
                     "avg_distance_nm": "Avg Distance (nm)",
                     "avg_air_time_min": "Avg Air Time (min)",
                     "newgen_share_pct": "Neo/MAX Share (%)",
+                    "cohort_type": "Cohort",
                 }
             )
             st.dataframe(display_tl_df, use_container_width=True)
@@ -1901,15 +1918,35 @@ with tab_cat_longitudinal:
         )
 
         st.subheader("1. Pairwise Year-over-Year (YoY) Analyzer")
-        all_periods = t_df["period_id"].tolist() if not t_df.empty else available_periods
-        y_col1, y_col2 = st.columns(2)
-        base_p = y_col1.selectbox("Baseline Period (Prior Year)", all_periods, index=all_periods.index("202410") if "202410" in all_periods else 0, key="yoy_base")
-        targ_p = y_col2.selectbox("Target Period (Recent Year)", all_periods, index=all_periods.index("202510") if "202510" in all_periods else len(all_periods)-1, key="yoy_targ")
+        eng_inst = LongitudinalEngine()
+        yoy_pairs = eng_inst.get_yoy_matching_pairs()
+        yoy_periods_only = eng_inst.get_yoy_capable_periods()
+
+        mode_col, pair_col = st.columns([1, 2])
+        pair_mode = mode_col.radio("Selection Mode", ["Strict Seasonal Matching Pairs (Recommended)", "Custom Periods"], key="yoy_pair_mode")
+
+        if pair_mode == "Strict Seasonal Matching Pairs (Recommended)" and yoy_pairs:
+            pair_options = [p["label"] for p in yoy_pairs]
+            chosen_pair_idx = pair_col.selectbox("Select Seasonally Matched YoY Pair", range(len(yoy_pairs)), format_func=lambda i: pair_options[i], index=len(yoy_pairs)-1 if len(yoy_pairs)>0 else 0, key="yoy_matched_pair_sel")
+            base_p = yoy_pairs[chosen_pair_idx]["baseline"]
+            targ_p = yoy_pairs[chosen_pair_idx]["target"]
+            st.caption(f"Analyzing identical month across consecutive years: `{base_p}` ➔ `{targ_p}` ({yoy_pairs[chosen_pair_idx]['season']})")
+        else:
+            include_hist = pair_col.checkbox("Include 2016 Historical Baseline in selector", value=False, key="yoy_inc_hist")
+            all_selectable = (yoy_periods_only + ["201611"]) if include_hist else yoy_periods_only
+            y_col1, y_col2 = st.columns(2)
+            base_p = y_col1.selectbox("Baseline Period (Prior Year)", all_selectable, index=all_selectable.index("202410") if "202410" in all_selectable else 0, key="yoy_base")
+            targ_p = y_col2.selectbox("Target Period (Recent Year)", all_selectable, index=all_selectable.index("202510") if "202510" in all_selectable else len(all_selectable)-1, key="yoy_targ")
 
         if st.button("Compute Year-over-Year Delta Analysis", key="btn_run_yoy"):
             with st.spinner(f"Analyzing delta between {base_p} and {targ_p}..."):
                 eng = LongitudinalEngine()
                 yoy = eng.compare_yoy(base_p, targ_p)
+
+            if not yoy.is_matched_season:
+                st.warning(f"⚠️ Note: {base_p} (Month {base_p[4:6]}) and {targ_p} (Month {targ_p[4:6]}) represent different seasonal months. Results reflect seasonal cross-effects in addition to annual shifts.")
+            elif yoy.year_gap != 1:
+                st.info(f"🏛️ Long-Term Historical Era Comparison: Spanning a {yoy.year_gap}-year delta ({base_p[:4]} ➔ {targ_p[:4]}).")
 
             ym1, ym2, ym3, ym4 = st.columns(4)
             ym1.metric("Daily Flights Delta", f"{yoy.daily_flights_target:,.0f}/day", f"{yoy.daily_flights_growth_pct:+.2f}% ({yoy.daily_flights_delta:+.0f}/day)")
