@@ -270,17 +270,47 @@ def resolve_aircraft_engine_perf(
 
     # 5. Tailor baseline fuel flow to aircraft category & engine efficiency
     base_category_ff = {
+        # Airbus Narrowbody Family
         "A320": 2400.0, "A321": 2700.0, "A319": 2250.0, "A318": 2200.0,
         "A20N": 2050.0, "A21N": 2300.0, "A19N": 1950.0,
+        # Boeing 737 Family
         "B738": 2450.0, "B737": 2400.0, "B739": 2600.0, "B733": 2550.0, "B734": 2600.0,
         "B38M": 2100.0, "B39M": 2250.0, "B37M": 2000.0,
-        "B77W": 6800.0, "B772": 6200.0, "B773": 6600.0, "B763": 4800.0, "B762": 4500.0,
-        "A332": 5200.0, "A333": 5600.0, "A343": 6500.0, "A359": 5400.0, "A388": 11500.0,
-        "B744": 10200.0, "B748": 9600.0, "B788": 4900.0, "B789": 5300.0,
-        "E190": 1750.0, "E195": 1850.0, "E170": 1600.0, "E145": 1200.0,
-        "CRJ9": 1600.0, "CRJ2": 1100.0,
+        # Boeing 757 Family (High-Power Transcontinental & Transatlantic Twinjet)
+        "B752": 3350.0, "B753": 3650.0,
+        # Boeing 767 Family
+        "B762": 4500.0, "B763": 4800.0, "B764": 5200.0,
+        # Boeing 777 & 787 Widebody Families
+        "B77W": 6800.0, "B772": 6200.0, "B773": 6600.0, "B77L": 6400.0,
+        "B788": 4900.0, "B789": 5300.0, "B78X": 5700.0,
+        # Airbus Widebody Family
+        "A306": 4800.0, "A310": 4400.0,
+        "A332": 5200.0, "A333": 5600.0, "A338": 4700.0, "A339": 5000.0,
+        "A343": 6500.0, "A345": 7400.0, "A346": 7800.0,
+        "A359": 5400.0, "A35K": 6000.0, "A388": 11500.0,
+        # Heavy 4-Engines & Tri-Jets
+        "B744": 10200.0, "B748": 9600.0, "MD11": 7600.0, "DC10": 7800.0, "L101": 7700.0, "B722": 4200.0,
+        # Regional Jets & Embraer / Bombardier / CSeries
+        "BCS1": 1800.0, "BCS3": 2000.0, "A220": 2000.0, "B712": 2100.0,
+        "E190": 1750.0, "E195": 1850.0, "E170": 1600.0, "E175": 1650.0, "E145": 1200.0,
+        "CRJ9": 1600.0, "CRJ7": 1450.0, "CRJ2": 1100.0, "F100": 2150.0, "F70": 1900.0, "BA46": 2200.0,
     }
-    nominal_ff = base_category_ff.get(code, 2500.0 if wake_cat == "M" else 6500.0 if wake_cat == "H" else 11500.0 if wake_cat == "J" else 1200.0)
+
+    if code in base_category_ff:
+        nominal_ff = base_category_ff[code]
+    else:
+        mtow_t = float(ac_row.iloc[0]["mtow_tons"]) if (not ac_row.empty and ac_row.iloc[0].get("mtow_tons") and not pd.isna(ac_row.iloc[0]["mtow_tons"])) else 0.0
+        if mtow_t > 0:
+            if mtow_t >= 250.0:
+                nominal_ff = mtow_t * 19.5
+            elif mtow_t >= 100.0:
+                nominal_ff = mtow_t * 28.5
+            elif mtow_t >= 40.0:
+                nominal_ff = mtow_t * 32.0
+            else:
+                nominal_ff = max(800.0, mtow_t * 36.0)
+        else:
+            nominal_ff = 2500.0 if wake_cat == "M" else 6500.0 if wake_cat == "H" else 11500.0 if wake_cat == "J" else 1200.0
 
     # Adjust fuel flow by engine efficiency: modern high BPR engines burn ~8% to 14% less
     if bpr >= 10.0:

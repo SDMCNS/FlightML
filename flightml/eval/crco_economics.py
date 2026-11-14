@@ -214,9 +214,10 @@ def compute_flight_crco_charges(
     # Combine with flight fuel & emissions model (in EUR)
     fuel_impact = compute_flight_fuel_and_emissions(dataset, ectrl_id)
     air_hours = max(0.25, float(flight.get("actual_air_time_min") or (act_dist_nm / 430.0 * 60.0)) / 60.0)
-    wake = str(ac_perf.get("wake_category") or "M") if ac_perf else "M"
-    nom_ff_kg_hr = 6800.0 if wake == "H" else 11500.0 if wake == "J" else 1200.0 if wake == "L" else 2500.0
-    est_total_fuel_kg = air_hours * nom_ff_kg_hr + fuel_impact.total_excess_fuel_kg
+    nom_ff_kg_hr = fuel_impact.nominal_fuel_flow_kg_hr
+    # Include takeoff, initial climb, and acceleration mission fuel allowance (+6% over steady-state cruise)
+    mission_burn_rate_kg_hr = nom_ff_kg_hr * 1.06
+    est_total_fuel_kg = air_hours * mission_burn_rate_kg_hr + fuel_impact.total_excess_fuel_kg
     est_total_fuel_eur = est_total_fuel_kg * fuel_impact.fuel_price_eur_per_kg
 
     total_doc_eur = est_total_fuel_eur + total_eur

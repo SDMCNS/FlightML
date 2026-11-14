@@ -938,6 +938,15 @@ with tab_cat_single:
                     f"(`€{price_kg:.4f}/kg`) | **Week:** `{price_week}` "
                     f"| **Benchmark:** `{price_source}` | **Nominal Cruise Flow:** `{impact.nominal_fuel_flow_kg_hr:,.0f} kg/h`"
                 )
+                # Contextual comparison for historical vs modern into-plane fuel price
+                modern_into_plane_rate = 0.85
+                diff_pct = ((modern_into_plane_rate - price_kg) / price_kg) * 100.0 if price_kg > 0 else 0.0
+                st.info(
+                    f"ℹ️ **Historical Spot vs. Modern Into-Plane Reality:** The prices above reflect the **exact historical wholesale spot price** "
+                    f"for the selected dataset period (`€{price_kg:.4f}/kg`). Wholesale spot excludes airport handling, into-plane fueling, and distribution fees. "
+                    f"By comparison, modern (2024–2026) airline into-plane Jet-A averages **~€0.85/kg** (+{diff_pct:.0f}% vs. period spot), "
+                    f"which scales total trip fuel cost accordingly."
+                )
             except Exception as e:
                 st.error(f"Error computing emissions for flight {active_flight_id}: {e}")
 
@@ -973,6 +982,12 @@ with tab_cat_single:
                     "Total Direct Route Cost",
                     f"€{crco_rep.total_direct_route_cost_eur:,.2f}",
                     f"{crco_rep.crco_share_of_direct_cost_pct:.1f}% CRCO share",
+                )
+                mod_fuel_cost = crco_rep.estimated_total_fuel_kg * 0.85
+                st.caption(
+                    f"✈️ **Direct Cost Composition:** Total Trip Fuel: **{crco_rep.estimated_total_fuel_kg:,.1f} kg** "
+                    f"(**€{crco_rep.estimated_total_fuel_cost_eur:,.2f} EUR** at period spot price | **€{mod_fuel_cost:,.2f} EUR** at modern €0.85/kg into-plane) "
+                    f"+ Eurocontrol CRCO Navigation Fees: **€{crco_rep.actual_crco_charge_eur:,.2f} EUR**."
                 )
                 if crco_rep.fir_breakdown:
                     st.dataframe(pd.DataFrame([b.__dict__ for b in crco_rep.fir_breakdown]), use_container_width=True)
