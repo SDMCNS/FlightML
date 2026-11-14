@@ -41,6 +41,8 @@ class STGNNPropagationResult:
     top_vulnerable_nodes: list[STGNNNodeState]
     node_delay_matrix: dict[str, list[float]]
     shock_datetime: str = ""
+    shock_end_time: str = ""
+    shock_duration_hours: float = 2.0
     total_flights_impacted: int = 0
     sample_impacted_flights: list[dict[str, Any]] = None  # type: ignore
     sample_turnaround_rotations: list[dict[str, Any]] = None  # type: ignore
@@ -144,6 +146,7 @@ class SpatioTemporalDelayEngine:
         injected_delay_min: float = 60.0,
         shock_date: str | None = None,
         shock_time_hour: int = 10,
+        shock_duration_hours: float = 2.0,
     ) -> STGNNPropagationResult:
         origin_clean = shock_origin.strip().upper()
         if origin_clean not in self.node_idx:
@@ -167,10 +170,14 @@ class SpatioTemporalDelayEngine:
                 sim_date = start_date
 
         sim_hour = max(0, min(int(shock_time_hour), 23))
+        dur_h = max(0.5, min(float(shock_duration_hours), 12.0))
+        end_hr = min(sim_hour + dur_h, 24.0)
         shock_datetime_str = f"{sim_date} {sim_hour:02d}:00 UTC"
+        shock_end_str = f"{sim_date} {int(end_hr):02d}:{int((end_hr % 1)*60):02d} UTC"
         is_fir = origin_clean.endswith("FIR") or origin_clean.endswith("UIR")
 
-        # 1. Query real historical flight schedule across European network for the 6h forward lookahead window
+        # 1. Query real historical flight schedule across European network for the forward lookahead window
+        lookahead_end_hr = min(23, int(sim_hour + dur_h + 5))
         sql_hist = f"""
             SELECT 
                 ectrl_id, adep, ades, ac_type, ac_operator, ac_reg,
@@ -181,7 +188,7 @@ class SpatioTemporalDelayEngine:
                 COALESCE(arr_delay_min, 0) as arr_delay_min
             FROM flights
             WHERE CAST(COALESCE(actual_off_block_time, filed_off_block_time) AS DATE) = '{sim_date}'
-              AND EXTRACT(HOUR FROM COALESCE(actual_off_block_time, filed_off_block_time)) BETWEEN {sim_hour} AND {min(23, sim_hour + 6)}
+              AND EXTRACT(HOUR FROM COALESCE(actual_off_block_time, filed_off_block_time)) BETWEEN {sim_hour} AND {lookahead_end_hr}
             ORDER BY off_block_time ASC;
         """
         try:
@@ -255,9 +262,12 @@ class SpatioTemporalDelayEngine:
 
             for _, r in outbound_df.head(25).iterrows():
                 dep_h = int(r["dep_hour"])
-                hour_delta = max(0, dep_h - sim_hour)
-                decay = max(0.20, 1.0 - (hour_delta * 0.16))
-                induced = round(injected_delay_min * decay, 1)
+                if dep_h <= sim_hour + dur_h:
+                    induced = round(injected_delay_min, 1)
+                else:
+                    hour_post = dep_h - (sim_hour + dur_h)
+                    decay = max(0.20, 1.0 - (hour_post * 0.20))
+                    induced = round(injected_delay_min * decay, 1)
                 base_del = float(r["dep_delay_min"])
                 impacted_flights_list.append({
                     "ectrl_id": int(r["ectrl_id"]),
@@ -286,7 +296,7 @@ class SpatioTemporalDelayEngine:
                     JOIN flights f2 ON f1.ac_reg = f2.ac_reg AND f1.ades = f2.adep
                     WHERE f1.adep = '{origin_clean}'
                       AND CAST(COALESCE(f1.actual_off_block_time, f1.filed_off_block_time) AS DATE) = '{sim_date}'
-                      AND EXTRACT(HOUR FROM COALESCE(f1.actual_off_block_time, f1.filed_off_block_time)) BETWEEN {sim_hour} AND {min(23, sim_hour + 2)}
+                      AND EXTRACT(HOUR FROM COALESCE(f1.actual_off_block_time, f1.filed_off_block_time)) BETWEEN {sim_hour} AND {min(23, int(sim_hour + dur_h))}
                       AND f2.actual_off_block_time > f1.actual_arrival_time
                       AND f2.actual_off_block_time <= f1.actual_arrival_time + INTERVAL 3 HOUR
                     ORDER BY f1.actual_off_block_time ASC
@@ -378,10 +388,12 @@ class SpatioTemporalDelayEngine:
             shock_origin_node=origin_clean,
             injected_shock_delay_min=injected_delay_min,
             lookahead_hours=[0, 1, 2, 4, 6],
-            total_network_reactionary_delay_hours=round(total_delay_hours, 1),
+            total_network_reactionary_delay_hours=round(total_delay_hours * math.sqrt(dur_h / 2.0), 1),
             top_vulnerable_nodes=node_states,
             node_delay_matrix=delay_matrix,
             shock_datetime=shock_datetime_str,
+            shock_end_time=shock_end_str,
+            shock_duration_hours=round(dur_h, 1),
             total_flights_impacted=len(impacted_flights_list),
             sample_impacted_flights=impacted_flights_list,
             sample_turnaround_rotations=turnaround_rotations_list,

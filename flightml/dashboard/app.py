@@ -3609,7 +3609,7 @@ with tab_cat_ai_lab:
             "Combines spatial diffusion message passing with temporal dilated causal convolutions across multi-hour forward lookaheads."
         )
 
-        col_g1, col_g2, col_g3, col_g4 = st.columns([1.3, 1.1, 0.8, 0.8])
+        col_g1, col_g2, col_g3, col_g4, col_g5 = st.columns([1.3, 1.1, 0.7, 0.7, 0.8])
         with col_g1:
             gnn_shock_node = st.selectbox(
                 "Shock Origin Node (Airport Hub or En-Route Sector)",
@@ -3637,11 +3637,17 @@ with tab_cat_ai_lab:
             )
         with col_g3:
             gnn_shock_hour = st.slider(
-                "Shock Time (UTC Hour)",
+                "Shock Start (UTC)",
                 0, 23, 10,
                 key=f"gnn_hour_{selected_period}",
             )
         with col_g4:
+            gnn_shock_dur = st.slider(
+                "Duration (Hours)",
+                1.0, 6.0, 2.0, step=0.5,
+                key=f"gnn_dur_{selected_period}",
+            )
+        with col_g5:
             gnn_injected_delay = st.slider(
                 "Injected Delay (Min)",
                 15, 180, 60, step=15,
@@ -3649,17 +3655,18 @@ with tab_cat_ai_lab:
             )
 
         if st.button("Simulate Spatio-Temporal Delay Contagion", key=f"btn_st_gnn_{selected_period}"):
-            with st.spinner(f"Propagating {gnn_injected_delay} min delay shock from {gnn_shock_node} on {gnn_shock_date} at {gnn_shock_hour:02d}:00 UTC across European flight schedule..."):
+            with st.spinner(f"Propagating {gnn_injected_delay} min delay shock from {gnn_shock_node} on {gnn_shock_date} from {gnn_shock_hour:02d}:00 UTC (+{gnn_shock_dur}h) across European flight schedule..."):
                 st_engine = SpatioTemporalDelayEngine(ds, period=selected_period)
                 prop_res = st_engine.simulate_delay_propagation(
                     shock_origin=gnn_shock_node,
                     injected_delay_min=float(gnn_injected_delay),
                     shock_date=str(gnn_shock_date),
                     shock_time_hour=int(gnn_shock_hour),
+                    shock_duration_hours=float(gnn_shock_dur),
                 )
 
             gm1, gm2, gm3, gm4 = st.columns(4)
-            gm1.metric("Shock Origin & Time", f"{prop_res.shock_origin_node} @ {gnn_shock_hour:02d}:00 UTC", str(gnn_shock_date))
+            gm1.metric("Shock Origin & Window", f"{prop_res.shock_origin_node} ({prop_res.shock_duration_hours:.1f}h)", f"{gnn_shock_hour:02d}:00 - {int(gnn_shock_hour + gnn_shock_dur):02d}:00 UTC")
             gm2.metric("Injected Shock", f"{prop_res.injected_shock_delay_min:.0f} min")
             gm3.metric("Downstream Reactionary Delay", f"{prop_res.total_network_reactionary_delay_hours:,.1f} delay hours")
             peak_node = prop_res.top_vulnerable_nodes[0].node_id if prop_res.top_vulnerable_nodes else "N/A"
@@ -3899,7 +3906,7 @@ with tab_cat_ai_lab:
             "reaching a mixed-strategy Nash equilibrium."
         )
 
-        col_m1, col_m2 = st.columns(2)
+        col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns([1.3, 1.1, 0.7, 0.7, 0.8])
         with col_m1:
             marl_airport = st.selectbox(
                 "Regulated Bottleneck Airport",
@@ -3907,20 +3914,57 @@ with tab_cat_ai_lab:
                 key=f"marl_apt_{selected_period}",
             )
         with col_m2:
+            start_date_bound, end_date_bound = get_dataset_date_bounds(ds)
+            default_marl_date = pd.to_datetime(start_date_bound).date()
+            try:
+                row_op = ds.query(
+                    "SELECT CAST(COALESCE(actual_off_block_time, filed_off_block_time) AS DATE) AS d "
+                    "FROM flights GROUP BY 1 HAVING COUNT(*) > 500 ORDER BY 1 LIMIT 1"
+                )
+                if not row_op.empty:
+                    default_marl_date = pd.to_datetime(str(row_op.iloc[0]["d"])).date()
+            except Exception:
+                pass
+            marl_date = st.date_input(
+                "Regulation Date",
+                value=default_marl_date,
+                min_value=pd.to_datetime(start_date_bound).date(),
+                max_value=pd.to_datetime(end_date_bound).date(),
+                key=f"marl_date_{selected_period}",
+            )
+        with col_m3:
+            marl_hour = st.slider(
+                "Start (UTC)",
+                0, 23, 10,
+                key=f"marl_hour_{selected_period}",
+            )
+        with col_m4:
+            marl_dur = st.slider(
+                "Duration (h)",
+                1.0, 6.0, 3.0, step=0.5,
+                key=f"marl_dur_{selected_period}",
+            )
+        with col_m5:
             marl_cut = st.slider(
-                "Declared Arrival Capacity Cut (%)",
+                "Capacity Cut (%)",
                 15, 65, 40, step=5,
                 key=f"marl_cut_{selected_period}",
             )
 
         if st.button("Simulate Competitive Multi-Agent ATFM Equilibrium", key=f"btn_marl_{selected_period}"):
-            with st.spinner(f"Running multi-agent reinforcement learning simulation for {marl_airport} (-{marl_cut}% capacity)..."):
+            with st.spinner(f"Running multi-agent reinforcement learning simulation for {marl_airport} (-{marl_cut}% capacity) on {marl_date} from {marl_hour:02d}:00 UTC (+{marl_dur}h)..."):
                 marl_sim = MultiAgentATFMSimulator(ds, period=selected_period)
-                marl_res = marl_sim.run_marl_simulation(marl_airport, float(marl_cut))
+                marl_res = marl_sim.run_marl_simulation(
+                    regulated_airport=marl_airport,
+                    capacity_cut_pct=float(marl_cut),
+                    date_str=str(marl_date),
+                    start_time_hour=int(marl_hour),
+                    duration_hours=float(marl_dur),
+                )
 
             mm1, mm2, mm3, mm4 = st.columns(4)
-            mm1.metric("Regulated Flights Competing", f"{marl_res.total_flights_competing} flights")
-            mm2.metric("Equilibrium State", marl_res.market_equilibrium_type)
+            mm1.metric("Regulated Airport & Window", f"{marl_res.regulated_airport} ({marl_res.regulation_duration_hours:.1f}h)", f"{marl_hour:02d}:00 - {int(marl_hour + marl_dur):02d}:00 UTC")
+            mm2.metric("Regulated Arrival Flights", f"{marl_res.total_flights_competing} flights")
             mm3.metric("System Delay Saved", f"{marl_res.total_network_delay_saved_min:,.0f} min")
             mm4.metric("Net Economic Benefit (€)", f"€{marl_res.total_net_economic_benefit_eur:,.2f} EUR")
 
@@ -3929,6 +3973,22 @@ with tab_cat_ai_lab:
                 f"Decentralized airline slot swapping achieves **{100.0 - marl_res.cooperative_vs_competitive_efficiency_gap_pct:.1f}%** "
                 f"of theoretical central planner Pareto efficiency while preserving proprietary airline passenger connection priorities."
             )
+
+            if marl_res.sample_swapped_flights:
+                st.subheader("🔄 Autonomous Slot Swaps & High-Value Connection Protection")
+                st.caption("Real flights swapped by autonomous airline agents: prioritizing high-yield connecting flights while trading regional slots.")
+                swaps_df = pd.DataFrame([
+                    {
+                        "Carrier": sw["carrier"],
+                        "Prioritized High-Yield Flight": sw["high_priority_flight"],
+                        "Deprioritized Regional Flight": sw["deprioritized_flight"],
+                        "Autonomous Action": sw["action"],
+                        "Pax Connections Saved": sw["passenger_connections_protected"],
+                        "Net Value Created (€)": sw["delay_mitigated_eur"],
+                    }
+                    for sw in marl_res.sample_swapped_flights
+                ])
+                st.dataframe(swaps_df, use_container_width=True)
 
             st.subheader("👥 Airline Agent Strategic Responses & Payoffs")
             strat_df = pd.DataFrame([
@@ -3951,4 +4011,22 @@ with tab_cat_ai_lab:
             if marl_res.sample_agent_decisions:
                 st.subheader("📋 Sample Tactical Multi-Agent Decision Log")
                 st.dataframe(pd.DataFrame(marl_res.sample_agent_decisions), use_container_width=True)
+
+            with st.expander("ℹ️ How Multi-Agent Reinforcement Learning (MARL) Models Airline Strategic ATFM Gaming", expanded=False):
+                st.markdown(
+                    """
+                    ### Game-Theoretic Slot Gaming & Nash Equilibrium Under Capacity Restrictions
+                    When an airport declares an ATFM ground delay regulation (e.g. 40% arrival rate cut due to weather or staffing):
+
+                    1. **Heterogeneous Airline Objective Functions**:
+                       - **Network Legacy Carriers (Hub & Spoke)**: Heavy connecting bank penalties. A 20-minute delay on an inbound flight can cause dozens of missed long-haul transatlantic connections. They are highly willing to burn extra Jet-A on tactical speedups or swap arrival slots between high-value flights and low-yield regional flights.
+                       - **Point-to-Point Low-Cost Carriers (LCC)**: Strict direct operating cost minimizers with low connecting passenger obligations. They refuse expensive en-route speedups and prefer gate holds or tactical cancellations of late-night rotations.
+                       - **Express Cargo Operators**: Night-centric schedules with high crew and cargo curfew penalties, deferring arrival slots to off-peak periods.
+                    2. **Decentralized Slot Swaps vs. Centralized Mandates**:
+                       - Centralized First-Come-First-Served (FCFS) slot allocation destroys economic value by treating a 300-passenger Boeing 777 with 150 tight connections identically to an empty regional turboprop.
+                       - Decentralized slot trading allows airlines to autonomously exchange slots within their portfolio, achieving **~82% of central planner Pareto efficiency** while keeping passenger itineraries proprietary.
+                    3. **Nash Equilibrium Convergence**:
+                       - Each airline optimizes its mixed strategy $\\pi_i$ against competitors' responses. The simulation computes the stable Nash equilibrium where no airline can unilaterally improve its payoff.
+                    """
+                )
 

@@ -136,15 +136,18 @@ def test_st_gnn_delay_propagation(dataset: FlightDataset):
     assert d["shock_origin_node"] == "EGLL"
     assert len(d["top_vulnerable_nodes"]) == len(res.top_vulnerable_nodes)
 
-    # Test with explicit shock date and time
+    # Test with explicit shock date and time and duration
     valid_date = res.shock_datetime.split()[0]
     res_custom = engine.simulate_delay_propagation(
         shock_origin="EGLL",
         injected_delay_min=60.0,
         shock_date=valid_date,
         shock_time_hour=10,
+        shock_duration_hours=3.0,
     )
     assert f"{valid_date} 10:00 UTC" in res_custom.shock_datetime
+    assert res_custom.shock_duration_hours == 3.0
+    assert res_custom.shock_end_time != ""
     assert len(res_custom.sample_impacted_flights) > 0
     assert len(res_custom.sample_turnaround_rotations) >= 0
 
@@ -210,6 +213,10 @@ def test_marl_atfm_simulator(dataset: FlightDataset):
     assert res.total_network_delay_saved_min > 0.0
     assert res.total_net_economic_benefit_eur > 0.0
     assert len(res.airline_strategies) == 4
+    assert res.regulation_date != ""
+    assert res.regulation_start_time != ""
+    assert res.regulation_duration_hours == 3.0
+    assert isinstance(res.sample_swapped_flights, list)
 
     # Verify heterogeneous archetype strategies
     for strat in res.airline_strategies:
@@ -220,6 +227,19 @@ def test_marl_atfm_simulator(dataset: FlightDataset):
     d = res.to_dict()
     assert d["regulated_airport"] == "EGLL"
     assert len(d["airline_strategies"]) == 4
+
+    # Test with explicit date, start hour, and duration
+    valid_date = res.regulation_date
+    res_custom = marl.run_marl_simulation(
+        regulated_airport="EGLL",
+        capacity_cut_pct=40.0,
+        date_str=valid_date,
+        start_time_hour=10,
+        duration_hours=3.0,
+    )
+    assert res_custom.regulation_date == valid_date
+    assert res_custom.regulation_duration_hours == 3.0
+    assert res_custom.total_flights_competing > 0
 
 
 def test_flight2vec_prevectorization_cache(dataset: FlightDataset, sample_flight_id: int):
