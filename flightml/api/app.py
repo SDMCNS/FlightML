@@ -63,6 +63,7 @@ from flightml.eval.surface_taxi import (
 )
 from flightml.eval.fuel_carbon import compute_flight_fuel_and_emissions
 from flightml.eval.aircraft_engine_perf import resolve_aircraft_engine_perf
+from flightml.eval.multi_level_kpis import query_multi_level_kpis
 from flightml.eval.jet_fuel_prices import (
     get_all_weekly_fuel_prices_df,
     get_weekly_fuel_price,
@@ -493,16 +494,45 @@ def stress_test_endpoint(
 
 @app.get("/api/v1/weather/impact")
 def get_weather_impact_endpoint(
-    start_date: str = Query(default="2016-11-01", description="Start date (YYYY-MM-DD)"),
-    end_date: str = Query(default="2016-11-05", description="End date (YYYY-MM-DD)"),
+    start_date: str | None = Query(default=None, description="Start date (YYYY-MM-DD), defaults to period start"),
+    end_date: str | None = Query(default=None, description="End date (YYYY-MM-DD), defaults to period end"),
     period: str = Query(default="201611", description="Data period ID"),
 ) -> dict[str, Any]:
-    """Correlate historical European weather conditions with network-wide flight delays."""
+    """Correlate historical European weather conditions with network-wide flight delays across the selected dataset time frame."""
     ds = FlightDataset(period=period)
     client = get_metar_client()
     try:
         report = analyze_network_weather_impact(ds, client, start_date=start_date, end_date=end_date)
         return report.to_dict()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/kpi/hierarchy")
+def get_kpi_hierarchy_endpoint(
+    level: str = Query(default="network", description="KPI tier: 'network', 'fleet', 'airport', or 'flight'"),
+    group_by: str = Query(default="operator", description="Sub-aggregation: 'operator'/'aircraft' for fleet, 'departure'/'arrival' for airport"),
+    start_date: str | None = Query(default=None, description="Start date (YYYY-MM-DD), optional"),
+    end_date: str | None = Query(default=None, description="End date (YYYY-MM-DD), optional"),
+    hour_start: int = Query(default=0, ge=0, le=23, description="Diurnal window start hour (0-23 UTC)"),
+    hour_end: int = Query(default=23, ge=0, le=23, description="Diurnal window end hour (0-23 UTC)"),
+    limit: int = Query(default=50, ge=1, le=500, description="Maximum entities/records to return"),
+    period: str = Query(default="201611", description="Dataset period ID (e.g. 201611, 202510)"),
+) -> dict[str, Any]:
+    """Retrieve multi-level KPI scorecard across Flight, Fleet, Airport, or Network tiers with calendar and diurnal filtering."""
+    ds = FlightDataset(period=period)
+    try:
+        summary = query_multi_level_kpis(
+            ds=ds,
+            level=level,
+            group_by=group_by,
+            start_date=start_date,
+            end_date=end_date,
+            hour_start=hour_start,
+            hour_end=hour_end,
+            limit=limit,
+        )
+        return summary.to_dict()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -17,6 +17,10 @@ from flightml.eval.aircraft_engine_perf import (
     compute_cruise_altitude_efficiency,
     resolve_aircraft_engine_perf,
 )
+from flightml.eval.multi_level_kpis import (
+    query_multi_level_kpis,
+    get_dataset_date_bounds,
+)
 from flightml.eval.flight_twins import compare_twin_flights, render_twin_comparison_map
 from flightml.eval.cdo_analyzer import (
     analyze_cdo_descent,
@@ -1035,12 +1039,204 @@ with tab_cat_system:
         "cross-decade historical traffic growth, and network-wide hub weather correlation."
     )
     render_page_export_bar("system_summary", "cat_system")
-    sys_sub1, sys_sub2 = st.tabs(
+    sys_sub_kpi, sys_sub1, sys_sub2 = st.tabs(
         [
+            "📊 Multi-Level KPI Suite (Flight / Fleet / Airport / Network)",
             "🌐 Network Status & Airspace Saturation",
             "📈 Macro Evolution & AIRAC Diff",
         ]
     )
+
+    with sys_sub_kpi:
+        st.header(f"📊 Multi-Level Operational & Environmental KPI Suite ({selected_period})")
+        st.caption(
+            "Hierarchical operational, environmental, and punctuality scorecard evaluated across "
+            "**Flight**, **Fleet**, **Airport**, and **Network** tiers with interactive calendar date & diurnal hour scoping."
+        )
+
+        ds_min_date, ds_max_date = get_dataset_date_bounds(ds)
+        try:
+            d_min_obj = pd.to_datetime(ds_min_date).date()
+            d_max_obj = pd.to_datetime(ds_max_date).date()
+        except Exception:
+            d_min_obj = pd.to_datetime("2016-11-01").date()
+            d_max_obj = pd.to_datetime("2016-11-30").date()
+
+        # Timeframe & Level Scoping Bar
+        with st.container():
+            col_tf1, col_tf2, col_tf3 = st.columns([2, 2, 2])
+            with col_tf1:
+                date_range_sel = st.date_input(
+                    "📅 Calendar Timeframe (Start — End):",
+                    value=(d_min_obj, d_max_obj),
+                    min_value=d_min_obj,
+                    max_value=d_max_obj,
+                    key=f"kpi_dates_{selected_period}",
+                    help="Filter KPIs across specific calendar days in the dataset.",
+                )
+                if isinstance(date_range_sel, (tuple, list)) and len(date_range_sel) == 2:
+                    filter_start_str = date_range_sel[0].strftime("%Y-%m-%d")
+                    filter_end_str = date_range_sel[1].strftime("%Y-%m-%d")
+                elif isinstance(date_range_sel, (tuple, list)) and len(date_range_sel) == 1:
+                    filter_start_str = date_range_sel[0].strftime("%Y-%m-%d")
+                    filter_end_str = filter_start_str
+                else:
+                    filter_start_str = ds_min_date
+                    filter_end_str = ds_max_date
+
+            with col_tf2:
+                hour_range_sel = st.slider(
+                    "⏰ Diurnal Departure Window (UTC Hours):",
+                    min_value=0,
+                    max_value=23,
+                    value=(0, 23),
+                    step=1,
+                    key=f"kpi_hours_{selected_period}",
+                    help="Filter flights departing within a specific diurnal time-of-day window (e.g. 06:00 to 09:00 morning rush).",
+                )
+                h_start, h_end = hour_range_sel[0], hour_range_sel[1]
+
+            with col_tf3:
+                kpi_tier = st.radio(
+                    "🎯 KPI Aggregation Tier:",
+                    options=["🌐 Network Level", "✈️ Fleet Level", "🛫 Airport Level", "🔍 Flight Level"],
+                    index=0,
+                    horizontal=True,
+                    key=f"kpi_tier_radio_{selected_period}",
+                )
+
+        st.divider()
+
+        # Tier Views
+        if kpi_tier == "🌐 Network Level":
+            with st.spinner("Aggregating network-wide KPIs across filtered timeframe..."):
+                net_summary = query_multi_level_kpis(
+                    ds,
+                    level="network",
+                    start_date=filter_start_str,
+                    end_date=filter_end_str,
+                    hour_start=h_start,
+                    hour_end=h_end,
+                )
+
+            st.subheader(f"🌐 Network-Wide Operational & Environmental KPI Scorecard")
+            st.info(f"📅 **Timeframe:** `{net_summary.time_window}` | **Diurnal Window:** `{net_summary.hour_window}` | **Active Network Flights:** `{net_summary.total_flights:,}`")
+
+            nk1, nk2, nk3, nk4 = st.columns(4)
+            nk1.metric("Total Processed Flights", f"{net_summary.total_flights:,}")
+            nk2.metric("Avg Departure Delay", f"{net_summary.avg_dep_delay_min:+.1f} min")
+            nk3.metric("Avg Arrival Delay", f"{net_summary.avg_arr_delay_min:+.1f} min")
+            nk4.metric("Severe Arrival Delays (>30m)", f"{net_summary.pct_severe_arr_30m:.1f}%")
+
+            nk5, nk6, nk7, nk8 = st.columns(4)
+            nk5.metric("On-Time Performance (OTP15)", f"{100.0 - net_summary.pct_arr_delayed_15m:.1f}%", f"{net_summary.pct_arr_delayed_15m:.1f}% delayed >15m")
+            nk6.metric("Avg Stage Distance", f"{net_summary.avg_actual_dist_nm:,.0f} nm")
+            nk7.metric("Avg Requested Altitude", f"FL{net_summary.avg_requested_fl:.0f}")
+            nk8.metric("Est. Detour Fuel Cost", f"€{net_summary.total_estimated_cost_eur:,.0f} EUR", f"{net_summary.total_estimated_fuel_penalty_kg:,.0f} kg fuel")
+
+        elif kpi_tier == "✈️ Fleet Level":
+            col_fl_sub1, col_fl_sub2, col_fl_sub3 = st.columns([2, 1, 1])
+            with col_fl_sub1:
+                fleet_mode = st.radio(
+                    "Fleet Categorization:",
+                    options=["Airline Operators (ac_operator)", "Aircraft Types (ac_type)"],
+                    horizontal=True,
+                    key=f"fleet_mode_{selected_period}",
+                )
+            with col_fl_sub2:
+                fleet_min_flts = st.slider("Min Flights Threshold", 10, 500, 50, key=f"fl_min_{selected_period}")
+            with col_fl_sub3:
+                fleet_top_n = st.slider("Top Entities Count", 5, 50, 15, key=f"fl_top_{selected_period}")
+
+            grp_key = "operator" if "operator" in fleet_mode.lower() else "aircraft"
+            with st.spinner(f"Aggregating fleet KPIs by {fleet_mode}..."):
+                fleet_summary = query_multi_level_kpis(
+                    ds,
+                    level="fleet",
+                    group_by=grp_key,
+                    start_date=filter_start_str,
+                    end_date=filter_end_str,
+                    hour_start=h_start,
+                    hour_end=h_end,
+                    min_flights=fleet_min_flts,
+                    limit=fleet_top_n,
+                )
+
+            st.subheader(f"✈️ Fleet Performance Scorecard — by {fleet_summary.group_by}")
+            st.info(f"📅 **Timeframe:** `{fleet_summary.time_window}` | **Diurnal Window:** `{fleet_summary.hour_window}` | **Analyzed Fleets:** `{len(fleet_summary.records)}` (≥{fleet_min_flts} flights)")
+
+            if fleet_summary.records:
+                f_df = pd.DataFrame(fleet_summary.records)
+                chart_fleet = alt.Chart(f_df).mark_bar(color="#3498db").encode(
+                    x=alt.X("entity_id:N", title=fleet_summary.group_by, sort="-y"),
+                    y=alt.Y("avg_arr_delay_min:Q", title="Avg Arrival Delay (min)"),
+                    tooltip=["entity_id", "total_flights", "avg_arr_delay_min", "pct_arr_delayed_15m", "pct_severe_arr_30m", "total_excess_fuel_cost_eur"],
+                ).properties(height=260, title=f"Top {len(f_df)} {fleet_summary.group_by} Ranked by Average Arrival Delay")
+                st.altair_chart(chart_fleet, use_container_width=True)
+
+                st.dataframe(f_df, use_container_width=True)
+
+        elif kpi_tier == "🛫 Airport Level":
+            col_ap_sub1, col_ap_sub2, col_ap_sub3 = st.columns([2, 1, 1])
+            with col_ap_sub1:
+                airport_mode = st.radio(
+                    "Airport Categorization:",
+                    options=["Departure Aerodromes (ADEP)", "Arrival Aerodromes (ADES)"],
+                    horizontal=True,
+                    key=f"ap_mode_{selected_period}",
+                )
+            with col_ap_sub2:
+                ap_min_flts = st.slider("Min Flights Threshold", 10, 500, 50, key=f"ap_min_{selected_period}")
+            with col_ap_sub3:
+                ap_top_n = st.slider("Top Hubs Count", 5, 50, 15, key=f"ap_top_{selected_period}")
+
+            grp_key = "departure" if "departure" in airport_mode.lower() else "arrival"
+            with st.spinner(f"Aggregating airport KPIs by {airport_mode}..."):
+                airport_summary = query_multi_level_kpis(
+                    ds,
+                    level="airport",
+                    group_by=grp_key,
+                    start_date=filter_start_str,
+                    end_date=filter_end_str,
+                    hour_start=h_start,
+                    hour_end=h_end,
+                    min_flights=ap_min_flts,
+                    limit=ap_top_n,
+                )
+
+            st.subheader(f"🛫 Airport Performance Scorecard — {airport_summary.group_by}")
+            st.info(f"📅 **Timeframe:** `{airport_summary.time_window}` | **Diurnal Window:** `{airport_summary.hour_window}` | **Analyzed Hubs:** `{len(airport_summary.records)}` (≥{ap_min_flts} flights)")
+
+            if airport_summary.records:
+                ap_df = pd.DataFrame(airport_summary.records)
+                delay_col = "avg_dep_delay_min" if grp_key == "departure" else "avg_arr_delay_min"
+                chart_ap = alt.Chart(ap_df).mark_bar(color="#e67e22").encode(
+                    x=alt.X("entity_id:N", title="Aerodrome ICAO", sort="-y"),
+                    y=alt.Y(f"{delay_col}:Q", title=f"Avg {'Departure' if grp_key == 'departure' else 'Arrival'} Delay (min)"),
+                    tooltip=["entity_id", "total_flights", "avg_dep_delay_min", "avg_arr_delay_min", "pct_severe_arr_30m", "total_excess_fuel_cost_eur"],
+                ).properties(height=260, title=f"Top {len(ap_df)} Aerodromes Ranked by Delay ({airport_summary.group_by})")
+                st.altair_chart(chart_ap, use_container_width=True)
+
+                st.dataframe(ap_df, use_container_width=True)
+
+        else: # 🔍 Flight Level
+            st.subheader("🔍 Micro Flight-Level Search & KPI Inspector")
+            st.caption(f"Browse individual flight trajectories and efficiency metrics matching `{filter_start_str} to {filter_end_str}` ({h_start:02d}:00–{h_end:02d}:59 UTC).")
+
+            with st.spinner("Querying individual flight records matching timeframe..."):
+                flight_summary = query_multi_level_kpis(
+                    ds,
+                    level="flight",
+                    start_date=filter_start_str,
+                    end_date=filter_end_str,
+                    hour_start=h_start,
+                    hour_end=h_end,
+                    limit=100,
+                )
+
+            if flight_summary.records:
+                fl_df = pd.DataFrame(flight_summary.records)
+                st.dataframe(fl_df, use_container_width=True)
 
     with sys_sub1:
         st.header(f"Global Network Status & Airspace Saturation ({selected_period})")
@@ -1231,16 +1427,47 @@ with tab_cat_system:
 
         st.divider()
         st.subheader("🌦️ European Hub Weather Disruption Correlation (Daily IFR/Wind vs. Arrival Delays)")
+        st.caption(f"Correlates historical European aerodrome METAR weather disruptions across the **entire {selected_period} timeframe** with global arrival delays.")
+
+        wx_state_key = f"wx_rep_data_{selected_period}"
         if st.button(f"Analyze Hub Weather vs. Delay Correlation ({selected_period})", key=f"btn_wx_corr_{selected_period}"):
-            with st.spinner("Correlating IEM ASOS METAR hub weather severity against daily arrival delays..."):
-                wx_rep = analyze_network_weather_impact(ds, metar_client)
+            with st.spinner(f"Correlating IEM ASOS METAR hub weather severity against daily arrival delays for entire {selected_period}..."):
+                st.session_state[wx_state_key] = analyze_network_weather_impact(ds, metar_client)
+
+        wx_rep = st.session_state.get(wx_state_key)
+        if wx_rep:
+            st.info(
+                f"📅 **Analyzed Timeframe:** `{wx_rep.start_date}` to `{wx_rep.end_date}` "
+                f"({len(wx_rep.daily_time_series)} days analyzed across {len(wx_rep.analyzed_hubs)} hubs: {', '.join(wx_rep.analyzed_hubs)})"
+            )
             wx1, wx2, wx3, wx4 = st.columns(4)
             wx1.metric("Clear-Sky Baseline Delay", f"{wx_rep.clear_sky_baseline_delay_min:+.2f} min")
-            wx2.metric("Delay / Weather Severity Slope", f"{wx_rep.delay_sensitivity_minutes_per_severity_point:+.2f} min/pt")
+            wx2.metric("Delay / Severity Sensitivity Slope", f"{wx_rep.delay_sensitivity_minutes_per_severity_point:+.2f} min/pt")
             wx3.metric("Delay vs IFR Correlation (r)", f"{wx_rep.pearson_corr_delay_vs_ifr:+.3f}")
-            wx4.metric("Worst Weather Day", f"{wx_rep.worst_weather_day['date']}", f"{wx_rep.worst_weather_day['avg_delay_min']:+.1f}m delay")
+            worst_d = wx_rep.worst_weather_day.get("date", "N/A")
+            worst_del = wx_rep.worst_weather_day.get("avg_delay_min", 0.0)
+            wx4.metric("Worst Weather Day", f"{worst_d}", f"{worst_del:+.1f}m delay")
+
             if wx_rep.daily_time_series:
-                st.dataframe(pd.DataFrame([r.__dict__ for r in wx_rep.daily_time_series]), use_container_width=True)
+                wx_df = pd.DataFrame([r.__dict__ for r in wx_rep.daily_time_series])
+                # Interactive daily trend chart: Arrival Delay vs. Weather Severity Index
+                if "date_str" in wx_df.columns and "avg_arr_delay_min" in wx_df.columns:
+                    base_chart = alt.Chart(wx_df).encode(x=alt.X("date_str:T", title="Date"))
+                    line_delay = base_chart.mark_line(color="#e74c3c", strokeWidth=2.5, point=True).encode(
+                        y=alt.Y("avg_arr_delay_min:Q", title="Avg Arrival Delay (min)", scale=alt.Scale(zero=False)),
+                        tooltip=["date_str:T", "total_flights:Q", "avg_arr_delay_min:Q", "composite_weather_severity_index:Q", "ifr_hours_pct:Q", "high_wind_hours_pct:Q"],
+                    )
+                    line_sev = base_chart.mark_line(color="#3498db", strokeWidth=2.0, strokeDash=[4, 4], point=True).encode(
+                        y=alt.Y("composite_weather_severity_index:Q", title="Weather Severity Index (0-10)", scale=alt.Scale(domain=[0, 10])),
+                        tooltip=["date_str:T", "composite_weather_severity_index:Q", "ifr_hours_pct:Q", "high_wind_hours_pct:Q"],
+                    )
+                    combo_chart = alt.layer(line_delay, line_sev).resolve_scale(y="independent").properties(
+                        title=f"Daily Network Arrival Delay (Red Solid) vs. European Hub Weather Severity (Blue Dashed) — {selected_period}",
+                        height=280,
+                    )
+                    st.altair_chart(combo_chart, use_container_width=True)
+
+                st.dataframe(wx_df, use_container_width=True)
 
         st.divider()
 
