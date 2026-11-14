@@ -81,6 +81,46 @@ def test_simulate_network_shock_airport(engine):
     assert "total_economic_delay_cost_eur" in d
 
 
+def test_scan_repeat_offender_routes(engine):
+    routes = engine.scan_repeat_offender_routes(
+        min_primary_delay_min=25.0,
+        min_propagated_delay_min=10.0,
+        min_incidents=3,
+        top_n=5,
+    )
+    assert isinstance(routes, list)
+    assert len(routes) > 0
+    r0 = routes[0]
+    assert r0.incident_count >= 3
+    assert r0.avg_primary_dep_delay_min >= 25.0
+    assert r0.total_downstream_legs_infected > 0
+    assert r0.total_reactionary_delay_hours > 0.0
+    assert r0.total_reactionary_cost_eur > 0.0
+    d = r0.to_dict()
+    assert "route" in d
+    assert "total_reactionary_cost_eur" in d
+
+
+def test_scan_repeat_offender_operators(engine):
+    ops = engine.scan_repeat_offender_operators(
+        min_primary_delay_min=25.0,
+        min_propagated_delay_min=10.0,
+        min_spreader_flights=5,
+        top_n=5,
+    )
+    assert isinstance(ops, list)
+    assert len(ops) > 0
+    o0 = ops[0]
+    assert o0.total_root_spreader_flights >= 5
+    assert o0.avg_primary_dep_delay_min >= 25.0
+    assert o0.total_downstream_legs_infected > 0
+    assert o0.total_reactionary_delay_hours > 0.0
+    assert o0.total_reactionary_cost_eur > 0.0
+    d = o0.to_dict()
+    assert "operator" in d
+    assert "downstream_infection_multiplier" in d
+
+
 def test_simulate_network_shock_fir(engine):
     shock = engine.simulate_network_shock(
         disruption_target="EDUUUIR",

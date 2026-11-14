@@ -103,6 +103,35 @@ class DelaySuperSpreaderFlight:
 
 
 @dataclass
+class RepeatOffenderRoute:
+    route: str
+    adep: str
+    ades: str
+    incident_count: int
+    avg_primary_dep_delay_min: float
+    total_downstream_legs_infected: int
+    total_reactionary_delay_hours: float
+    total_reactionary_cost_eur: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class RepeatOffenderOperator:
+    operator: str
+    total_root_spreader_flights: int
+    avg_primary_dep_delay_min: float
+    total_downstream_legs_infected: int
+    downstream_infection_multiplier: float
+    total_reactionary_delay_hours: float
+    total_reactionary_cost_eur: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class DisruptionSimulationResult:
     target_type: str
     target_id: str
@@ -288,6 +317,178 @@ class DelayContagionGraphEngine:
 
         candidates.sort(key=lambda c: c.downstream_delay_hours, reverse=True)
         return candidates[:top_n]
+
+    def scan_repeat_offender_routes(
+        self,
+        min_primary_delay_min: float = 25.0,
+        min_propagated_delay_min: float = 10.0,
+        min_incidents: int = 3,
+        top_n: int = 20,
+    ) -> list[RepeatOffenderRoute]:
+        """
+        Scan the entire reporting period to identify city-pair routes that repeatedly initiate
+        morning departure delays cascading into downstream reactionary delays across the network.
+        """
+        sql = f"""
+            WITH daily_legs AS (
+                SELECT
+                    ectrl_id,
+                    ac_reg,
+                    ac_operator,
+                    adep,
+                    ades,
+                    adep || ' ➔ ' || ades AS route,
+                    filed_off_block_time,
+                    actual_off_block_time,
+                    actual_arrival_time,
+                    dep_delay_min,
+                    arr_delay_min,
+                    CAST(actual_off_block_time AS DATE) AS flight_date,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY ac_reg, CAST(actual_off_block_time AS DATE)
+                        ORDER BY actual_off_block_time ASC
+                    ) AS leg_seq
+                FROM flights
+                WHERE ac_reg IS NOT NULL AND ac_reg != ''
+                  AND actual_off_block_time IS NOT NULL
+                  AND actual_arrival_time IS NOT NULL
+            ),
+            paired_legs AS (
+                SELECT
+                    cur.flight_date,
+                    cur.ac_reg,
+                    cur.ac_operator,
+                    cur.ectrl_id AS root_flight_id,
+                    cur.route AS root_route,
+                    cur.adep AS root_adep,
+                    cur.ades AS root_ades,
+                    cur.dep_delay_min AS root_dep_delay,
+                    nxt.ectrl_id AS next_flight_id,
+                    GREATEST(0.0, cur.arr_delay_min - GREATEST(0.0, datediff('minute', cur.actual_arrival_time, nxt.filed_off_block_time) - 30.0)) AS propagated_delay_min
+                FROM daily_legs cur
+                JOIN daily_legs nxt
+                  ON cur.ac_reg = nxt.ac_reg
+                 AND cur.flight_date = nxt.flight_date
+                 AND cur.leg_seq = 1
+                 AND nxt.leg_seq >= 2
+                WHERE cur.dep_delay_min >= {float(min_primary_delay_min)}
+            )
+            SELECT
+                root_route,
+                root_adep,
+                root_ades,
+                count(DISTINCT root_flight_id) AS incident_count,
+                round(avg(root_dep_delay), 1) AS avg_primary_dep_delay_min,
+                count(*) AS total_downstream_legs_infected,
+                round(sum(propagated_delay_min) / 60.0, 1) AS total_reactionary_delay_hours,
+                round(sum(propagated_delay_min) * {REACTIONARY_DELAY_COST_EUR_PER_MIN}, 0) AS total_reactionary_cost_eur
+            FROM paired_legs
+            WHERE propagated_delay_min >= {float(min_propagated_delay_min)}
+            GROUP BY root_route, root_adep, root_ades
+            HAVING count(DISTINCT root_flight_id) >= {int(min_incidents)}
+            ORDER BY incident_count DESC, total_reactionary_delay_hours DESC
+            LIMIT {int(top_n)};
+        """
+        df = self.dataset.query(sql)
+        results: list[RepeatOffenderRoute] = []
+        for _, r in df.iterrows():
+            results.append(
+                RepeatOffenderRoute(
+                    route=str(r["root_route"]),
+                    adep=str(r["root_adep"]),
+                    ades=str(r["root_ades"]),
+                    incident_count=int(r["incident_count"]),
+                    avg_primary_dep_delay_min=float(r["avg_primary_dep_delay_min"]),
+                    total_downstream_legs_infected=int(r["total_downstream_legs_infected"]),
+                    total_reactionary_delay_hours=float(r["total_reactionary_delay_hours"]),
+                    total_reactionary_cost_eur=float(r["total_reactionary_cost_eur"]),
+                )
+            )
+        return results
+
+    def scan_repeat_offender_operators(
+        self,
+        min_primary_delay_min: float = 25.0,
+        min_propagated_delay_min: float = 10.0,
+        min_spreader_flights: int = 5,
+        top_n: int = 20,
+    ) -> list[RepeatOffenderOperator]:
+        """
+        Scan the entire reporting period to identify airline carriers with systemic delay contagion patterns,
+        measuring multi-leg reactionary delay transmission and total financial damage.
+        """
+        sql = f"""
+            WITH daily_legs AS (
+                SELECT
+                    ectrl_id,
+                    ac_reg,
+                    ac_operator,
+                    adep,
+                    ades,
+                    filed_off_block_time,
+                    actual_off_block_time,
+                    actual_arrival_time,
+                    dep_delay_min,
+                    arr_delay_min,
+                    CAST(actual_off_block_time AS DATE) AS flight_date,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY ac_reg, CAST(actual_off_block_time AS DATE)
+                        ORDER BY actual_off_block_time ASC
+                    ) AS leg_seq
+                FROM flights
+                WHERE ac_reg IS NOT NULL AND ac_reg != ''
+                  AND actual_off_block_time IS NOT NULL
+                  AND actual_arrival_time IS NOT NULL
+            ),
+            paired_legs AS (
+                SELECT
+                    cur.flight_date,
+                    cur.ac_reg,
+                    cur.ac_operator,
+                    cur.ectrl_id AS root_flight_id,
+                    cur.adep AS root_adep,
+                    cur.dep_delay_min AS root_dep_delay,
+                    nxt.ectrl_id AS next_flight_id,
+                    GREATEST(0.0, cur.arr_delay_min - GREATEST(0.0, datediff('minute', cur.actual_arrival_time, nxt.filed_off_block_time) - 30.0)) AS propagated_delay_min
+                FROM daily_legs cur
+                JOIN daily_legs nxt
+                  ON cur.ac_reg = nxt.ac_reg
+                 AND cur.flight_date = nxt.flight_date
+                 AND cur.leg_seq = 1
+                 AND nxt.leg_seq >= 2
+                WHERE cur.dep_delay_min >= {float(min_primary_delay_min)}
+            )
+            SELECT
+                ac_operator,
+                count(DISTINCT root_flight_id) AS total_root_spreader_flights,
+                round(avg(root_dep_delay), 1) AS avg_primary_dep_delay_min,
+                count(*) AS total_downstream_legs_infected,
+                round(count(*)::FLOAT / NULLIF(count(DISTINCT root_flight_id), 0), 2) AS downstream_infection_multiplier,
+                round(sum(propagated_delay_min) / 60.0, 1) AS total_reactionary_delay_hours,
+                round(sum(propagated_delay_min) * {REACTIONARY_DELAY_COST_EUR_PER_MIN}, 0) AS total_reactionary_cost_eur
+            FROM paired_legs
+            WHERE propagated_delay_min >= {float(min_propagated_delay_min)}
+              AND ac_operator IS NOT NULL AND ac_operator != ''
+            GROUP BY ac_operator
+            HAVING count(DISTINCT root_flight_id) >= {int(min_spreader_flights)}
+            ORDER BY total_root_spreader_flights DESC, total_reactionary_delay_hours DESC
+            LIMIT {int(top_n)};
+        """
+        df = self.dataset.query(sql)
+        results: list[RepeatOffenderOperator] = []
+        for _, r in df.iterrows():
+            results.append(
+                RepeatOffenderOperator(
+                    operator=str(r["ac_operator"]),
+                    total_root_spreader_flights=int(r["total_root_spreader_flights"]),
+                    avg_primary_dep_delay_min=float(r["avg_primary_dep_delay_min"]),
+                    total_downstream_legs_infected=int(r["total_downstream_legs_infected"]),
+                    downstream_infection_multiplier=float(r["downstream_infection_multiplier"]),
+                    total_reactionary_delay_hours=float(r["total_reactionary_delay_hours"]),
+                    total_reactionary_cost_eur=float(r["total_reactionary_cost_eur"]),
+                )
+            )
+        return results
 
     def simulate_network_shock(
         self,

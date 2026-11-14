@@ -2160,38 +2160,120 @@ with tab_cat_longitudinal:
                 )
 
             st.markdown("---")
-            st.subheader("4. Airframe Delay Contagion & Super-Spreader Analyzer")
+            st.subheader("4. Airframe Delay Contagion & Repeat Offender Analyzer")
             st.markdown(
-                "Identifies morning departures whose delays trigger downstream cascading infections along aircraft rotations."
+                "Detects morning departures whose delays trigger downstream cascading infections along aircraft rotations, "
+                "and identifies chronic repeat offender routes and operators causing systemic network delay propagation."
             )
-            col_sp_dt, col_sp_del = st.columns(2)
-            default_date = "2025-10-15" if selected_period == "202510" else f"{selected_period[:4]}-{selected_period[4:6]}-15"
-            sp_date = col_sp_dt.text_input("Operating Date (YYYY-MM-DD)", value=default_date, key="sp_date").strip()
-            sp_min_del = col_sp_del.slider("Min Primary Departure Delay (min)", min_value=10, max_value=60, value=25, key="sp_min_del")
 
-            if st.button("Detect Delay Super-Spreaders", key="btn_find_spreaders"):
-                with st.spinner(f"Tracing airframe delay contagion for {sp_date}..."):
-                    delay_eng = DelayContagionGraphEngine(ds, period=selected_period)
-                    spreaders = delay_eng.identify_super_spreaders(date_str=sp_date, min_primary_delay_min=float(sp_min_del), top_n=15)
+            contagion_scope = st.radio(
+                "Contagion Analysis Scope",
+                ["🔁 Period-Wide Repeat Offenders (Routes & Operators)", "📅 Single-Date Super-Spreaders"],
+                horizontal=True,
+                key="contagion_scope_radio",
+            )
 
-                if not spreaders:
-                    st.info(f"No multi-leg super-spreaders found for date {sp_date} with >={sp_min_del}m departure delay.")
-                else:
-                    sp_df = pd.DataFrame([
-                        {
-                            "Root Flight ID": s.ectrl_id,
-                            "Tail": s.ac_reg,
-                            "Carrier": s.operator,
-                            "Origin Hub": s.origin_hub,
-                            "Destination": s.destination,
-                            "Initial Departure Delay": f"{s.primary_delay_min:+.0f} min",
-                            "Infected Downstream Legs": s.infected_downstream_legs,
-                            "Downstream Reactionary Delay": f"{s.total_downstream_delay_min:.0f} min",
-                            "Reactionary Delay Cost (€)": f"€{s.reactionary_delay_cost_eur:,.0f}",
-                        }
-                        for s in spreaders[:15]
-                    ])
-                    st.dataframe(sp_df, use_container_width=True)
+            if contagion_scope == "🔁 Period-Wide Repeat Offenders (Routes & Operators)":
+                offender_sub_choice = st.radio(
+                    "Target Dimension",
+                    ["🛣️ Repeat Offender Routes (City Pairs)", "✈️ Repeat Offender Airline Operators"],
+                    horizontal=True,
+                    key="offender_dim_radio",
+                )
+                col_of1, col_of2 = st.columns(2)
+                min_pri_del = col_of1.slider("Min Primary Departure Delay (min)", min_value=15, max_value=60, value=25, key="of_min_pri_del")
+                min_prop_del = col_of2.slider("Min Propagated Reactionary Delay (min)", min_value=5, max_value=30, value=10, key="of_min_prop_del")
+
+                if st.button("Scan Reporting Period for Repeat Offenders", key="btn_scan_offenders"):
+                    with st.spinner("Scanning entire monthly archive for repeat contagion sources..."):
+                        delay_eng = DelayContagionGraphEngine(ds, period=selected_period)
+                        if "Routes" in offender_sub_choice:
+                            off_routes = delay_eng.scan_repeat_offender_routes(
+                                min_primary_delay_min=float(min_pri_del),
+                                min_propagated_delay_min=float(min_prop_del),
+                                min_incidents=3,
+                                top_n=20,
+                            )
+                            if not off_routes:
+                                st.info("No repeat offender routes found with current criteria.")
+                            else:
+                                om1, om2, om3 = st.columns(3)
+                                om1.metric("Worst Offender Route", off_routes[0].route, f"{off_routes[0].incident_count} delay infection days")
+                                om2.metric("Max Reactionary Delay", f"{off_routes[0].total_reactionary_delay_hours:.1f} hrs", f"Avg Leg 1 Delay: {off_routes[0].avg_primary_dep_delay_min:.0f}m")
+                                om3.metric("Max Financial Damage", f"€{off_routes[0].total_reactionary_cost_eur:,.0f} EUR", f"{off_routes[0].total_downstream_legs_infected} legs infected")
+
+                                r_df = pd.DataFrame([
+                                    {
+                                        "Route": r.route,
+                                        "Origin": r.adep,
+                                        "Destination": r.ades,
+                                        "Contagion Days": r.incident_count,
+                                        "Avg Initial Delay": f"{r.avg_primary_dep_delay_min:.1f} min",
+                                        "Downstream Legs Infected": r.total_downstream_legs_infected,
+                                        "Reactionary Delay (hrs)": f"{r.total_reactionary_delay_hours:.1f} hrs",
+                                        "Reactionary Cost (€)": f"€{r.total_reactionary_cost_eur:,.0f}",
+                                    }
+                                    for r in off_routes
+                                ])
+                                st.dataframe(r_df, use_container_width=True)
+                        else:
+                            off_ops = delay_eng.scan_repeat_offender_operators(
+                                min_primary_delay_min=float(min_pri_del),
+                                min_propagated_delay_min=float(min_prop_del),
+                                min_spreader_flights=5,
+                                top_n=20,
+                            )
+                            if not off_ops:
+                                st.info("No repeat offender operators found with current criteria.")
+                            else:
+                                om1, om2, om3 = st.columns(3)
+                                om1.metric("Highest Contagion Carrier", off_ops[0].operator, f"{off_ops[0].total_root_spreader_flights} spreader flights")
+                                om2.metric("Total Downstream Delay", f"{off_ops[0].total_reactionary_delay_hours:,.1f} hrs", f"{off_ops[0].total_downstream_legs_infected} legs infected")
+                                om3.metric("Total Reactionary Cost", f"€{off_ops[0].total_reactionary_cost_eur:,.0f} EUR", f"Multiplier: {off_ops[0].downstream_infection_multiplier:.2f}x")
+
+                                op_df = pd.DataFrame([
+                                    {
+                                        "Airline Operator": o.operator,
+                                        "Root Spreader Flights": o.total_root_spreader_flights,
+                                        "Avg Primary Delay": f"{o.avg_primary_dep_delay_min:.1f} min",
+                                        "Downstream Legs Infected": o.total_downstream_legs_infected,
+                                        "Infection Multiplier": f"{o.downstream_infection_multiplier:.2f}x",
+                                        "Reactionary Delay (hrs)": f"{o.total_reactionary_delay_hours:.1f} hrs",
+                                        "Reactionary Cost (€)": f"€{o.total_reactionary_cost_eur:,.0f}",
+                                    }
+                                    for o in off_ops
+                                ])
+                                st.dataframe(op_df, use_container_width=True)
+
+            else:
+                col_sp_dt, col_sp_del = st.columns(2)
+                default_date = "2025-10-15" if selected_period == "202510" else f"{selected_period[:4]}-{selected_period[4:6]}-15"
+                sp_date = col_sp_dt.text_input("Operating Date (YYYY-MM-DD)", value=default_date, key="sp_date").strip()
+                sp_min_del = col_sp_del.slider("Min Primary Departure Delay (min)", min_value=10, max_value=60, value=25, key="sp_min_del")
+
+                if st.button("Detect Delay Super-Spreaders", key="btn_find_spreaders"):
+                    with st.spinner(f"Tracing airframe delay contagion for {sp_date}..."):
+                        delay_eng = DelayContagionGraphEngine(ds, period=selected_period)
+                        spreaders = delay_eng.identify_super_spreaders(date_str=sp_date, min_primary_delay_min=float(sp_min_del), top_n=15)
+
+                    if not spreaders:
+                        st.info(f"No multi-leg super-spreaders found for date {sp_date} with >={sp_min_del}m departure delay.")
+                    else:
+                        sp_df = pd.DataFrame([
+                            {
+                                "Root Flight ID": s.ectrl_id,
+                                "Tail": s.ac_reg,
+                                "Carrier": s.operator,
+                                "Origin Hub": s.origin_hub,
+                                "Destination": s.destination,
+                                "Initial Departure Delay": f"{s.primary_delay_min:+.0f} min",
+                                "Infected Downstream Legs": s.infected_downstream_legs,
+                                "Downstream Reactionary Delay": f"{s.total_downstream_delay_min:.0f} min",
+                                "Reactionary Delay Cost (€)": f"€{s.reactionary_delay_cost_eur:,.0f}",
+                            }
+                            for s in spreaders[:15]
+                        ])
+                        st.dataframe(sp_df, use_container_width=True)
 
 
 # =============================================================================

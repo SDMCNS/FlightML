@@ -81,3 +81,27 @@ def test_api_v3_network_shock(client):
     assert data["target_id"] == "EGLL"
     assert data["total_impacted_flights"] > 0
     assert data["total_economic_delay_cost_eur"] > 0
+
+
+def test_api_v3_repeat_offender_routes(client):
+    response = client.get("/api/v3/delay/repeat-offenders/routes?period=202510&top_n=5")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["period"] == "202510"
+    assert "repeat_offender_routes" in data
+    assert len(data["repeat_offender_routes"]) > 0
+    r0 = data["repeat_offender_routes"][0]
+    assert "route" in r0
+    assert "total_reactionary_cost_eur" in r0
+
+
+def test_api_v3_repeat_offender_operators(client):
+    response = client.get("/api/v3/delay/repeat-offenders/operators?period=202510&top_n=5")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["period"] == "202510"
+    assert "repeat_offender_operators" in data
+    assert len(data["repeat_offender_operators"]) > 0
+    o0 = data["repeat_offender_operators"][0]
+    assert "operator" in o0
+    assert "total_root_spreader_flights" in o0

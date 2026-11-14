@@ -1179,6 +1179,85 @@ def delay_spreaders_cmd(
     console.print(sp_tab)
 
 
+@app.command("delay-offenders")
+def delay_offenders_cmd(
+    target_type: str = typer.Option("routes", "--type", "-t", help="Offender type: 'routes' (city pairs) or 'operators' (airlines)"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period"),
+    min_delay: float = typer.Option(25.0, "--min-delay", "-m", help="Minimum initial departure delay (min)"),
+    min_propagated: float = typer.Option(10.0, "--min-prop", help="Minimum propagated reactionary delay (min)"),
+    top_n: int = typer.Option(15, "--top", "-n", help="Number of repeat offenders to show"),
+) -> None:
+    """Scan reporting period for chronic repeat offender routes and operators causing systemic delay contagion."""
+    ds = FlightDataset(period=period)
+    engine = DelayContagionGraphEngine(ds)
+    t_type = target_type.strip().lower()
+
+    if "op" in t_type:
+        with console.status(f"[cyan]Scanning period {period} for repeat offender airline operators..."):
+            operators = engine.scan_repeat_offender_operators(
+                min_primary_delay_min=min_delay,
+                min_propagated_delay_min=min_propagated,
+                min_spreader_flights=5,
+                top_n=top_n,
+            )
+        console.print(f"\n[bold green]Top Delay Contagion Offender Airline Operators (Period {period}):[/bold green]")
+        if not operators:
+            console.print("[yellow]No repeat offender operators found meeting threshold.[/yellow]")
+            return
+
+        op_tab = Table(title="Airline Operators Triggering Systemic Downstream Delay Cascades", header_style="bold magenta")
+        op_tab.add_column("Airline", style="cyan")
+        op_tab.add_column("Spreader Flights", justify="right", style="bold red")
+        op_tab.add_column("Avg Initial Delay", justify="right", style="white")
+        op_tab.add_column("Infected Legs", justify="right", style="bold yellow")
+        op_tab.add_column("Infection Multiplier", justify="right", style="yellow")
+        op_tab.add_column("Reactionary Delay", justify="right", style="yellow")
+        op_tab.add_column("Reactionary Cost (€)", justify="right", style="bold green")
+
+        for o in operators:
+            op_tab.add_row(
+                o.operator,
+                f"{o.total_root_spreader_flights:,}",
+                f"{o.avg_primary_dep_delay_min:.1f} min",
+                f"{o.total_downstream_legs_infected:,} legs",
+                f"{o.downstream_infection_multiplier:.2f}x",
+                f"{o.total_reactionary_delay_hours:,.1f} hrs",
+                f"€{o.total_reactionary_cost_eur:,.0f}",
+            )
+        console.print(op_tab)
+    else:
+        with console.status(f"[cyan]Scanning period {period} for chronic repeat offender routes..."):
+            routes = engine.scan_repeat_offender_routes(
+                min_primary_delay_min=min_delay,
+                min_propagated_delay_min=min_propagated,
+                min_incidents=3,
+                top_n=top_n,
+            )
+        console.print(f"\n[bold green]Top Delay Contagion Repeat Offender Routes (Period {period}):[/bold green]")
+        if not routes:
+            console.print("[yellow]No repeat offender routes found meeting threshold.[/yellow]")
+            return
+
+        rt_tab = Table(title="City-Pair Routes Triggering Systemic Downstream Reactionary Delay Contagion", header_style="bold magenta")
+        rt_tab.add_column("Route", style="cyan")
+        rt_tab.add_column("Contagion Incidents", justify="right", style="bold red")
+        rt_tab.add_column("Avg Initial Delay", justify="right", style="white")
+        rt_tab.add_column("Infected Downstream Legs", justify="right", style="bold yellow")
+        rt_tab.add_column("Reactionary Delay", justify="right", style="yellow")
+        rt_tab.add_column("Reactionary Cost (€)", justify="right", style="bold green")
+
+        for r in routes:
+            rt_tab.add_row(
+                r.route,
+                f"{r.incident_count} days",
+                f"{r.avg_primary_dep_delay_min:.1f} min",
+                f"{r.total_downstream_legs_infected} legs",
+                f"{r.total_reactionary_delay_hours:.1f} hrs",
+                f"€{r.total_reactionary_cost_eur:,.0f}",
+            )
+        console.print(rt_tab)
+
+
 @app.command("simulate-shock")
 def simulate_shock_cmd(
     target: str = typer.Argument("EGLL", help="Disruption target (Airport ICAO e.g. EGLL, EDDF or FIR e.g. EDUUUIR)"),

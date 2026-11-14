@@ -929,6 +929,54 @@ def get_delay_spreaders_endpoint(
     }
 
 
+@app.get("/api/v3/delay/repeat-offenders/routes")
+def get_repeat_offender_routes_endpoint(
+    period: str = Query(default="202510", description="Eurocontrol period"),
+    min_delay: float = Query(default=25.0, description="Minimum initial departure delay (min)"),
+    min_propagated: float = Query(default=10.0, description="Minimum propagated reactionary delay (min)"),
+    min_incidents: int = Query(default=3, description="Minimum delay contagion days across period"),
+    top_n: int = Query(default=15, description="Number of repeat offender routes to return"),
+) -> dict[str, Any]:
+    """Scan reporting period for chronic repeat offender routes causing downstream delay contagion."""
+    ds = FlightDataset(period=period)
+    engine = DelayContagionGraphEngine(ds)
+    routes = engine.scan_repeat_offender_routes(
+        min_primary_delay_min=min_delay,
+        min_propagated_delay_min=min_propagated,
+        min_incidents=min_incidents,
+        top_n=top_n,
+    )
+    return {
+        "period": period,
+        "routes_count": len(routes),
+        "repeat_offender_routes": [r.to_dict() for r in routes],
+    }
+
+
+@app.get("/api/v3/delay/repeat-offenders/operators")
+def get_repeat_offender_operators_endpoint(
+    period: str = Query(default="202510", description="Eurocontrol period"),
+    min_delay: float = Query(default=25.0, description="Minimum initial departure delay (min)"),
+    min_propagated: float = Query(default=10.0, description="Minimum propagated reactionary delay (min)"),
+    min_spreaders: int = Query(default=5, description="Minimum root spreader flights across period"),
+    top_n: int = Query(default=15, description="Number of repeat offender operators to return"),
+) -> dict[str, Any]:
+    """Scan reporting period for airline operators generating systemic delay contagion across airframe chains."""
+    ds = FlightDataset(period=period)
+    engine = DelayContagionGraphEngine(ds)
+    operators = engine.scan_repeat_offender_operators(
+        min_primary_delay_min=min_delay,
+        min_propagated_delay_min=min_propagated,
+        min_spreader_flights=min_spreaders,
+        top_n=top_n,
+    )
+    return {
+        "period": period,
+        "operators_count": len(operators),
+        "repeat_offender_operators": [o.to_dict() for o in operators],
+    }
+
+
 @app.get("/api/v3/sim/network-shock")
 def get_network_shock_endpoint(
     target: str = Query(default="EGLL", description="Disruption target (Airport e.g. EGLL or FIR e.g. EDUUUIR)"),
