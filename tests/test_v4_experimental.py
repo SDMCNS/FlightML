@@ -258,3 +258,29 @@ def test_flight2vec_prevectorization_cache(dataset: FlightDataset, sample_flight
         assert -1.0 <= t.cosine_similarity <= 1.001
         assert 0.0 <= t.similarity_pct <= 100.0
 
+
+def test_flight2vec_commercial_jet_excludes_helicopters(dataset: FlightDataset):
+    """
+    Regression test: verify that a commercial narrowbody jet (e.g. A320) matches with
+    commercial jet/transport twins and strictly excludes helicopters (e.g. S92).
+    """
+    f2v = Flight2VecEngine(dataset)
+    target_id = 292396738
+    target_flight = dataset.get_flight(target_id)
+    if not target_flight:
+        # Fallback to any A320 if target id not in dataset
+        row = dataset.cursor.execute("SELECT ectrl_id FROM flights WHERE ac_type = 'A320' LIMIT 1").fetchone()
+        if not row:
+            pytest.skip("No A320 flights found in dataset")
+        target_id = int(row[0])
+
+    twins = f2v.find_operational_twins(target_id, top_k=5, use_cache=False)
+    assert len(twins) > 0
+    helicopter_types = {"S92", "S76", "A139", "AW139", "EC35", "EC45", "H145", "H160"}
+    for twin in twins:
+        # Cosine similarity for genuine commercial twins should be high
+        assert twin.cosine_similarity > 0.80
+        assert twin.ac_type.upper() not in helicopter_types
+        assert twin.explanation != ""
+
+
