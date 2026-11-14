@@ -185,10 +185,18 @@ def _cached_proximity_scan(period: str, hour: int, horiz_sep_nm: float):
 
 
 @st.cache_data(show_spinner=False)
-def _cached_gdp_optimizer(period: str, target_airport: str, start_hour: int, end_hour: int, aar: int):
+def _cached_gdp_optimizer(
+    period: str,
+    target_airport: str,
+    start_hour: int,
+    end_hour: int,
+    aar: int,
+    program_date: str | None = None,
+):
     return optimize_ground_delay_program(
         get_dataset(period),
         target_airport=target_airport,
+        program_date=program_date,
         start_hour=start_hour,
         end_hour=end_hour,
         degraded_capacity_rate_per_hr=aar,
@@ -325,6 +333,7 @@ def render_page_export_bar(page_key: str, widget_suffix: str) -> None:
                     conflict_nm=float(st.session_state.get(f"cs_nm_{selected_period}", 5.0)),
                     gdp_airport=str(st.session_state.get(f"gdp_apt_{selected_period}", "EGLL")),
                     gdp_aar=int(st.session_state.get(f"gdp_aar_{selected_period}", 25)),
+                    gdp_date=str(st.session_state.get(f"gdp_date_{selected_period}", "")) or None,
                 )
     with c_exp2:
         if state_key in st.session_state:
@@ -371,6 +380,7 @@ with st.sidebar.expander("📄 Export Static HTML Report (with Images)", expande
                 conflict_nm=float(st.session_state.get(f"cs_nm_{selected_period}", 5.0)),
                 gdp_airport=str(st.session_state.get(f"gdp_apt_{selected_period}", "EGLL")),
                 gdp_aar=int(st.session_state.get(f"gdp_aar_{selected_period}", 25)),
+                gdp_date=str(st.session_state.get(f"gdp_date_{selected_period}", "")) or None,
             )
             st.success("Report ready to download!")
     if sb_state_key in st.session_state:
@@ -2457,10 +2467,32 @@ with tab_cat_whatif:
         "Simulates how enforcing a degraded Airport Arrival Rate (`AAR`) cap via ATFM Ground Delay slots (`CTOT` / `CTA`) shifts expensive airborne holding stacks "
         "onto the origin departure gate with engines off, quantifying net fuel (`kg`), CO₂ (`kg`), and Euro (`€`) savings."
     )
-    col_gdp1, col_gdp2, col_gdp3 = st.columns([1.5, 2, 1.5])
+    col_gdp_dt, col_gdp1, col_gdp2, col_gdp3 = st.columns([1.4, 1.2, 1.4, 1.6])
+
+    ds_min_date, ds_max_date = get_dataset_date_bounds(ds)
+    try:
+        d_min_obj = pd.to_datetime(ds_min_date).date()
+        d_max_obj = pd.to_datetime(ds_max_date).date()
+        d_def_obj = d_min_obj + pd.Timedelta(days=14)
+        if d_def_obj > d_max_obj or d_def_obj < d_min_obj:
+            d_def_obj = d_min_obj
+    except Exception:
+        d_min_obj = pd.to_datetime(f"{selected_period[:4]}-{selected_period[4:6]}-01").date()
+        d_max_obj = pd.to_datetime(f"{selected_period[:4]}-{selected_period[4:6]}-28").date()
+        d_def_obj = d_min_obj
+
+    gdp_date_obj = col_gdp_dt.date_input(
+        "Regulated Arrival Date",
+        value=d_def_obj,
+        min_value=d_min_obj,
+        max_value=d_max_obj,
+        key=f"gdp_date_{selected_period}",
+    )
+    gdp_date_str = gdp_date_obj.strftime("%Y-%m-%d")
+
     gdp_apt = col_gdp1.text_input("Arrival Hub ICAO", value="EGLL", key=f"gdp_apt_{selected_period}").strip().upper()
     gdp_aar = col_gdp2.slider(
-        "Degraded Airport Arrival Rate Cap (AAR arrivals/hr)",
+        "Degraded AAR Cap (arrivals/hr)",
         min_value=10,
         max_value=55,
         value=25,
@@ -2477,6 +2509,7 @@ with tab_cat_whatif:
     gdp_res = _cached_gdp_optimizer(
         selected_period,
         target_airport=gdp_apt if gdp_apt else "EGLL",
+        program_date=gdp_date_str,
         start_hour=int(gdp_window[0]),
         end_hour=int(gdp_window[1]),
         aar=int(gdp_aar),
@@ -2484,7 +2517,7 @@ with tab_cat_whatif:
     g1, g2, g3, g4 = st.columns(4)
     g1.metric(
         "Regulated Arrival Window",
-        f"{gdp_res.program_start[:10]} ({gdp_window[0]:02d}:00–{gdp_window[1]:02d}:00)",
+        f"{gdp_res.program_start[:10]} ({gdp_window[0]:02d}:00–{gdp_window[1]:02d}:00 UTC)",
         f"Declared AAR Cap: {gdp_res.degraded_capacity_rate_per_hr}/hr",
     )
     g2.metric(
@@ -2522,7 +2555,7 @@ with tab_cat_whatif:
         ]
         st.dataframe(pd.DataFrame(slot_rows), use_container_width=True)
     else:
-        st.info(f"No arrivals found for `{gdp_apt}` in the selected UTC window `{gdp_window[0]:02d}:00–{gdp_window[1]:02d}:00`.")
+        st.info(f"No arrivals found for `{gdp_apt}` on `{gdp_date_str}` in the selected UTC window `{gdp_window[0]:02d}:00–{gdp_window[1]:02d}:00 UTC`.")
 
     # ----------------- TAB 9: Macro Evolution & AIRAC Diff -----------------
 

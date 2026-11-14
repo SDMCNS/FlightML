@@ -791,10 +791,11 @@ def _build_what_if_stress_section(
     conflict_nm: float = 5.0,
     gdp_airport: str = "EGLL",
     gdp_aar: int = 25,
+    gdp_date: str | None = None,
 ) -> str:
     ts_res = optimize_hub_tail_swaps(ds, operator=None, hub_airport=None)
     prox_rep = scan_airspace_proximity_events(ds, hour=conflict_hour, horiz_sep_nm=conflict_nm)
-    gdp_res = optimize_ground_delay_program(ds, target_airport=gdp_airport, degraded_capacity_rate_per_hr=gdp_aar)
+    gdp_res = optimize_ground_delay_program(ds, target_airport=gdp_airport, degraded_capacity_rate_per_hr=gdp_aar, program_date=gdp_date)
 
     # Multi-operator stress test + conflict map figure
     ops = ["RYR", "BAW", "DLH", "AFR"]
@@ -979,6 +980,7 @@ def generate_static_html_report(
     conflict_nm: float = 5.0,
     gdp_airport: str = "EGLL",
     gdp_aar: int = 25,
+    gdp_date: str | None = None,
     output_path: Path | str | None = None,
 ) -> str:
     """
@@ -1020,6 +1022,7 @@ def generate_static_html_report(
                 conflict_nm=conflict_nm,
                 gdp_airport=gdp_airport,
                 gdp_aar=gdp_aar,
+                gdp_date=gdp_date,
             )
         )
 
