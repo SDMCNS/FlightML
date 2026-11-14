@@ -136,16 +136,18 @@ class EurocontrolArchiveIngestor:
         return self.convert_period_to_parquet(period_id, classified)
 
 
-def list_available_periods() -> list[str]:
+def list_available_periods(parquet_dir: Path | str | None = None) -> list[str]:
     """List all ingested historical periods available in parquet."""
+    target_dir = Path(parquet_dir) if parquet_dir else PARQUET_DIR
     periods = []
     # Check baseline 201611
-    if (PARQUET_DIR / "flights.parquet").exists():
+    if (target_dir / "flights.parquet").exists():
         periods.append("201611")
 
     # Check periods folder
-    if PERIODS_PARQUET_DIR.exists():
-        for p in PERIODS_PARQUET_DIR.iterdir():
+    periods_sub = target_dir / "periods" if target_dir.name != "periods" else target_dir
+    if periods_sub.exists():
+        for p in periods_sub.iterdir():
             if p.is_dir() and (p / "flights.parquet").exists():
                 periods.append(p.name)
 

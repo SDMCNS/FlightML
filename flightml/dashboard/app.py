@@ -3291,7 +3291,7 @@ with tab_cat_ai_lab:
             s_op = col_s3.text_input("Airline Operator", value="", placeholder="e.g. BAW, RYR, DLH, AFR", key=f"f2v_s_op_{selected_period}").strip().upper()
 
             col_s4, col_s5, col_s6 = st.columns([1.5, 1.5, 1])
-            avail_periods = list_available_periods(ds.data_dir)
+            avail_periods = list_available_periods()
             s_season = col_s4.selectbox(
                 "Season / Traffic Cycle",
                 ["Current Cycle", "🌱 Early Spring / Winter (Feb)", "☀️ Summer Peak (Jun)", "🍂 Autumn Shoulder (Oct)"],
