@@ -32,6 +32,18 @@ class AirlineAgentStrategyOutput:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    def __getattr__(self, name: str) -> Any:
+        defaults = {
+            "connection_costs_saved_eur": 0.0,
+            "cancellation_penalties_eur": 0.0,
+            "fuel_cost_incurred_eur": 0.0,
+            "baseline_cost_no_gaming_eur": 0.0,
+            "post_gaming_cost_eur": 0.0,
+        }
+        if name in defaults:
+            return defaults[name]
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
 
 @dataclass
 class MARLDecisionLogEntry:
@@ -49,6 +61,18 @@ class MARLDecisionLogEntry:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def __getattr__(self, name: str) -> Any:
+        defaults = {
+            "connection_costs_saved_eur": 0.0,
+            "cancellation_penalties_eur": 0.0,
+            "fuel_cost_incurred_eur": 0.0,
+            "baseline_cost_no_gaming_eur": 0.0,
+            "post_gaming_cost_eur": 0.0,
+        }
+        if name in defaults:
+            return defaults[name]
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
 
 
 @dataclass
@@ -76,7 +100,16 @@ class MARLGamingSimulationResult:
         if self.decision_log is None:
             self.decision_log = []
         if self.assumptions_glossary is None:
-            self.assumptions_glossary = {}
+            self.assumptions_glossary = ASSUMPTIONS_GLOSSARY.copy()
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "assumptions_glossary":
+            return ASSUMPTIONS_GLOSSARY
+        if name == "decision_log":
+            return []
+        if name == "sample_swapped_flights":
+            return []
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)

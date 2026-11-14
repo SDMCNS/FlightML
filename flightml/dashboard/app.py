@@ -97,7 +97,7 @@ from flightml.models.pinn_mass import PINNMassInverter
 from flightml.models.contrail_surrogate import ContrailNeuralSurrogate
 from flightml.models.st_gnn import SpatioTemporalDelayEngine
 from flightml.sim.airspace_closure import AirspaceClosureSimulator
-from flightml.sim.marl_atfm import MultiAgentATFMSimulator
+from flightml.sim.marl_atfm import ASSUMPTIONS_GLOSSARY, MultiAgentATFMSimulator
 
 
 
@@ -3989,7 +3989,8 @@ with tab_cat_ai_lab:
             )
 
             # Infilled Domain Assumptions Glossary
-            if marl_res.assumptions_glossary:
+            glossary = getattr(marl_res, "assumptions_glossary", None) or ASSUMPTIONS_GLOSSARY
+            if glossary:
                 with st.expander("📖 Infilled Domain Assumptions Glossary (Operational Context Infilled for Raw DDR2 Trajectories)", expanded=False):
                     st.markdown(
                         "Raw Eurocontrol DDR2 radar feeds record aircraft trajectory positions and timings, but do not contain passenger ticketing manifests, "
@@ -3997,12 +3998,13 @@ with tab_cat_ai_lab:
                     )
                     glossary_df = pd.DataFrame([
                         {"Operational Dimension": k, "Infilled Assumption & Modeling Logic": v}
-                        for k, v in marl_res.assumptions_glossary.items()
+                        for k, v in glossary.items()
                     ])
                     st.dataframe(glossary_df, use_container_width=True)
 
             # Blow-by-Blow Autonomous Decision Log
-            if marl_res.decision_log:
+            dec_log = getattr(marl_res, "decision_log", None) or []
+            if dec_log:
                 st.subheader("📜 Blow-by-Blow Autonomous Decision Log")
                 st.caption(
                     "Chronological sequence of autonomous decisions: Eurocontrol GDP initiation, assumption infilling, "
@@ -4021,7 +4023,7 @@ with tab_cat_ai_lab:
                         "Delay Impact": f"{entry.delay_impact_min:+.0f} min" if entry.delay_impact_min != 0 else "0 min",
                         "Net Value Created (€)": f"€{entry.economic_benefit_eur:,.2f} EUR" if entry.economic_benefit_eur != 0 else "€0.00 EUR",
                     }
-                    for entry in marl_res.decision_log
+                    for entry in dec_log
                 ])
                 st.dataframe(log_df, use_container_width=True)
 
@@ -4035,14 +4037,14 @@ with tab_cat_ai_lab:
                 {
                     "Airline Agent": s.airline_name,
                     "Flights Regulated": s.flights_regulated,
-                    "Baseline Cost (Blind Delay)": f"€{s.baseline_cost_no_gaming_eur:,.2f} EUR",
-                    "Post-Gaming Cost": f"€{s.post_gaming_cost_eur:,.2f} EUR",
+                    "Baseline Cost (Blind Delay)": f"€{getattr(s, 'baseline_cost_no_gaming_eur', 0.0):,.2f} EUR",
+                    "Post-Gaming Cost": f"€{getattr(s, 'post_gaming_cost_eur', 0.0):,.2f} EUR",
                     "Net Economic Payoff (Gain)": f"€{s.net_economic_payoff_eur:,.2f} EUR",
                     "Gross Delay Saved": f"{s.gross_delay_saved_min:,.0f} min",
-                    "Connections Saved": f"€{s.connection_costs_saved_eur:,.2f} EUR",
+                    "Connections Saved": f"€{getattr(s, 'connection_costs_saved_eur', 0.0):,.2f} EUR",
                     "EU261 Fines Prevented": f"€{s.eu261_penalties_prevented_eur:,.2f} EUR",
-                    "Speedup Fuel Cost": f"€{s.fuel_cost_incurred_eur:,.2f} EUR",
-                    "Cancellation Costs": f"€{s.cancellation_penalties_eur:,.2f} EUR",
+                    "Speedup Fuel Cost": f"€{getattr(s, 'fuel_cost_incurred_eur', 0.0):,.2f} EUR",
+                    "Cancellation Costs": f"€{getattr(s, 'cancellation_penalties_eur', 0.0):,.2f} EUR",
                     "Dominant Strategy": s.dominant_strategy,
                 }
                 for s in marl_res.airline_strategies
