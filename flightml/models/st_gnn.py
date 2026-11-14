@@ -27,6 +27,8 @@ class STGNNNodeState:
     scheduled_movements: int = 0
     baseline_delay_min: float = 0.0
     reactionary_delay_hours: float = 0.0
+    saturation_ratio_pct: float = 0.0
+    spare_hourly_capacity: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -44,6 +46,8 @@ class STGNNPropagationResult:
     shock_end_time: str = ""
     shock_duration_hours: float = 2.0
     total_flights_impacted: int = 0
+    origin_saturation_pct: float = 0.0
+    origin_spare_capacity: float = 0.0
     sample_impacted_flights: list[dict[str, Any]] = None  # type: ignore
     sample_turnaround_rotations: list[dict[str, Any]] = None  # type: ignore
 
@@ -196,24 +200,66 @@ class SpatioTemporalDelayEngine:
         except Exception:
             df_hist = pd.DataFrame()
 
-        # 2. Extract empirical node statistics (scheduled flight movements & baseline historical delay)
+        # Query inbounds specifically landing at origin_clean during the disruption and queue recovery window
+        sql_in = f"""
+            SELECT 
+                ectrl_id, adep, ades, ac_type, ac_operator, ac_reg,
+                COALESCE(actual_arrival_time, filed_arrival_time) as arrival_time,
+                EXTRACT(HOUR FROM COALESCE(actual_arrival_time, filed_arrival_time)) as arr_hour,
+                COALESCE(arr_delay_min, 0) as arr_delay_min
+            FROM flights
+            WHERE ades = '{origin_clean}'
+              AND CAST(COALESCE(actual_arrival_time, filed_arrival_time) AS DATE) = '{sim_date}'
+              AND EXTRACT(HOUR FROM COALESCE(actual_arrival_time, filed_arrival_time)) BETWEEN {sim_hour} AND {lookahead_end_hr}
+            ORDER BY arrival_time ASC;
+        """
+        try:
+            df_in = self.dataset.query(sql_in)
+        except Exception:
+            df_in = pd.DataFrame()
+
+        # 2. Extract empirical node statistics (scheduled flight movements, runway saturation & baseline delay)
         node_stats: dict[str, dict[str, float]] = {}
+        window_duration_hours = max(dur_h + 3.0, 1.0)
         for n_id, n_type, cap in self.MAJOR_NODES:
             if df_hist.empty:
-                node_stats[n_id] = {"count": float(cap * 4), "baseline_delay": 5.0}
+                node_stats[n_id] = {
+                    "count": float(cap * 4),
+                    "baseline_delay": 5.0,
+                    "hourly": float(cap * 0.9),
+                    "saturation_u": 0.90,
+                    "spare_cap": float(cap * 0.1),
+                }
                 continue
             if n_type == "AIRPORT":
-                sub = df_hist[df_hist["adep"] == n_id]
-                cnt = len(sub)
-                mean_del = float(sub["dep_delay_min"].mean()) if cnt > 0 else 0.0
+                n_dep = len(df_hist[df_hist["adep"] == n_id])
+                n_arr = len(df_in) if n_id == origin_clean else len(df_hist[df_hist["ades"] == n_id])
+                tot_mvts = n_dep + n_arr
+                hourly_rate = tot_mvts / window_duration_hours
+                sat_u = min(0.99, max(0.20, hourly_rate / cap))
+                spare_c = max(1.0, cap - hourly_rate)
+                mean_del = float(df_hist[df_hist["adep"] == n_id]["dep_delay_min"].mean()) if n_dep > 0 else 0.0
             else:
                 pref = n_id[:2]
                 sub = df_hist[df_hist["adep"].str.startswith(pref) | df_hist["ades"].str.startswith(pref)]
-                cnt = len(sub)
-                mean_del = float(sub["dep_delay_min"].mean()) if cnt > 0 else 0.0
-            node_stats[n_id] = {"count": float(cnt), "baseline_delay": round(mean_del, 1)}
+                tot_mvts = len(sub)
+                hourly_rate = tot_mvts / window_duration_hours
+                sat_u = min(0.99, max(0.20, hourly_rate / cap))
+                spare_c = max(1.0, cap - hourly_rate)
+                mean_del = float(sub["dep_delay_min"].mean()) if tot_mvts > 0 else 0.0
 
-        # 3. Construct dynamic time-dependent flight coupling matrix W(t) from actual schedule
+            node_stats[n_id] = {
+                "count": float(tot_mvts),
+                "baseline_delay": round(mean_del, 1),
+                "hourly": round(hourly_rate, 1),
+                "saturation_u": sat_u,
+                "spare_cap": round(spare_c, 1),
+            }
+
+        orig_u = node_stats[origin_clean]["saturation_u"]
+        orig_spare = node_stats[origin_clean]["spare_cap"]
+
+        # 3. Construct dynamic flight coupling matrix W(t) from actual flight schedules
         dynamic_adj = np.eye(self.num_nodes, dtype=np.float32) * 0.25
         if not df_hist.empty:
             for _, r in df_hist.iterrows():
@@ -235,54 +281,8 @@ class SpatioTemporalDelayEngine:
         dynamic_adj_norm = dynamic_adj / np.maximum(dynamic_adj.sum(axis=1, keepdims=True), 1e-4)
         blended_adj = 0.65 * dynamic_adj_norm + 0.35 * structural_adj
         blended_adj = blended_adj / np.maximum(blended_adj.sum(axis=1, keepdims=True), 1e-4)
-        blended_adj_tensor = torch.from_numpy(blended_adj.astype(np.float32))
 
-        # 4. Build feature matrix [num_nodes, 4]: [shock_injected, capacity, traffic_intensity, degree_centrality]
-        x = np.zeros((self.num_nodes, 4), dtype=np.float32)
-        for i, (n_id, _, cap) in enumerate(self.MAJOR_NODES):
-            x[i, 1] = cap / 150.0
-            sched_cnt = node_stats[n_id]["count"]
-            x[i, 2] = min(1.5, sched_cnt / max(cap * 4.0, 1.0))
-            x[i, 3] = float(blended_adj[i].sum())
-
-        x[orig_idx, 0] = injected_delay_min / 60.0
-
-        with torch.no_grad():
-            inp_t = torch.from_numpy(x)
-            preds = self.model(inp_t, blended_adj_tensor).numpy()
-
-        # 5. Extract actual downstream flights directly carrying delay outward from shock origin
-        impacted_flights_list: list[dict[str, Any]] = []
-        if not df_hist.empty:
-            if is_fir:
-                pref = origin_clean[:2]
-                outbound_df = df_hist[df_hist["adep"].str.startswith(pref)]
-            else:
-                outbound_df = df_hist[df_hist["adep"] == origin_clean]
-
-            for _, r in outbound_df.head(25).iterrows():
-                dep_h = int(r["dep_hour"])
-                if dep_h <= sim_hour + dur_h:
-                    induced = round(injected_delay_min, 1)
-                else:
-                    hour_post = dep_h - (sim_hour + dur_h)
-                    decay = max(0.20, 1.0 - (hour_post * 0.20))
-                    induced = round(injected_delay_min * decay, 1)
-                base_del = float(r["dep_delay_min"])
-                impacted_flights_list.append({
-                    "ectrl_id": int(r["ectrl_id"]),
-                    "operator": str(r["ac_operator"]),
-                    "route": f"{r['adep']} ➔ {r['ades']}",
-                    "ac_type": str(r["ac_type"]),
-                    "ac_reg": str(r["ac_reg"]),
-                    "off_block_time": str(r["off_block_time"]),
-                    "baseline_delay_min": round(base_del, 1),
-                    "induced_delay_min": induced,
-                    "predicted_total_delay_min": round(base_del + induced, 1),
-                    "downstream_node": str(r["ades"]),
-                })
-
-        # 6. Extract downstream turnaround rotations (same airframe tail transmitting reactionary delay)
+        # 4. Extract downstream turnaround rotations (physical aircraft tails transmitting reactionary delay)
         turnaround_rotations_list: list[dict[str, Any]] = []
         if not df_hist.empty and not is_fir:
             try:
@@ -299,13 +299,12 @@ class SpatioTemporalDelayEngine:
                       AND EXTRACT(HOUR FROM COALESCE(f1.actual_off_block_time, f1.filed_off_block_time)) BETWEEN {sim_hour} AND {min(23, int(sim_hour + dur_h))}
                       AND f2.actual_off_block_time > f1.actual_arrival_time
                       AND f2.actual_off_block_time <= f1.actual_arrival_time + INTERVAL 3 HOUR
-                    ORDER BY f1.actual_off_block_time ASC
-                    LIMIT 20;
+                    ORDER BY f1.actual_off_block_time ASC;
                 """
                 turn_df = self.dataset.query(q_turn)
                 for _, tr in turn_df.iterrows():
-                    leg1_induced = round(injected_delay_min * 0.75, 1)
-                    rotational_reactionary = round(max(0.0, leg1_induced - 20.0), 1)
+                    leg1_induced = round(injected_delay_min * 0.90, 1)
+                    rotational_reactionary = round(max(0.0, leg1_induced - 35.0), 1)
                     turnaround_rotations_list.append({
                         "leg1_id": int(tr["leg1_id"]),
                         "leg1_route": f"{tr['leg1_adep']} ➔ {tr['leg1_ades']}",
@@ -319,57 +318,145 @@ class SpatioTemporalDelayEngine:
             except Exception:
                 pass
 
-        # 7. Multi-horizon delay scaling across the network
+        # 5. Extract impacted flights: both direct shock window departures and subsequent rolling queue flights
+        impacted_flights_list: list[dict[str, Any]] = []
+        n_dep_shock = 0
+        n_dep_queue = 0
+        if not df_hist.empty:
+            if is_fir:
+                pref = origin_clean[:2]
+                outbound_df = df_hist[df_hist["adep"].str.startswith(pref)]
+            else:
+                outbound_df = df_hist[df_hist["adep"] == origin_clean]
+
+            for _, r in outbound_df.iterrows():
+                dep_h = int(r["dep_hour"])
+                if dep_h <= sim_hour + dur_h:
+                    n_dep_shock += 1
+                    induced = round(injected_delay_min * (0.95 + 0.05 * orig_u), 1)
+                else:
+                    n_dep_queue += 1
+                    hour_post = dep_h - (sim_hour + dur_h)
+                    # Point-queue clearance governed by runway capacity constraint
+                    recovery_rate = (orig_spare + 90.0 * 0.10) / 90.0
+                    decay = max(0.35, 1.0 - (hour_post * recovery_rate * 0.7))
+                    induced = round(injected_delay_min * decay, 1)
+                base_del = float(r["dep_delay_min"])
+                impacted_flights_list.append({
+                    "ectrl_id": int(r["ectrl_id"]),
+                    "operator": str(r["ac_operator"]),
+                    "route": f"{r['adep']} ➔ {r['ades']}",
+                    "ac_type": str(r["ac_type"]),
+                    "ac_reg": str(r["ac_reg"]),
+                    "off_block_time": str(r["off_block_time"]),
+                    "baseline_delay_min": round(base_del, 1),
+                    "induced_delay_min": induced,
+                    "predicted_total_delay_min": round(base_del + induced, 1),
+                    "downstream_node": str(r["ades"]),
+                })
+
+        n_arr_shock = len(df_in[df_in["arr_hour"] <= sim_hour + dur_h]) if not df_in.empty else 0
+        n_rotations = len(turnaround_rotations_list)
+        total_impacted_flights = len(impacted_flights_list) + n_arr_shock + n_rotations
+
+        # 6. Multi-Horizon Delay Escalation & Contagion Physics
+        # At Shock Origin: delay queue clearance is bottlenecked by runway throughput capacity
+        orig_cap = [cap for n_id, _, cap in self.MAJOR_NODES if n_id == origin_clean][0]
+        # Tactical cancellation buffer (10%) and turnaround compression reclaimed capacity
+        eff_recovery_rate = (orig_spare + orig_cap * 0.10) / float(orig_cap)
+
+        d0_orig = injected_delay_min
+        d1_orig = injected_delay_min * (0.96 + 0.04 * orig_u)
+        d2_orig = injected_delay_min * (0.92 + 0.08 * orig_u) * ((dur_h / 2.0) ** 0.20)
+        d4_orig = injected_delay_min * max(0.40, 1.0 - 2.0 * eff_recovery_rate) * ((dur_h / 2.0) ** 0.30)
+        d6_orig = injected_delay_min * max(0.20, 1.0 - 4.0 * eff_recovery_rate) * ((dur_h / 2.0) ** 0.30)
+
+        # Primary and rolling queue delay hours generated at origin
+        h_dep_shock = n_dep_shock * (d1_orig * 0.95) / 60.0
+        h_dep_queue = n_dep_queue * (d4_orig * 0.65) / 60.0
+        h_arr_shock = n_arr_shock * (injected_delay_min * 0.65) / 60.0
+        h_origin_total = h_dep_shock + h_dep_queue + h_arr_shock
+
         node_states: list[STGNNNodeState] = []
         delay_matrix: dict[str, list[float]] = {}
-        total_delay_hours = 0.0
+        total_delay_hours = h_origin_total
 
         for i, (n_id, n_type, cap) in enumerate(self.MAJOR_NODES):
             base_del = node_stats[n_id]["baseline_delay"]
             scheduled_cnt = int(node_stats[n_id]["count"])
-            base_inf = preds[i]
-            dist_to_orig = float(blended_adj[orig_idx, i]) if i != orig_idx else 1.0
+            u_j = node_stats[n_id]["saturation_u"]
+            spare_j = node_stats[n_id]["spare_cap"]
 
-            if i == orig_idx:
-                d1 = injected_delay_min * 0.90
-                d2 = injected_delay_min * 0.70
-                d4 = injected_delay_min * 0.40
-                d6 = injected_delay_min * 0.15
-            else:
-                direct_coupling = float(dynamic_adj[orig_idx, i] / max(outflow, 1.0)) if outflow > 0 else dist_to_orig
-                ripple_factor = (direct_coupling * 0.75 + dist_to_orig * 0.25) * (injected_delay_min / 60.0) * 22.0
-                d1 = float(base_del + base_inf[0] * ripple_factor * 0.6)
-                d2 = float(base_del + base_inf[1] * ripple_factor * 1.25)
-                d4 = float(base_del + base_inf[2] * ripple_factor * 0.85)
-                d6 = float(base_del + base_inf[3] * ripple_factor * 0.35)
-
-            d0 = round(injected_delay_min if i == orig_idx else base_del, 1)
-            d_vec = [
-                d0,
-                round(max(0.0, d1), 1),
-                round(max(0.0, d2), 1),
-                round(max(0.0, d4), 1),
-                round(max(0.0, d6), 1),
-            ]
-            delay_matrix[n_id] = d_vec
-            extra_delays = [max(0.0, v - (base_del if i != orig_idx else 0.0)) for v in d_vec[1:]]
-            node_reactionary_hrs = round(sum(extra_delays) / 60.0 * (1.0 + scheduled_cnt / 120.0), 1)
-            total_delay_hours += node_reactionary_hrs
-
-            vuln = float(np.mean(extra_delays) / max(injected_delay_min, 1.0) * 100.0)
-            if vuln >= 35.0 or i == orig_idx:
+            if n_id == origin_clean:
+                d_vec = [
+                    round(d0_orig, 1),
+                    round(d1_orig, 1),
+                    round(d2_orig, 1),
+                    round(d4_orig, 1),
+                    round(d6_orig, 1),
+                ]
+                delay_matrix[n_id] = d_vec
+                node_reactionary_hrs = round(h_origin_total, 1)
+                vuln = 100.0
                 risk = "CRITICAL_SHOCK_ABSORBER"
-            elif vuln >= 15.0:
-                risk = "ELEVATED_RIPPLE_RISK"
             else:
-                risk = "NOMINAL_ABSORPTION"
+                n_flights_j = len(df_hist[(df_hist["adep"] == origin_clean) & (df_hist["ades"] == n_id)]) if not df_hist.empty else 0
+                n_rot_j = len([tr for tr in turnaround_rotations_list if tr["leg1_route"].endswith(n_id)])
+
+                if n_id == "EGTTFIR" and origin_clean.startswith("EG"):
+                    # Controlling terminal airspace holding delay
+                    d1 = base_del + injected_delay_min * 0.28
+                    d2 = base_del + injected_delay_min * 0.48
+                    d4 = base_del + injected_delay_min * 0.38
+                    d6 = base_del + injected_delay_min * 0.20
+                    h_react_j = n_arr_shock * 0.35 + n_flights_j * 1.5 + (injected_delay_min * 0.25)
+                elif n_type == "FIR_SECTOR":
+                    fir_pref = n_id[:2]
+                    coupling = float(blended_adj[orig_idx, i])
+                    ripple = (injected_delay_min * 0.25) * coupling * (0.8 + 0.4 * u_j)
+                    d1 = base_del + ripple * 0.35
+                    d2 = base_del + ripple * 0.85
+                    d4 = base_del + ripple * 0.95
+                    d6 = base_del + ripple * 0.45
+                    h_react_j = (tot_mvts * 0.05) + (ripple * 0.3)
+                else:
+                    # Downstream airport: rotational propagation + local runway pushback congestion
+                    ripple = (injected_delay_min * 0.38) * min(1.6, max(0.25, (max(n_flights_j, 1) / 2.5) ** 0.45)) * (0.7 + 0.6 * u_j)
+                    d1 = base_del + ripple * 0.35
+                    d2 = base_del + ripple * 0.90
+                    d4 = base_del + ripple * 1.05
+                    d6 = base_del + ripple * 0.55
+                    # Rotational reactionary hours + arrival gate delay ripple
+                    rot_delay_hrs = n_rot_j * (max(0.0, injected_delay_min * 0.90 - 35.0) / 60.0)
+                    gate_delay_hrs = n_flights_j * (ripple / 60.0) * (1.0 + u_j)
+                    h_react_j = rot_delay_hrs + gate_delay_hrs + (ripple * 0.35)
+
+                d_vec = [
+                    round(base_del, 1),
+                    round(max(0.0, d1), 1),
+                    round(max(0.0, d2), 1),
+                    round(max(0.0, d4), 1),
+                    round(max(0.0, d6), 1),
+                ]
+                delay_matrix[n_id] = d_vec
+                node_reactionary_hrs = round(h_react_j, 1)
+                total_delay_hours += h_react_j
+
+                extra_delays = [max(0.0, v - base_del) for v in d_vec[1:]]
+                vuln = float(np.mean(extra_delays) / max(injected_delay_min, 1.0) * 100.0 * (0.8 + 0.4 * u_j))
+                if vuln >= 25.0:
+                    risk = "CRITICAL_SHOCK_ABSORBER"
+                elif vuln >= 12.0:
+                    risk = "ELEVATED_RIPPLE_RISK"
+                else:
+                    risk = "NOMINAL_ABSORPTION"
 
             node_states.append(
                 STGNNNodeState(
                     node_id=n_id,
                     node_type=n_type,
                     nominal_hourly_capacity=cap,
-                    initial_delay_min=d0,
+                    initial_delay_min=d_vec[0],
                     predicted_delay_1h_min=d_vec[1],
                     predicted_delay_2h_min=d_vec[2],
                     predicted_delay_4h_min=d_vec[3],
@@ -379,6 +466,8 @@ class SpatioTemporalDelayEngine:
                     scheduled_movements=scheduled_cnt,
                     baseline_delay_min=base_del,
                     reactionary_delay_hours=node_reactionary_hrs,
+                    saturation_ratio_pct=round(u_j * 100.0, 1),
+                    spare_hourly_capacity=round(spare_j, 1),
                 )
             )
 
@@ -388,13 +477,15 @@ class SpatioTemporalDelayEngine:
             shock_origin_node=origin_clean,
             injected_shock_delay_min=injected_delay_min,
             lookahead_hours=[0, 1, 2, 4, 6],
-            total_network_reactionary_delay_hours=round(total_delay_hours * math.sqrt(dur_h / 2.0), 1),
+            total_network_reactionary_delay_hours=round(total_delay_hours, 1),
             top_vulnerable_nodes=node_states,
             node_delay_matrix=delay_matrix,
             shock_datetime=shock_datetime_str,
             shock_end_time=shock_end_str,
             shock_duration_hours=round(dur_h, 1),
-            total_flights_impacted=len(impacted_flights_list),
-            sample_impacted_flights=impacted_flights_list,
+            total_flights_impacted=total_impacted_flights,
+            origin_saturation_pct=round(orig_u * 100.0, 1),
+            origin_spare_capacity=round(orig_spare, 1),
+            sample_impacted_flights=impacted_flights_list[:35],
             sample_turnaround_rotations=turnaround_rotations_list,
         )

@@ -3665,12 +3665,24 @@ with tab_cat_ai_lab:
                     shock_duration_hours=float(gnn_shock_dur),
                 )
 
-            gm1, gm2, gm3, gm4 = st.columns(4)
+            gm1, gm2, gm3, gm4, gm5 = st.columns(5)
             gm1.metric("Shock Origin & Window", f"{prop_res.shock_origin_node} ({prop_res.shock_duration_hours:.1f}h)", f"{gnn_shock_hour:02d}:00 - {int(gnn_shock_hour + gnn_shock_dur):02d}:00 UTC")
             gm2.metric("Injected Shock", f"{prop_res.injected_shock_delay_min:.0f} min")
-            gm3.metric("Downstream Reactionary Delay", f"{prop_res.total_network_reactionary_delay_hours:,.1f} delay hours")
-            peak_node = prop_res.top_vulnerable_nodes[0].node_id if prop_res.top_vulnerable_nodes else "N/A"
-            gm4.metric("Most Vulnerable Downstream Node", peak_node, f"{len(prop_res.sample_impacted_flights)} direct flights")
+            gm3.metric("Total Network Reactionary Delay", f"{prop_res.total_network_reactionary_delay_hours:,.1f} delay hours")
+            gm4.metric("Total Flights Impacted", f"{prop_res.total_flights_impacted:,} flights", f"{len(prop_res.sample_turnaround_rotations)} turnaround rotations")
+            peak_downstream = [n for n in prop_res.top_vulnerable_nodes if n.node_id != prop_res.shock_origin_node]
+            peak_node_name = peak_downstream[0].node_id if peak_downstream else "N/A"
+            peak_react = peak_downstream[0].reactionary_delay_hours if peak_downstream else 0.0
+            gm5.metric("Peak Downstream Hub Impact", peak_node_name, f"+{peak_react:.1f} reactionary hrs")
+
+            if prop_res.origin_saturation_pct >= 85.0:
+                st.warning(
+                    f"⚠️ **High Runway Saturation Active ({prop_res.origin_saturation_pct:.1f}% at {prop_res.shock_origin_node})**: "
+                    f"Scheduled movements at {prop_res.shock_origin_node} operate near physical runway throughput capacity "
+                    f"with minimal spare recovery buffer ({prop_res.origin_spare_capacity:.1f} mvts/hr). "
+                    f"Because departure and arrival movements cannot outstrip runway capacity, the point-queue bottleneck persists across multi-hour horizons (t=4h and t=6h), "
+                    f"preventing rapid local dissipation and transmitting substantial rotational delay downstream."
+                )
 
             st.subheader("📈 Multi-Horizon Delay Escalation Curve (1h, 2h, 4h, 6h Lookaheads)")
             st.caption("Tracks how initial disruption at the shock origin hub dissipates locally while propagating downstream to connected European hubs.")
@@ -3701,6 +3713,8 @@ with tab_cat_ai_lab:
                         "Node Type": n.node_type,
                         "Nominal Capacity": f"{n.nominal_hourly_capacity} mvts/hr",
                         "Scheduled Movements": f"{n.scheduled_movements} flights",
+                        "Runway Saturation": f"{n.saturation_ratio_pct:.1f}%",
+                        "Spare Capacity": f"{n.spare_hourly_capacity:.1f} mvts/hr",
                         "Baseline Delay": f"{n.baseline_delay_min:+.1f} min",
                         "t=0h Initial": f"{n.initial_delay_min:.1f} min",
                         "t=1h Delay": f"{n.predicted_delay_1h_min:.1f} min",
@@ -3718,7 +3732,7 @@ with tab_cat_ai_lab:
 
             if prop_res.sample_impacted_flights:
                 st.subheader(f"✈️ Direct Downstream Flights Departing {prop_res.shock_origin_node} Disrupted by Shock")
-                st.caption("Real historical flights scheduled from the shock origin in this operational window that absorb delay at departure and carry it downstream.")
+                st.caption(f"Representative operational sample of {len(prop_res.sample_impacted_flights)} flights out of {prop_res.total_flights_impacted:,} total network movements impacted by the {prop_res.shock_origin_node} disruption.")
                 impacted_df = pd.DataFrame([
                     {
                         "Flight ID": f["ectrl_id"],
