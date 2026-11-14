@@ -218,15 +218,28 @@ def test_marl_atfm_simulator(dataset: FlightDataset):
     assert res.regulation_duration_hours == 3.0
     assert isinstance(res.sample_swapped_flights, list)
 
-    # Verify heterogeneous archetype strategies
+    # Verify heterogeneous archetype strategies and complete balance sheet fields
     for strat in res.airline_strategies:
         assert strat.flights_regulated > 0
         assert strat.dominant_strategy != ""
         assert strat.net_economic_payoff_eur >= 0.0
+        assert strat.baseline_cost_no_gaming_eur > 0.0
+        assert strat.post_gaming_cost_eur >= 0.0
+        assert abs(strat.net_economic_payoff_eur - (strat.baseline_cost_no_gaming_eur - strat.post_gaming_cost_eur)) < 1.0
+
+    # Verify blow-by-blow decision log and infilled assumptions glossary
+    assert len(res.decision_log) >= 8
+    assert len(res.assumptions_glossary) >= 5
+    dl0 = res.decision_log[0]
+    assert dl0.step_number == 1
+    assert dl0.action_type == "REGULATION_ISSUED"
+    assert dl0.timestamp_rel == "T+00:00"
 
     d = res.to_dict()
     assert d["regulated_airport"] == "EGLL"
     assert len(d["airline_strategies"]) == 4
+    assert len(d["decision_log"]) == len(res.decision_log)
+    assert len(d["assumptions_glossary"]) == len(res.assumptions_glossary)
 
     # Test with explicit date, start hour, and duration
     valid_date = res.regulation_date

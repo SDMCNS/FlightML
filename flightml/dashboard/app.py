@@ -3988,6 +3988,67 @@ with tab_cat_ai_lab:
                 f"of theoretical central planner Pareto efficiency while preserving proprietary airline passenger connection priorities."
             )
 
+            # Infilled Domain Assumptions Glossary
+            if marl_res.assumptions_glossary:
+                with st.expander("📖 Infilled Domain Assumptions Glossary (Operational Context Infilled for Raw DDR2 Trajectories)", expanded=False):
+                    st.markdown(
+                        "Raw Eurocontrol DDR2 radar feeds record aircraft trajectory positions and timings, but do not contain passenger ticketing manifests, "
+                        "crew duty rosters, or commercial airline contracts. Autonomous airline agents infill the following domain parameters to compute the true marginal cost of delay:"
+                    )
+                    glossary_df = pd.DataFrame([
+                        {"Operational Dimension": k, "Infilled Assumption & Modeling Logic": v}
+                        for k, v in marl_res.assumptions_glossary.items()
+                    ])
+                    st.dataframe(glossary_df, use_container_width=True)
+
+            # Blow-by-Blow Autonomous Decision Log
+            if marl_res.decision_log:
+                st.subheader("📜 Blow-by-Blow Autonomous Decision Log")
+                st.caption(
+                    "Chronological sequence of autonomous decisions: Eurocontrol GDP initiation, assumption infilling, "
+                    "flagship prioritization, tactical regional cancellations, bilateral slot trades, gate delay absorption, and Nash equilibrium convergence."
+                )
+                log_df = pd.DataFrame([
+                    {
+                        "Step": f"#{entry.step_number}",
+                        "Time (Rel)": entry.timestamp_rel,
+                        "Agent": entry.agent_name,
+                        "Action Type": entry.action_type,
+                        "Flight & Route": f"{entry.flight_id} ({entry.route})",
+                        "Infilled Assumptions": entry.infilled_assumptions,
+                        "Operational Decision Rationale": entry.operational_reasoning,
+                        "Counterparty": entry.counterparty,
+                        "Delay Impact": f"{entry.delay_impact_min:+.0f} min" if entry.delay_impact_min != 0 else "0 min",
+                        "Net Value Created (€)": f"€{entry.economic_benefit_eur:,.2f} EUR" if entry.economic_benefit_eur != 0 else "€0.00 EUR",
+                    }
+                    for entry in marl_res.decision_log
+                ])
+                st.dataframe(log_df, use_container_width=True)
+
+            # Per-Airline Agent Net Gains & Losses Balance Sheet
+            st.subheader("💰 Per-Airline Agent Net Gains & Losses Balance Sheet")
+            st.caption(
+                "Direct financial balance sheet comparing baseline unmitigated costs (blind FCFS ground delay) against post-gaming optimized costs. "
+                "Highlights delay saved, passenger connections protected, EU261 claims avoided, fuel costs, cancellation costs, and net economic payoffs in Euros (€ EUR)."
+            )
+            balance_df = pd.DataFrame([
+                {
+                    "Airline Agent": s.airline_name,
+                    "Flights Regulated": s.flights_regulated,
+                    "Baseline Cost (Blind Delay)": f"€{s.baseline_cost_no_gaming_eur:,.2f} EUR",
+                    "Post-Gaming Cost": f"€{s.post_gaming_cost_eur:,.2f} EUR",
+                    "Net Economic Payoff (Gain)": f"€{s.net_economic_payoff_eur:,.2f} EUR",
+                    "Gross Delay Saved": f"{s.gross_delay_saved_min:,.0f} min",
+                    "Connections Saved": f"€{s.connection_costs_saved_eur:,.2f} EUR",
+                    "EU261 Fines Prevented": f"€{s.eu261_penalties_prevented_eur:,.2f} EUR",
+                    "Speedup Fuel Cost": f"€{s.fuel_cost_incurred_eur:,.2f} EUR",
+                    "Cancellation Costs": f"€{s.cancellation_penalties_eur:,.2f} EUR",
+                    "Dominant Strategy": s.dominant_strategy,
+                }
+                for s in marl_res.airline_strategies
+            ])
+            st.dataframe(balance_df, use_container_width=True)
+
             if marl_res.sample_swapped_flights:
                 st.subheader("🔄 Autonomous Slot Swaps & High-Value Connection Protection")
                 st.caption("Real flights swapped by autonomous airline agents: prioritizing high-yield connecting flights while trading regional slots.")
@@ -4004,7 +4065,7 @@ with tab_cat_ai_lab:
                 ])
                 st.dataframe(swaps_df, use_container_width=True)
 
-            st.subheader("👥 Airline Agent Strategic Responses & Payoffs")
+            st.subheader("👥 Airline Agent Strategic Responses & Operational Summary")
             strat_df = pd.DataFrame([
                 {
                     "Airline Archetype": s.airline_name,
