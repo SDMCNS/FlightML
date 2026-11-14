@@ -91,6 +91,13 @@ from flightml.eval.longitudinal import LongitudinalEngine
 from flightml.models.airspace_forecaster import AirspaceForecaster
 from flightml.eval.airline_economics import AirlineEconomicsEngine
 from flightml.models.delay_contagion_graph import DelayContagionGraphEngine
+from flightml.models.flight2vec import Flight2VecEngine
+from flightml.models.pinn_mass import PINNMassInverter
+from flightml.models.contrail_surrogate import ContrailNeuralSurrogate
+from flightml.models.st_gnn import SpatioTemporalDelayEngine
+from flightml.sim.airspace_closure import AirspaceClosureSimulator
+from flightml.sim.marl_atfm import MultiAgentATFMSimulator
+
 
 
 st.set_page_config(
@@ -420,6 +427,7 @@ st.markdown(
     tab_cat_whatif,
     tab_cat_maps,
     tab_cat_econ,
+    tab_cat_ai_lab,
 ) = st.tabs(
     [
         "✈️ Single Aircraft / Flight Views",
@@ -428,6 +436,7 @@ st.markdown(
         "🔮 What-If Scenario Views",
         "🗺️ Information & Map Views",
         "💶 General Economic Views (€)",
+        "🧪 Experimental AI & Machine Learning Lab",
     ]
 )
 
@@ -3212,4 +3221,429 @@ with tab_cat_econ:
                 ])
                 st.dataframe(occ_df, use_container_width=True)
 
-        # ----------------- TAB 4: Vertical Profile: CDO & CCO -----------------
+# =============================================================================
+# 7. EXPERIMENTAL AI & MACHINE LEARNING LAB
+# =============================================================================
+with tab_cat_ai_lab:
+    st.caption(
+        "Experimental machine learning, deep neural surrogate architectures, and multi-agent operations research "
+        "advancing ATM research beyond conventional heuristics: Flight2Vec embeddings, Physics-Informed Neural Networks (PINNs), "
+        "Spatio-Temporal Graph Neural Networks (ST-GNNs), 4D counterfactual airspace closure simulations, and Multi-Agent RL ATFM gaming."
+    )
+
+    ai_sub1, ai_sub2, ai_sub3, ai_sub4, ai_sub5 = st.tabs(
+        [
+            "🧬 Flight2Vec Latent Embeddings",
+            "⚖️ PINN Mass & Contrail Surrogate",
+            "🌐 ST-GNN Delay Contagion Network",
+            "🌪️ 4D Trajectory & FIR Closure Simulator",
+            "🎮 Multi-Agent RL ATFM Slot Gaming",
+        ]
+    )
+
+    # ----------------- SUB-TAB 1: Flight2Vec Latent Embeddings -----------------
+    with ai_sub1:
+        st.header("🧬 Flight2Vec: Self-Supervised Trajectory Foundation Embeddings")
+        st.markdown(
+            "Self-supervised contrastive learning foundation model mapping multi-dimensional 4D radar telemetry, "
+            "climb/descent energy states, and operational context into a dense 128-dimensional unit hypersphere $\\mathbb{S}^{127}$. "
+            "Enables zero-shot operational twin search, semantic flight classification, and unsupervised anomaly detection."
+        )
+
+        col_f1, col_f2, col_f3 = st.columns([1.5, 1, 1])
+        with col_f1:
+            f2v_target_input = st.text_input(
+                "Target Flight ID (ECTRL ID)",
+                value=str(active_flight_id),
+                key=f"f2v_flt_input_{selected_period}",
+            )
+        with col_f2:
+            f2v_top_k = st.slider("Top Twins to Retrieve", 3, 10, 5, key=f"f2v_top_k_{selected_period}")
+        with col_f3:
+            f2v_pool_size = st.slider("Search Corpus Sample Size", 50, 300, 150, key=f"f2v_pool_{selected_period}")
+
+        if st.button("Generate 128D Embedding & Retrieve Latent Twins", key=f"btn_f2v_{selected_period}"):
+            try:
+                target_f_id = int(f2v_target_input.strip())
+            except ValueError:
+                target_f_id = int(active_flight_id)
+
+            with st.spinner(f"Computing 128D Flight2Vec projection for flight #{target_f_id}..."):
+                f2v = Flight2VecEngine(ds, period=selected_period)
+                emb = f2v.embed_flight(target_f_id)
+
+            if emb is None:
+                st.warning(f"Flight ID #{target_f_id} not found in period {selected_period}.")
+            else:
+                st.subheader(f"📊 Latent Vector Signature (ECTRL #{target_f_id})")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Latent Dimensions", "128D Space")
+                m2.metric("Hypersphere Norm ||z||₂", f"{np.linalg.norm(emb):.4f}")
+                m3.metric("Latent Variance", f"{np.var(emb):.4f}")
+                m4.metric("Mean Activation", f"{np.mean(emb):+.4f}")
+
+                # Activation chart across 128 dimensions
+                act_df = pd.DataFrame({
+                    "Dimension": [f"D{i+1}" for i in range(len(emb))],
+                    "Activation": emb,
+                })
+                st.bar_chart(act_df.set_index("Dimension"), height=180)
+
+                # Twin retrieval
+                with st.spinner(f"Searching latent space across {f2v_pool_size} candidate flights..."):
+                    twins = f2v.find_operational_twins(target_f_id, search_sample_size=f2v_pool_size, top_k=f2v_top_k)
+
+                if twins:
+                    st.subheader(f"👯 Latent Operational Twins (Cosine Similarity on $\\mathbb{{S}}^{{127}}$)")
+                    st.caption("Identifies flights exhibiting nearest-neighbor 4D profile, energy dissipation, and delay dynamics.")
+                    twin_rows = [
+                        {
+                            "Flight ID": t.ectrl_id,
+                            "Route": t.route,
+                            "Operator": t.operator,
+                            "Aircraft": t.ac_type,
+                            "Distance": f"{t.flown_distance_nm:.0f} nm",
+                            "Cruise FL": f"FL{t.cruise_fl:.0f}",
+                            "Arr Delay": f"{t.arr_delay_min:+.1f} min",
+                            "Cosine Sim (cos θ)": f"{t.cosine_similarity:.4f}",
+                            "Match Score": f"{t.similarity_pct:.1f}%",
+                        }
+                        for t in twins
+                    ]
+                    st.dataframe(pd.DataFrame(twin_rows), use_container_width=True)
+
+                # 2D PCA projection of sample flights
+                with st.spinner("Projecting latent manifold via Principal Component Analysis (PCA)..."):
+                    pca_df = f2v.project_latent_space_2d(sample_size=40)
+
+                if not pca_df.empty:
+                    st.subheader("🗺️ 2D Latent Manifold Projection (PCA)")
+                    st.caption("Visualizing high-dimensional trajectory clusters: flights with similar routing, cruise altitude, and operational pacing group together.")
+                    scatter_chart = (
+                        alt.Chart(pca_df)
+                        .mark_circle(size=80)
+                        .encode(
+                            x=alt.X("PCA_Dim_1:Q", title="Principal Component 1 (Kinematic Energy / Distance)"),
+                            y=alt.Y("PCA_Dim_2:Q", title="Principal Component 2 (Delay / Pacing Dynamics)"),
+                            color=alt.Color("Operator:N", title="Operator"),
+                            tooltip=["Flight_Label", "Route", "Operator", "Arr_Delay_Min"],
+                        )
+                        .properties(height=340)
+                        .interactive()
+                    )
+                    st.altair_chart(scatter_chart, use_container_width=True)
+
+    # ----------------- SUB-TAB 2: PINN Mass & Contrail Surrogate -----------------
+    with ai_sub2:
+        st.header("⚖️ Physics-Informed Neural Networks (PINN) & Fast Contrail Surrogate")
+        st.markdown(
+            "Combines physical conservation laws with deep neural architectures: **(1)** inverting confidential aircraft takeoff mass and payload "
+            "directly from kinematic climb radar data, and **(2)** evaluating thermodynamic contrail radiative forcing at microsecond latency ($<15\\,\\mu\\text{s}$)."
+        )
+
+        col_p1, col_p2 = st.columns(2)
+
+        # Module A: PINN Mass Inversion
+        with col_p1:
+            st.subheader("1. In-Flight Aircraft Mass & Payload Inversion (PINN)")
+            st.markdown(
+                "Aircraft Takeoff Gross Weight (TGW) and passenger load factors are confidential airline commercial data never broadcast over ADS-B. "
+                "The PINN inverts unknown mass $m$ directly from climb kinematics by enforcing Newton's second law: "
+                "$$T(M, h) - D(C_L, C_D, m) - mg\\sin\\gamma = m\\frac{dV}{dt}$$"
+            )
+
+            pinn_target_input = st.text_input(
+                "Flight to Invert Mass",
+                value=str(active_flight_id),
+                key=f"pinn_flt_input_{selected_period}",
+            )
+
+            if st.button("Invert Aircraft Mass via Physics Constraints", key=f"btn_pinn_mass_{selected_period}"):
+                try:
+                    pinn_f_id = int(pinn_target_input.strip())
+                except ValueError:
+                    pinn_f_id = int(active_flight_id)
+
+                with st.spinner(f"Inverting aerodynamic mass balance for flight #{pinn_f_id}..."):
+                    inverter = PINNMassInverter(ds, period=selected_period)
+                    mass_res = inverter.invert_flight_mass(pinn_f_id)
+
+                if not mass_res:
+                    st.warning(f"Could not invert mass for flight #{pinn_f_id}.")
+                else:
+                    pm1, pm2 = st.columns(2)
+                    pm1.metric("Aircraft Type", mass_res.ac_type)
+                    pm1.metric("Operating Empty Weight (OEW)", f"{mass_res.oew_kg:,.0f} kg")
+                    pm1.metric("Maximum Takeoff Weight (MTOW)", f"{mass_res.mtow_kg:,.0f} kg")
+
+                    pm2.metric("Inverted Takeoff Weight (TGW)", f"{mass_res.estimated_takeoff_weight_kg:,.0f} kg")
+                    pm2.metric("Estimated Commercial Payload", f"{mass_res.estimated_payload_kg:,.0f} kg")
+                    pm2.metric("Inferred Passenger Load Factor", f"{mass_res.estimated_load_factor_pct:.1f}%")
+
+                    st.info(
+                        f"🔬 **Physics Residual Error:** `{mass_res.physics_residual_error:.4f}` | "
+                        f"**Climb ROCD:** `{mass_res.climb_rate_fpm:,.0f} fpm` | "
+                        f"**Acceleration:** `{mass_res.acceleration_ms2:+.3f} m/s²` | "
+                        f"**Inversion Confidence:** `{mass_res.confidence_score * 100:.0f}%`"
+                    )
+
+        # Module B: Contrail Neural Surrogate
+        with col_p2:
+            st.subheader("2. Microsecond Contrail Neural Surrogate Engine")
+            st.markdown(
+                "Thermodynamic Schmidt-Appleman and Ice Super-Saturated Region (ISSR) radiative forcing models "
+                "require microsecond-latency evaluation ($<15\\,\\mu\\text{s}$) to enable real-time en-route tactical ATC re-clearing."
+            )
+
+            cs_fl = st.slider("Waypoint Flight Level (FL)", 280, 420, 360, step=10, key=f"cs_fl_{selected_period}")
+            cs_temp = st.slider("Ambient Temperature (°C)", -65.0, -35.0, -52.0, step=0.5, key=f"cs_temp_{selected_period}")
+            cs_rhi = st.slider("Relative Humidity over Ice (RHi %)", 60.0, 150.0, 115.0, step=1.0, key=f"cs_rhi_{selected_period}")
+            cs_bpr = st.slider("Engine Bypass Ratio (BPR)", 5.0, 15.0, 11.0, step=0.5, key=f"cs_bpr_{selected_period}")
+
+            if st.button("Evaluate Contrail Radiative Forcing (<15 μs)", key=f"btn_cs_{selected_period}"):
+                surrogate = ContrailNeuralSurrogate()
+                c_out = surrogate.evaluate_atmospheric_point(
+                    temperature_c=float(cs_temp),
+                    rh_ice_pct=float(cs_rhi),
+                    flight_level=float(cs_fl),
+                    bypass_ratio=float(cs_bpr),
+                )
+
+                if c_out.climate_forcing_severity == "SEVERE_CLIMATE_FORCING":
+                    st.error(
+                        f"⚠️ **Severe Persistent Warming Contrail!** Instantaneous RF: **{c_out.instantaneous_rf_mw_m2:+.2f} mW/m²** "
+                        f"(Optical Depth τ = {c_out.optical_depth:.3f}). Tactical vertical offset advised: descend 2,000 ft to exit ISSR layer."
+                    )
+                elif c_out.climate_forcing_severity == "MODERATE_WARMING":
+                    st.warning(
+                        f"⚠️ **Moderate Warming Contrail.** Instantaneous RF: **{c_out.instantaneous_rf_mw_m2:+.2f} mW/m²** "
+                        f"(Optical Depth τ = {c_out.optical_depth:.3f})."
+                    )
+                elif c_out.climate_forcing_severity == "LOW_IMPACT":
+                    st.info(
+                        f"ℹ️ **Short-Lived / Low Impact Contrail.** Instantaneous RF: **{c_out.instantaneous_rf_mw_m2:+.2f} mW/m²**."
+                    )
+                else:
+                    st.success(
+                        f"✅ **Clear Air - No Persistent Contrail Formation.** Ambient air is ice-subsaturated (RHi < 100%)."
+                    )
+
+                cm1, cm2, cm3 = st.columns(3)
+                cm1.metric("Schmidt-Appleman Criterion", "Satisfied" if c_out.schmidt_appleman_satisfied else "Not Met")
+                cm2.metric("ISSR Ice Super-Saturation", "Persistent (RHi ≥ 100%)" if c_out.is_persistent_issr else "Evaporative")
+                cm3.metric("Neural Inference Latency", f"{c_out.inference_latency_us:.1f} μs", "Sub-millisecond")
+
+    # ----------------- SUB-TAB 3: ST-GNN Delay Contagion Network -----------------
+    with ai_sub3:
+        st.header("🌐 Spatio-Temporal Graph Neural Network (ST-GNN) Delay Contagion")
+        st.markdown(
+            "Simulates multi-hop network delay propagation and knock-on ripple shockwaves across the European airport "
+            "and airspace sector graph $\\mathcal{G} = (\\mathcal{V}, \\mathcal{E}, W)$ using Spatio-Temporal Graph WaveNet architectures. "
+            "Combines spatial diffusion message passing with temporal dilated causal convolutions across multi-hour forward lookaheads."
+        )
+
+        col_g1, col_g2 = st.columns(2)
+        with col_g1:
+            gnn_shock_node = st.selectbox(
+                "Shock Origin Node (Airport Hub or En-Route Sector)",
+                options=["EGLL", "LFPG", "EHAM", "EDDF", "LEMD", "LIRF", "EDDM", "LEBL", "EDUUUIR", "LFFFFIR", "EGTTFIR"],
+                key=f"gnn_shock_{selected_period}",
+            )
+        with col_g2:
+            gnn_injected_delay = st.slider(
+                "Injected Delay Shock (Minutes)",
+                15, 180, 60, step=15,
+                key=f"gnn_delay_{selected_period}",
+            )
+
+        if st.button("Simulate Spatio-Temporal Delay Contagion", key=f"btn_st_gnn_{selected_period}"):
+            with st.spinner(f"Propagating {gnn_injected_delay} min delay shock from {gnn_shock_node} across European network..."):
+                st_engine = SpatioTemporalDelayEngine(ds, period=selected_period)
+                prop_res = st_engine.simulate_delay_propagation(gnn_shock_node, float(gnn_injected_delay))
+
+            gm1, gm2, gm3, gm4 = st.columns(4)
+            gm1.metric("Shock Origin", prop_res.shock_origin_node)
+            gm2.metric("Injected Shock", f"{prop_res.injected_shock_delay_min:.0f} min")
+            gm3.metric("Total Downstream Reactionary Delay", f"{prop_res.total_network_reactionary_delay_hours:,.1f} delay hours")
+            peak_node = prop_res.top_vulnerable_nodes[0].node_id if prop_res.top_vulnerable_nodes else "N/A"
+            gm4.metric("Most Vulnerable Downstream Node", peak_node)
+
+            st.subheader("📈 Multi-Horizon Delay Escalation Curve (1h, 2h, 4h, 6h Lookaheads)")
+            st.caption("Tracks how initial disruption at the shock origin hub dissipates locally while propagating downstream to connected European hubs.")
+
+            # Build line chart for top 5 affected nodes
+            curve_records = []
+            for node_state in prop_res.top_vulnerable_nodes[:6]:
+                delays = prop_res.node_delay_matrix.get(node_state.node_id, [0.0, 0.0, 0.0, 0.0, 0.0])
+                for h_idx, h_lbl in enumerate(["t=0h", "t=1h", "t=2h", "t=4h", "t=6h"]):
+                    curve_records.append({
+                        "Time Horizon": h_lbl,
+                        "Node": node_state.node_id,
+                        "Predicted Delay (min)": delays[h_idx],
+                    })
+
+            if curve_records:
+                st.line_chart(
+                    pd.DataFrame(curve_records).pivot(index="Time Horizon", columns="Node", values="Predicted Delay (min)")
+                )
+
+            st.subheader("🎯 Ranked Vulnerable Network Nodes & Contagion Risk")
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Node ID": n.node_id,
+                        "Node Type": n.node_type,
+                        "Capacity": f"{n.nominal_hourly_capacity} mvts/hr",
+                        "t=0h Initial": f"{n.initial_delay_min:.1f} min",
+                        "t=1h Delay": f"{n.predicted_delay_1h_min:.1f} min",
+                        "t=2h Delay": f"{n.predicted_delay_2h_min:.1f} min",
+                        "t=4h Delay": f"{n.predicted_delay_4h_min:.1f} min",
+                        "t=6h Delay": f"{n.predicted_delay_6h_min:.1f} min",
+                        "Vulnerability Index": f"{n.vulnerability_index:.3f}",
+                        "Contagion Risk Level": n.risk_level,
+                    }
+                    for n in prop_res.top_vulnerable_nodes
+                ]),
+                use_container_width=True,
+            )
+
+    # ----------------- SUB-TAB 4: 4D Trajectory & FIR Closure Simulator -----------------
+    with ai_sub4:
+        st.header("🌪️ 4D Trajectory Counterfactual & FIR Closure Simulator")
+        st.markdown(
+            "Simulates the geopolitical, meteorological, or ATC disruption impact of a temporary Flight Information Region (FIR) closure. "
+            "Predicts traffic diversions, reroute detour nautical miles, extra fuel burn and $\\text{CO}_2$, departure ground delays, "
+            "cancellations, and post-reopening non-linear recovery queue dynamics."
+        )
+
+        col_c1, col_c2, col_c3 = st.columns([1.5, 1, 1])
+        with col_c1:
+            fir_target_choice = st.selectbox(
+                "Closed Flight Information Region (FIR)",
+                options=[
+                    "LSASFIR (Switzerland - Zurich/Geneva)",
+                    "EDUUUIR (Germany - Rhein Upper Airspace)",
+                    "LFFFFIR (France - Paris Upper Area)",
+                    "EISNFIR (Ireland - Shannon Upper)",
+                    "EGTTFIR (United Kingdom - London)",
+                    "EDMMFIR (Germany - Munich Upper)",
+                    "LOVVFIR (Austria - Vienna)",
+                ],
+                key=f"fir_target_{selected_period}",
+            )
+            fir_code = fir_target_choice.split()[0]
+        with col_c2:
+            fir_start_hr = st.slider("Closure Start Time (UTC Hour)", 0, 23, 10, key=f"fir_start_hr_{selected_period}")
+        with col_c3:
+            fir_duration = st.slider("Closure Duration (Hours)", 1.0, 8.0, 3.0, step=0.5, key=f"fir_dur_{selected_period}")
+
+        if st.button("Run FIR Closure Counterfactual Simulation", key=f"btn_fir_sim_{selected_period}"):
+            with st.spinner(f"Simulating counterfactual closure of {fir_code} from {fir_start_hr:02d}:00 UTC (+{fir_duration}h)..."):
+                fir_sim = AirspaceClosureSimulator(ds, period=selected_period)
+                c_res = fir_sim.simulate_fir_closure(
+                    target_fir=fir_code,
+                    closure_start_hour=fir_start_hr,
+                    closure_duration_hours=fir_duration,
+                )
+
+            cm1, cm2, cm3, cm4 = st.columns(4)
+            cm1.metric("Impacted Flights", f"{c_res.total_flights_impacted} flights")
+            cm2.metric("Rerouted Airborne Flights", f"{c_res.rerouted_flights_count} flights")
+            cm3.metric("ATFM Ground Held Flights", f"{c_res.ground_held_flights_count} flights")
+            cm4.metric("Cancellation Risk Flights", f"{c_res.cancellation_risk_flights_count} flights")
+
+            em1, em2, em3, em4 = st.columns(4)
+            em1.metric("Total Detour Flown", f"{c_res.total_extra_distance_flown_nm:,.0f} nm")
+            em2.metric("Excess Fuel Burned", f"{c_res.total_extra_fuel_burned_tonnes:,.1f} tonnes")
+            em3.metric("Airline Direct Loss (€)", f"€{c_res.total_airline_economic_loss_eur:,.2f} EUR")
+            em4.metric("Post-Reopening Recovery Duration", f"{c_res.post_reopening_recovery_hours:.1f} hours", f"Rebound @ {c_res.network_stability_rebound_time}")
+
+            if c_res.sample_rerouted_flights:
+                st.subheader(f"✈️ Sample 4D Traffic Detours Bypassing {fir_code}")
+                detour_df = pd.DataFrame([
+                    {
+                        "Flight ID": f.ectrl_id,
+                        "Operator": f.ac_operator,
+                        "Route": f.route,
+                        "Aircraft": f.ac_type,
+                        "Original Dist": f"{f.original_distance_nm:.0f} nm",
+                        "Detour Dist": f"{f.detour_distance_nm:.0f} nm",
+                        "Extra Dist": f"+{f.extra_distance_nm:.0f} nm",
+                        "Extra Time": f"+{f.extra_air_time_min:.1f} min",
+                        "Extra Fuel": f"+{f.extra_fuel_kg:,.0f} kg",
+                        "Added Cost (€)": f"€{f.extra_cost_eur:,.2f} EUR",
+                        "Bypass Corridor": f.avoidance_fir_diverted_to,
+                    }
+                    for f in c_res.sample_rerouted_flights
+                ])
+                st.dataframe(detour_df, use_container_width=True)
+
+            if c_res.recovery_curve:
+                st.subheader("⏱️ Post-Reopening Backlog Depletion & Recovery Queue Dynamics")
+                st.caption("Models non-linear queue drainage once the FIR reopens: surge acceptance rate vs. backlog decay until nominal stability.")
+                rec_df = pd.DataFrame(c_res.recovery_curve).set_index("time_utc")
+                st.line_chart(rec_df[["backlog_flights", "sector_surge_capacity"]])
+
+    # ----------------- SUB-TAB 5: Multi-Agent RL ATFM Slot Gaming -----------------
+    with ai_sub5:
+        st.header("🎮 Multi-Agent RL ATFM Slot Gaming & Nash Equilibrium")
+        st.markdown(
+            "Decentralized game-theoretic simulation of heterogeneous airline agents competing under ATFM arrival slot restrictions. "
+            "Evaluates how independent airline agents—**Network Legacy**, **Low-Cost Carrier (LCC)**, **Hybrid Carrier**, and **Express Cargo**—"
+            "strategically execute slot swaps, en-route speedups, and voluntary flight cancellations to minimize their individual cost functions, "
+            "reaching a mixed-strategy Nash equilibrium."
+        )
+
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            marl_airport = st.selectbox(
+                "Regulated Bottleneck Airport",
+                options=["EGLL", "EHAM", "LFPG", "EDDF", "LEMD"],
+                key=f"marl_apt_{selected_period}",
+            )
+        with col_m2:
+            marl_cut = st.slider(
+                "Declared Arrival Capacity Cut (%)",
+                15, 65, 40, step=5,
+                key=f"marl_cut_{selected_period}",
+            )
+
+        if st.button("Simulate Competitive Multi-Agent ATFM Equilibrium", key=f"btn_marl_{selected_period}"):
+            with st.spinner(f"Running multi-agent reinforcement learning simulation for {marl_airport} (-{marl_cut}% capacity)..."):
+                marl_sim = MultiAgentATFMSimulator(ds, period=selected_period)
+                marl_res = marl_sim.run_marl_simulation(marl_airport, float(marl_cut))
+
+            mm1, mm2, mm3, mm4 = st.columns(4)
+            mm1.metric("Regulated Flights Competing", f"{marl_res.total_flights_competing} flights")
+            mm2.metric("Equilibrium State", marl_res.market_equilibrium_type)
+            mm3.metric("System Delay Saved", f"{marl_res.total_network_delay_saved_min:,.0f} min")
+            mm4.metric("Net Economic Benefit (€)", f"€{marl_res.total_net_economic_benefit_eur:,.2f} EUR")
+
+            st.info(
+                f"⚖️ **Cooperative vs. Competitive Efficiency Gap:** `{marl_res.cooperative_vs_competitive_efficiency_gap_pct:.1f}%`. "
+                f"Decentralized airline slot swapping achieves **{100.0 - marl_res.cooperative_vs_competitive_efficiency_gap_pct:.1f}%** "
+                f"of theoretical central planner Pareto efficiency while preserving proprietary airline passenger connection priorities."
+            )
+
+            st.subheader("👥 Airline Agent Strategic Responses & Payoffs")
+            strat_df = pd.DataFrame([
+                {
+                    "Airline Archetype": s.airline_name,
+                    "Flights Regulated": s.flights_regulated,
+                    "Slot Swaps Executed": s.slots_swapped_count,
+                    "En-Route Speedups": s.tactical_speedups_count,
+                    "Tactical Cancellations": s.tactical_cancellations_count,
+                    "Delay Saved": f"{s.gross_delay_saved_min:,.0f} min",
+                    "Extra Fuel Burned": f"{s.additional_fuel_burned_kg:,.0f} kg",
+                    "EU261 Fines Prevented": f"€{s.eu261_penalties_prevented_eur:,.2f} EUR",
+                    "Net Economic Payoff": f"€{s.net_economic_payoff_eur:,.2f} EUR",
+                    "Dominant Strategy": s.dominant_strategy,
+                }
+                for s in marl_res.airline_strategies
+            ])
+            st.dataframe(strat_df, use_container_width=True)
+
+            if marl_res.sample_agent_decisions:
+                st.subheader("📋 Sample Tactical Multi-Agent Decision Log")
+                st.dataframe(pd.DataFrame(marl_res.sample_agent_decisions), use_container_width=True)
+
