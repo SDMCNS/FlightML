@@ -5,7 +5,7 @@
 [![DuckDB Powered](https://img.shields.io/badge/Storage-DuckDB%20%2B%20Apache%20Parquet-orange.svg)](https://duckdb.org/)
 [![Documentation](https://img.shields.io/badge/Docs-Complete%20Guide-green.svg)](docs/index.md)
 
-**A high-performance Python aviation intelligence library, interactive simulation workbench, REST API, and CLI for Global Airspace Network Analytics, 4D Trajectory Physics, Environmental & Eurocontrol CRCO Cost Accounting (`€ EUR`), and Prescriptive Operations Research.**
+**A high-performance Python aviation intelligence library, interactive simulation workbench, REST API, MCP server, and CLI for Global Airspace Network Analytics, 4D Trajectory Physics, Environmental & Eurocontrol CRCO Cost Accounting (`€ EUR`), and Prescriptive Operations Research.**
 
 ---
 
