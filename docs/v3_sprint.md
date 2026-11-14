@@ -128,18 +128,19 @@ The platform operates across an indexed columnar Parquet corpus:
 
 ---
 
-### Epic 5: Aircraft Tail-Tracking & Delay Contagion Graph
+### Epic 5: Aircraft Tail-Tracking & Delay Contagion Graph [COMPLETED]
 **Goal**: Track sequential aircraft rotations across the network to model delay propagation and systemic network vulnerability.
 
-- [ ] **Task 5.1: Multi-Leg Airframe Rotation Reconstruction**:
-  - Group flight records by aircraft tail registration / airframe identifier across each operating day.
-  - Order chronological legs: Leg 1 $\to$ Turnaround $\to$ Leg 2 $\to$ Turnaround $\to$ Leg 3.
-- [ ] **Task 5.2: Delay Infection & Recovery Graph**:
-  - Construct a directed delay transmission graph.
-  - Measure how ground turnarounds buffer or amplify inbound departure delays.
-  - Identify "super-spreader" flights and choke hubs (e.g., morning delays at LHR/FRA/CDG spreading to 4+ subsequent destinations).
-- [ ] **Task 5.3: Network Resilience & Disruption Simulator**:
-  - Provide a "What-If" simulator: if a major airport runway or FIR experiences a 2-hour closure, how many total network flights and passengers are impacted?
+- [x] **Task 5.1: Multi-Leg Airframe Rotation Reconstruction**:
+  - Implemented `DelayContagionGraphEngine.reconstruct_airframe_rotations()` grouping flights by aircraft tail registration across operating days.
+  - Reconstructs sequential rotation legs (Leg 1 $\to$ Turnaround Buffer $\to$ Leg 2 $\to$ Leg 3), measuring turnaround absorption capacity.
+- [x] **Task 5.2: Delay Infection & Recovery Graph**:
+  - Implemented `identify_super_spreaders()` tracking directed delay transmission along airframe chains.
+  - Pinpoints morning departure delays that infect 2+ downstream rotations, calculating cumulative downstream delay hours and economic reactionary delay cost (€105/min standard).
+- [x] **Task 5.3: Network Resilience & Disruption Simulator**:
+  - Built `simulate_network_shock()` for airport runways and FIR airspace sectors.
+  - Quantifies direct delayed flights, reactionary infected rotations, cumulative flight delay hours, passenger misconnections, and economic damage in € EUR.
+  - Production CLI commands `flightml delay-spreaders` and `flightml simulate-shock` added. Unit tests in `tests/test_delay_contagion_graph.py` (4/4 passing). Full test suite (84/84 passing).
 
 ---
 

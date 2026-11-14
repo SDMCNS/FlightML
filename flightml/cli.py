@@ -29,6 +29,7 @@ from flightml.eval.macro_comparison import compare_aviation_periods
 from flightml.eval.longitudinal import LongitudinalEngine
 from flightml.models.airspace_forecaster import AirspaceForecaster
 from flightml.eval.airline_economics import AirlineEconomicsEngine
+from flightml.models.delay_contagion_graph import DelayContagionGraphEngine
 from flightml.eval.cdo_analyzer import (
     analyze_cdo_descent,
     analyze_cco_climb,
@@ -1134,6 +1135,91 @@ def simulate_harmonization_cmd(
     for s in sim.airspace_traffic_shifts:
         shift_tab.add_row(s["fir"], s["shift"])
     console.print(shift_tab)
+
+
+@app.command("delay-spreaders")
+def delay_spreaders_cmd(
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period"),
+    date: str = typer.Option("2025-10-15", "--date", "-d", help="Analysis date (YYYY-MM-DD)"),
+    min_delay: float = typer.Option(20.0, "--min-delay", "-m", help="Minimum initial departure delay (min)"),
+    top_n: int = typer.Option(10, "--top", "-n", help="Number of super-spreader flights to show"),
+) -> None:
+    """Identify super-spreader flights where morning departure delays infected downstream aircraft rotations."""
+    ds = FlightDataset(period=period)
+    engine = DelayContagionGraphEngine(ds)
+    with console.status(f"[cyan]Identifying delay super-spreaders across airframe rotations ({date})..."):
+        spreaders = engine.identify_super_spreaders(date_str=date, min_primary_delay_min=min_delay, top_n=top_n)
+
+    console.print(f"\n[bold green]Top Network Delay Super-Spreader Flights ({date}, Period {period}):[/bold green]")
+    if not spreaders:
+        console.print("[yellow]No super-spreader flights found meeting delay threshold.[/yellow]")
+        return
+
+    sp_tab = Table(title="Flights Generating Severe Downstream Reactionary Delay Contagion", header_style="bold magenta")
+    sp_tab.add_column("Flight ID", style="cyan")
+    sp_tab.add_column("Tail / Airline", style="white")
+    sp_tab.add_column("Origin Hub", style="white")
+    sp_tab.add_column("Initial Delay", justify="right", style="bold red")
+    sp_tab.add_column("Infected Legs", justify="right", style="bold yellow")
+    sp_tab.add_column("Downstream Delay", justify="right", style="yellow")
+    sp_tab.add_column("Economic Cost (€)", justify="right", style="bold yellow")
+    sp_tab.add_column("Infected Destinations", style="green")
+
+    for s in spreaders:
+        sp_tab.add_row(
+            str(s.ectrl_id),
+            f"{s.ac_reg} ({s.operator})",
+            f"{s.origin_hub} ➔ {s.destination}",
+            f"+{s.primary_delay_min:.0f} min",
+            f"{s.infected_downstream_legs} legs",
+            f"{s.downstream_delay_hours:.1f} hrs",
+            f"€{s.downstream_economic_cost_eur:,.0f}",
+            ", ".join(s.infected_airports[:4]),
+        )
+    console.print(sp_tab)
+
+
+@app.command("simulate-shock")
+def simulate_shock_cmd(
+    target: str = typer.Argument("EGLL", help="Disruption target (Airport ICAO e.g. EGLL, EDDF or FIR e.g. EDUUUIR)"),
+    target_type: str = typer.Option("AIRPORT", "--type", "-t", help="Target type ('AIRPORT' or 'FIR')"),
+    duration: float = typer.Option(2.0, "--duration", "-d", help="Disruption duration in hours"),
+    capacity_cut: float = typer.Option(50.0, "--cut", "-c", help="Capacity reduction percentage (0 to 100)"),
+    date: str = typer.Option("2025-10-15", "--date", help="Simulation date (YYYY-MM-DD)"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period"),
+) -> None:
+    """Simulate systemic delay contagion from an airport runway or FIR capacity shock."""
+    ds = FlightDataset(period=period)
+    engine = DelayContagionGraphEngine(ds)
+    with console.status(f"[cyan]Simulating {duration:.1f}h capacity shock ({capacity_cut:.0f}% cut) on {target.upper()}..."):
+        shock = engine.simulate_network_shock(
+            disruption_target=target,
+            target_type=target_type,
+            duration_hours=duration,
+            capacity_cut_pct=capacity_cut,
+            date_str=date,
+        )
+
+    console.print(f"\n[bold green]Network Shock & Systemic Delay Contagion Simulation:[/bold green] [cyan]{shock.target_id}[/cyan] ({shock.target_type})")
+    console.print(
+        f"Simulated Disruption: [bold yellow]{shock.disruption_duration_hours:.1f} hours @ {shock.capacity_reduction_pct:.0f}% capacity cut[/bold yellow] ({shock.simulated_date})\n"
+        f"Directly Delayed Flights: [cyan]{shock.directly_delayed_flights:,}[/cyan] | "
+        f"Reactionary Infected Rotations: [bold yellow]{shock.reactionary_infected_flights:,}[/bold yellow] | "
+        f"Total Impacted: [bold red]{shock.total_impacted_flights:,} flights[/bold red]\n"
+        f"Cumulative Delay: [bold red]{shock.total_delay_hours_incurred:,.1f} flight hours[/bold red] | "
+        f"Economic Delay Cost: [bold yellow]€{shock.total_economic_delay_cost_eur:,.2f} EUR[/bold yellow]\n"
+        f"Passenger Misconnections: [bold magenta]{shock.estimated_passenger_misconnections:,} passengers[/bold magenta] | "
+        f"Cancellation Risk Flights: [red]{shock.estimated_cancellation_risk_flights:,} flights[/red]\n"
+    )
+
+    if shock.affected_downstream_airports:
+        apt_tab = Table(title="Top Downstream Network Hubs Absorbing Reactionary Contagion", header_style="bold magenta")
+        apt_tab.add_column("Hub Airport", style="cyan")
+        apt_tab.add_column("Reactionary Delay Absorbed", justify="right", style="yellow")
+
+        for a in shock.affected_downstream_airports:
+            apt_tab.add_row(str(a["airport"]), f"{float(a['delay_absorbed_hours']):,.1f} hours")
+        console.print(apt_tab)
 
 
 @app.command("cdo-descent")
