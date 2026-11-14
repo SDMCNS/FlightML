@@ -45,29 +45,75 @@ pip install -e ".[dev]"
 
 ---
 
+## 📥 Data Ingestion & Initial Setup
+
+FlightML stores its analytical tables in compressed, columnar Apache Parquet queried on the fly by DuckDB. Before running analyses, initialize external aeronautical references and ingest your historical traffic periods:
+
+### Step 1: Compile Aeronautical References (`flightml external-data`)
+
+Compiles bundled open aeronautical references (OpenAP aircraft drag polars, turbofan engine performance envelopes, ICAO Engine Emissions Databank v32B, global 5-letter RNAV waypoints, radio navaids, and Eurocontrol CRCO FIR charging rates) into DuckDB Parquet tables:
+
+```bash
+flightml external-data
+```
+
+### Step 2: Ingest Monthly Traffic Archives (`flightml ingest-archive`)
+
+Ingest raw Eurocontrol monthly traffic zip archives (e.g., `202510.zip`, `201611.zip`) in a single automated command:
+
+```bash
+flightml ingest-archive data/202510.zip
+```
+
+The ingestion pipeline automatically:
+1. Extracts the archive into staging.
+2. Identifies and parses flight plans, 4D radar tracks, FIR boundary crossings, and airport pairs.
+3. Converts raw CSV tables into partitioned, compressed Apache Parquet under `flightml/data/parquet/periods/{period_id}`.
+
+*(Alternative: If raw CSV files are already placed in `flightml/data/`, run `flightml convert --include-trajectories`.)*
+
+### Step 3: Verify Ingested Periods (`flightml list-periods`)
+
+```bash
+flightml list-periods
+```
+
+```text
+      Available Aviation Data Periods      
+┌───────────┬─────────────────────────────┐
+│ Period ID │ Status                      │
+├───────────┼─────────────────────────────┤
+│ 201611    │ Ready (Parquet Partitioned) │
+│ 202510    │ Ready (Parquet Partitioned) │
+└───────────┴─────────────────────────────┘
+```
+
+---
+
 ## 📂 Data Setup & Directory Layout
 
 FlightML organizes its data assets under `data/` (git-ignored for proprietary archives) and `flightml/data/` (bundled open reference catalogs):
 
 ```text
-data/
-├── archive/                              # Raw Eurocontrol archive zips (user-provided)
-│   ├── 201611.zip                        # November 2016 baseline archive
-│   └── 202510.zip                        # October 2025 modern archive
+flightml/data/
 ├── external/                             # Auto-compiled Parquet reference catalogs
 │   ├── openap_aircraft.parquet           # OpenAP aircraft MTOW, drag & fuel models
-│   ├── icao_edb_emissions.parquet        # ICAO EDB v32B LTO engine emission indices
-│   ├── crco_unit_rates.parquet           # Eurocontrol CRCO national unit rates (€)
-│   ├── nav_waypoints.parquet             # 86,280 global 5-letter RNAV fixes
-│   └── nav_navaids.parquet               # 17,090 global VOR/DME/ILS navaids
+│   ├── openap_engines.parquet            # OpenAP turbofan thrust, BPR, and fuel flow rates
+│   ├── icao_edb_gaseous.parquet          # ICAO EDB v32B NOx, CO, and HC emission indices
+│   ├── icao_edb_nvpm.parquet             # ICAO EDB v32B non-volatile PM soot emission indices
+│   ├── crco_unit_rates.parquet           # Eurocontrol CRCO national unit rates (€/SU)
+│   ├── nav_fixes.parquet                 # 119,720 global 5-letter RNAV fixes (fix.dat)
+│   └── nav_aids_xplane.parquet           # 26,767 global VOR/DME/ILS navaids (nav.dat)
 ├── fuel/
 │   └── weekly_jet_fuel_prices.csv        # Weekly Jet-A spot prices converted to Euros (€)
-└── 202510/                               # Ingested Parquet tables per period
-    ├── flights.parquet                   # Flight headers, delays & tail numbers
-    ├── trajectory_actual.parquet         # 4D actual radar coordinates & flight levels
-    ├── trajectory_planned.parquet        # 4D filed flight plan coordinates
-    ├── flight_firs_actual.parquet        # En-route FIR & TAXI_OUT traversals
-    └── flight_auas_actual.parquet        # Granular ATC Unit Airspace (TMA/CTA/UTA) traversals
+└── parquet/periods/                      # Partitioned Parquet tables per traffic period
+    ├── 201611/                           # Baseline historical period (Nov 2016)
+    └── 202510/                           # Modern traffic period (Oct 2025)
+        ├── flights.parquet               # Flight headers, delays, aircraft type & operator
+        ├── trajectory_actual.parquet     # 4D actual radar coordinates, groundspeed & FL
+        ├── trajectory_planned.parquet    # 4D filed flight plan coordinates & requested FL
+        ├── flight_firs_actual.parquet    # En-route FIR & TAXI_OUT traversals
+        └── flight_auas_actual.parquet    # ATC Unit Airspace (TMA/CTA/UTA) traversals
 ```
 
 ---
@@ -78,17 +124,29 @@ data/
 flightml dashboard
 ```
 
-Opens at **`http://localhost:8501`** featuring **10 interactive tabs**:
-1. **🌐 Network Overview & Airspace Map**: Interactive **$5^\circ \times 5^\circ$ European Airspace Hourly Saturation & Complexity Map** (period average by hour of day `00:00`–`23:00 UTC`), FIR & AUA (`TMA`/`CTA`/`UTA`) saturation, `KPI02 ATOT` surface taxi delays, and VHF radio occupancy.
+Opens at **`http://localhost:8501`** organized into **4 primary operational categories** across 10 specialized views:
+
+### 1. Airspace & Trajectories
+1. **🌐 Network Overview & Airspace Map**: Interactive **$5^\circ \times 5^\circ$ European Airspace Hourly Saturation & Complexity Map** (`00:00`–`23:00 UTC`), FIR & AUA (`TMA`/`CTA`/`UTA`) saturation, `KPI02 ATOT` surface taxi delays, and VHF radio occupancy.
 2. **🗺️ 4D Trajectory & Holdings**: Flight-level 4D trajectory viewer, `KPI04 KEP` / `KPI05 KEA` / `KPI08 ASMA` / `KPI19` scorecard, `FRA` vs. ATS airway snapping, and FIR/AUA sector dwell tables.
 3. **📅 Recurring Series & Diurnal Trends**: Multi-day tracking of recurring flight pairs and diurnal departure bank congestion curves.
-4. **📉 Vertical Profile: CDO & CCO**: Descent `CDO` and Climb `CCO` level-off detection, vertical profile charts, and network-wide `KPI19` cruise level-capping corridors.
-5. **🩺 Delay & Runway Diagnostics**: Multi-factor delay root-cause attribution and arrival runway braking action, density altitude, and stopping safety margins.
-6. **🌱 Fuel, Carbon & Route Charges (`€`)**: OpenAP excess fuel burn, `TAXI_OUT` ICAO EDB v32B idle emissions ($\text{NO}_x, \text{CO}, \text{nvPM}$), Eurocontrol CRCO fees (`€`), upper-air contrail `ISSR` forcing, and Corridor CRCO Route-Charge vs. Fuel Burn trade-offs.
-7. **👯 Twin-Flight Benchmark**: Side-by-side comparison and interactive **Dual-Trajectory Map** (`Green` vs. `Red`) with lateral divergence pinpointing.
-8. **🔮 What-If & Stress Tests**: Turnaround buffer curves, runway crosswind collapse, fleet shock contagion, network-wide **Hub Tail-Swap Recovery (`Tail A ⇄ Tail B`)**, **4D Co-Altitude Conflict & Saturation Map**, and **Ration-by-Schedule GDP Optimizer (`€`)**.
+4. **👯 Twin-Flight Benchmark**: Side-by-side comparison and interactive **Dual-Trajectory Map** (`Green` vs. `Red`) with lateral divergence pinpointing.
+
+### 2. Operations & Diagnostics
+5. **📉 Vertical Profile: CDO & CCO**: Continuous Descent Operations (`CDO`) and Continuous Climb Operations (`CCO`) intermediate level-off detection, vertical profile charts, and network-wide cruise level-capping corridors.
+6. **🩺 Delay & Runway Diagnostics**: Multi-factor delay root-cause attribution and arrival runway braking action, density altitude, and stopping safety margins.
+7. **🔮 What-If & Stress Tests**: Turnaround buffer curves, runway crosswind collapse, fleet shock contagion, network-wide **Hub Tail-Swap Recovery (`Tail A ⇄ Tail B`)**, **4D Co-Altitude Conflict & Saturation Map**, and **Ration-by-Schedule GDP Optimizer (`€`)**.
+
+### 3. Economics, Fuel & Climate
+8. **🌱 Fuel, Carbon & Route Charges (`€`)**:
+   - **3-Way Cruise Altitude Optimization**: Ideal airframe/engine aerodynamic flight level vs. filed requested vs. actual radar flown, with dispatch planning vs. tactical ATC penalty attribution.
+   - **Upper-Air Winds & ESAD**: Upper airspace wind vector integration, Equivalent Still Air Distance (`ESAD`), and wind routing efficiency verdicts with local-first caching.
+   - **Eurocontrol CRCO Route Charges & DOC**: FIR-by-FIR navigation service units (`SU`), unit rates, direct flight operating cost (`Fuel € + CRCO Navigation €`), and historical spot vs. modern into-plane price comparisons.
+   - **OpenAP Multi-Dimensional Emissions & LTO**: En-route fuel burn, terminal holding burn, and `TAXI_OUT` ICAO Engine Emissions Databank (EDB v32B) idle pollutants ($\text{NO}_x, \text{CO}, \text{nvPM}$).
+
+### 4. Strategic Analytics & Reference
 9. **📈 Macro Evolution & AIRAC Diff**: Period-over-period traffic growth, `FRA` directness evolution, European weather-delay correlation, and AIRAC cycle diffing.
-10. **📖 Methodology & KPI Reference**: Complete in-app documentation of all ICAO GANP, Eurocontrol PRU, CRCO, OpenAP, and operations research formulas.
+10. **📖 Methodology, KPI & PBN Reference**: Full mathematical reference for all 21 ICAO/Eurocontrol KPIs, plus dedicated **PBN / RNAV vs. RNP Specifications & Operational Requirements** navigation guide.
 
 ---
 

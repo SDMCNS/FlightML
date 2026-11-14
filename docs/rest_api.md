@@ -81,6 +81,7 @@ flightml serve --host 127.0.0.1 --port 8000
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
+| `GET` | `/api/v1/kpis/multi-level` | Multi-tier KPI suite across Flight, Fleet, Airport, and Network levels with timeframe filtering (`start_date`, `end_date`, `operator`, `airport`). |
 | `GET` | `/api/v1/flights/{ectrl_id}/pru-kpis` | Compute `KPI04 KEP`, `KPI05 KEA`, `KPI08 ASMA`, and `KPI19` level-capping scorecard. |
 | `GET` | `/api/v1/flights/{ectrl_id}/cdo` | Continuous Descent Operations (`KPI19 CDO`) compliance and level-off events. |
 | `GET` | `/api/v1/flights/{ectrl_id}/cco` | Continuous Climb Operations (`KPI17 CCO`) compliance and climb level-offs. |
@@ -96,28 +97,32 @@ flightml serve --host 127.0.0.1 --port 8000
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `GET` | `/api/v1/fuel/prices` | Historical weekly Jet-A spot prices in Euros (`price_eur_per_gallon`, `price_eur_per_kg`). |
-| `GET` | `/api/v1/flights/{ectrl_id}/fuel` | OpenAP excess fuel burn, $\text{CO}_2$, and weekly spot cost in Euros (`€`). |
+| `GET` | `/api/v1/flights/{ectrl_id}/fuel` | OpenAP excess fuel burn, $\text{CO}_2$, and weekly spot cost in Euros (`€`). Supports `engine_override` query parameter to evaluate specific engine variant efficiencies. |
 | `GET` | `/api/v1/surface/taxi-out` | Airport `KPI02 ATOT` queue delays and ICAO EDB v32B LTO idle emissions. |
 | `GET` | `/api/v1/flights/{ectrl_id}/taxi-out` | Single-flight surface taxi-out `ATOT` delay and 7% idle $\text{NO}_x / \text{CO} / \text{nvPM}$ emissions. |
 | `GET` | `/api/v1/flights/{ectrl_id}/crco-cost` | Eurocontrol CRCO Service Units (`SU`), FIR fees (`€`), and Total Direct Operating Cost (`€`). |
 | `GET` | `/api/v1/economics/route-avoidance` | Corridor CRCO Route-Charge vs. Extra Fuel Burn economic trade-off analysis (`€`). |
-| `GET` | `/api/v1/flights/{ectrl_id}/contrails` | Upper-air wind optimality (`TAS` vs `GS`) and persistent contrail `ISSR` forcing (`CO₂e`). |
+| `GET` | `/api/v1/flights/{ectrl_id}/contrails` | Upper-air wind optimality (`TAS` vs `GS`), Equivalent Still Air Distance (`esad_nm`), wind routing verdict, and persistent contrail `ISSR` forcing (`CO₂e`). |
 
 #### Synthetic Example: `GET /api/v1/flights/900104215/fuel?period=202510`
 ```json
 {
   "ectrl_id": 900104215,
   "ac_type": "B77W",
+  "optimal_cruise_fl": 340.0,
+  "requested_fl": 320.0,
+  "actual_cruise_fl": 320.0,
   "excess_distance_nm": 24.0,
   "holding_duration_min": 4.5,
   "holding_fuel_kg": 315.0,
   "detour_fuel_kg": 288.0,
-  "total_excess_fuel_kg": 603.0,
-  "excess_co2_kg": 1905.5,
+  "excess_altitude_fuel_kg": 412.5,
+  "total_excess_fuel_kg": 1015.5,
+  "excess_co2_kg": 3208.98,
   "fuel_price_eur_per_gallon": 1.954,
   "fuel_price_eur_per_kg": 0.6421,
   "fuel_price_week": "2025-W40 (2025-09-29 to 2025-10-05)",
-  "estimated_excess_fuel_cost_eur": 387.19
+  "estimated_excess_fuel_cost_eur": 652.05
 }
 ```
 

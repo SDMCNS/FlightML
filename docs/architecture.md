@@ -21,17 +21,18 @@ This document outlines the system architecture, mathematical methodologies, inte
 │                                PRESENTATION & APIS                                     │
 ├──────────────────────────┬──────────────────────────┬──────────────────────────────────┤
 │ Streamlit Dashboard      │ FastAPI REST Server      │ Typer / Rich CLI                 │
-│ (10 Interactive Tabs)    │ (Swagger / OpenAPI)      │ (45+ Analytical Commands)        │
+│ (4 Categorized Tiers)    │ (Swagger / OpenAPI)      │ (45+ Analytical Commands)        │
 └──────────────────────────┴──────────────────────────┴──────────────────────────────────┘
                                     ▲
                                     │
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │                              ANALYTICAL & SIMULATION LAYER                             │
 ├──────────────────────────┬──────────────────────────┬──────────────────────────────────┤
-│ • 5°×5° Saturation Maps  │ • OpenAP Fuel & Carbon   │ • Hub Tail-Swap Optimizer (MIP)  │
-│ • ICAO GANP & PRU KPIs   │ • ICAO EDB LTO Emissions │ • Ration-by-Schedule GDP Slots   │
-│ • FRA vs. ATS Airways    │ • Eurocontrol CRCO (€)   │ • Turnaround & Shock Contagion   │
-│ • 4D Conflict Scanner    │ • ERA5 Contrail ISSRs    │ • Runway Braking & Crosswinds    │
+│ • 5°×5° Saturation Maps  │ • OpenAP Engine Fuel & CO₂│ • Hub Tail-Swap Optimizer (MIP) │
+│ • ICAO GANP & PRU KPIs   │ • 3-Way Cruise FL Model  │ • Ration-by-Schedule GDP Slots   │
+│ • Multi-Tier KPI Suite   │ • ICAO EDB LTO Emissions │ • Turnaround & Shock Contagion   │
+│ • FRA & PBN Navigation   │ • Eurocontrol CRCO (€)   │ • Runway Braking & Crosswinds    │
+│ • 4D Conflict Scanner    │ • Upper Winds & ESAD     │ • Contrail ISSR Radiative Multi. │
 └──────────────────────────┴──────────────────────────┴──────────────────────────────────┘
                                     ▲
                                     │
@@ -64,11 +65,45 @@ Monthly Eurocontrol archives contain hundreds of thousands of flights and tens o
 
 ---
 
-## 🗺️ $5^\circ \times 5^\circ$ Airspace Saturation & 4D Conflict Detection
+## 📊 Multi-Tier KPI Aggregation Framework
 
-For any selected hour of the day $h \in [0, 23]$ UTC, FlightML aggregates 4D trajectory points across all active days in the archive into $5^\circ \times 5^\circ$ geographic squares:
-$$\text{Dynamic Complexity Index} = \bar{N}_{h} \times \left(1 + 1.5 \cdot \frac{N_{\text{vert, } |\Delta \text{FL}| \ge 5}}{N_{\text{total pts}}}\right)$$
-where $\bar{N}_{h}$ is the period-average hourly flight count in that square. Simultaneously, 4D trajectories are linearly interpolated at synchronized 1-minute epochs (`:00`, `:15`, `:30`, `:45`) to detect co-altitude aircraft pairs within $< 1,000\text{ ft}$ vertical and $\le 5.0\text{ nm}$ horizontal separation.
+FlightML aggregates flight-level performance across four operational tiers with flexible date-windowing:
+1. **Flight Tier**: Granular per-flight metrics (`KEP`, `KEA`, `ATOT`, `CDO/CCO`, CRCO route charges, and fuel burn).
+2. **Fleet / Airline Tier**: Fleet-wide averages filtered by airline operator (`ac_operator`), wake category, or aircraft family.
+3. **Airport Tier**: Hub-specific departure taxi-out queues (`KPI02 ATOT`), arrival terminal sequencing (`KPI08 ASMA`), and runway crosswind disruption.
+4. **Network Tier**: Pan-European macro indicators, FIR sector saturation, and total excess carbon across the airspace.
+
+---
+
+## ✈️ 3-Way Cruise Altitude Optimization Physics
+
+Fuel burn is strongly coupled to cruise altitude and engine thermodynamic efficiency:
+- **Optimal Aerodynamic Cruise Flight Level ($\text{FL}_{\text{opt}}$)**: Resolved per airframe MTOW and turbofan engine type (bypass ratio, overall pressure ratio).
+- **Altitude Burn Penalty ($\Delta \text{Burn}_{\%}$)**:
+  $$\Delta \text{Burn}_{\%} = 0.015 \times \left(\frac{\Delta \text{FL}}{10}\right)^2 + 0.008 \times \left(\frac{\Delta \text{FL}}{10}\right)$$
+- **Disaggregated Inefficiency Attribution**:
+  1. **Flight Planning Inefficiency**: $\Delta \text{FL}_{\text{plan}} = \text{FL}_{\text{req}} - \text{FL}_{\text{opt}}$ (airline dispatch choice).
+  2. **Tactical ATC Inefficiency**: $\Delta \text{FL}_{\text{ATC}} = \text{FL}_{\text{act}} - \text{FL}_{\text{req}}$ (tactical level capping by air traffic control).
+
+---
+
+## 🌬️ Upper-Air Winds & Equivalent Still Air Distance (ESAD)
+
+True fuel efficiency cannot be judged by ground distance alone when strong jet stream winds exist:
+- **Equivalent Still Air Distance ($\text{ESAD}$)**:
+  $$\text{ESAD} = D_{\text{ground}} \times \left(\frac{\text{TAS}}{\text{GS}}\right) = D_{\text{ground}} \times \left(\frac{\text{TAS}}{\text{TAS} + W_{\text{tailwind}}}\right)$$
+- **Local-First Caching**: Upper-air wind vectors are fetched on demand from the Open-Meteo ERA5 / GFS API and cached locally in SQLite for sub-millisecond retrieval.
+- **Wind Routing Efficiency Verdict**:
+  - `SMART_WIND_RIDING`: Airline successfully leveraged tailwinds ($\text{ESAD} < D_{\text{ground}}$).
+  - `SEVERE_HEADWIND_PENALTY`: Flight incurred aerodynamic resistance ($\text{ESAD} > D_{\text{ground}}$).
+
+---
+
+## 🧭 Performance-Based Navigation (PBN): RNAV vs. RNP
+
+FlightML evaluates navigation compliance and lateral waypoint adherence across PBN specifications:
+- **RNAV Specifications (RNAV 10, RNAV 5, RNAV 1/2)**: Area navigation without mandatory on-board performance monitoring and alerting (OPMA).
+- **RNP Specifications (RNP 4, RNP 2, RNP 1, RNP APCH, RNP AR APCH)**: On-board performance monitoring and alerting required. RNP AR APCH enables curved radius-to-fix (`RF`) legs with lateral containment as tight as $\pm 0.1\text{ nm}$.
 
 ---
 
@@ -76,7 +111,7 @@ where $\bar{N}_{h}$ is the period-average hourly flight count in that square. Si
 
 1. **Aerodynamic Fuel Burn & Carbon (`OpenAP`)**: Maps aircraft types to OpenAP mass, drag polar, and thrust-specific fuel consumption profiles ($3.16\text{ kg CO}_2$ per $\text{kg Jet-A}$).
 2. **Surface Taxi-Out LTO Idle Emissions (`ICAO EDB v32B`)**: Applies empirical 7% LTO idle fuel flow and emission indices ($\text{NO}_x$, $\text{CO}$, $\text{HC}$, and $\text{nvPM}$ soot mass) from the ICAO Aircraft Engine Emissions Databank v32B during excess `KPI02 ATOT` departure queues.
-3. **Upper-Air Winds & Persistent Contrail (`ISSR`) Forcing**: Cross-references 4D cruise segments (`FL280`–`FL430`) against **Open-Meteo ERA5 Upper-Air Pressure Levels (`300/250/200/150 hPa`)** and the **Schmidt-Appleman criterion** ($T < -40^\circ\text{C}$, $\text{RH}_{\text{ice}} \ge 100\%$) to identify persistent contrail segments and radiative forcing multipliers (`CO₂e`).
+3. **Upper-Air Winds & Persistent Contrail (`ISSR`) Forcing**: Cross-references 4D cruise segments (`FL280`–`FL430`) against upper-air pressure levels and the **Schmidt-Appleman criterion** ($T < -40^\circ\text{C}$, $\text{RH}_{\text{ice}} \ge 100\%$) to identify persistent contrail segments and radiative forcing multipliers (`CO₂e`).
 
 ---
 
@@ -84,7 +119,8 @@ where $\bar{N}_{h}$ is the period-average hourly flight count in that square. Si
 
 En-route navigation charges across European Flight Information Regions are billed in **Euros (`€`)** using the official Eurocontrol Central Route Charges Office (CRCO) formula:
 $$\text{CRCO Charge (€)} = \sum_{i} \left(\frac{D_{i,\text{km}}}{100}\right) \times \sqrt{\frac{\text{MTOW (tons)}}{50}} \times u_i$$
-where $D_{i,\text{km}}$ is the great-circle entry-to-exit distance in charging zone $i$ and $u_i$ is the national unit rate in `€/SU`. Weekly Jet-A fuel costs are resolved from historical EIA/IATA spot prices converted into **Euros (`€`)**.
+where $D_{i,\text{km}}$ is the great-circle entry-to-exit distance in charging zone $i$ and $u_i$ is the national unit rate in `€/SU`.
+- **Fuel Pricing Benchmark**: Weekly Jet-A fuel costs are resolved from historical EIA/IATA spot prices converted into **Euros (`€`)**, with contextual benchmarking against modern into-plane airline rates (~€0.85/kg).
 
 ---
 

@@ -14,10 +14,38 @@ flightml --help
 
 ---
 
-## 1. Dashboard & Web Services
+## 1. Data Ingestion & System Management
+
+### `flightml external-data`
+Compile bundled open aeronautical references (OpenAP performance envelopes, ICAO Engine Emissions Databank v32B, RNAV waypoints, radio navaids, and Eurocontrol CRCO unit rates) into DuckDB Parquet tables.
+```bash
+flightml external-data [--rebuild]
+```
+
+### `flightml ingest-archive <archive_path>`
+Extract, classify, and ingest a monthly Eurocontrol traffic zip archive into partitioned Apache Parquet under `flightml/data/parquet/periods/{period_id}`.
+```bash
+flightml ingest-archive data/202510.zip
+```
+
+### `flightml convert`
+Convert raw CSV files placed in `flightml/data/` to compressed, columnar Apache Parquet.
+```bash
+flightml convert [--include-trajectories]
+```
+
+### `flightml list-periods`
+List all ingested and available historical aviation periods ready for analysis.
+```bash
+flightml list-periods
+```
+
+---
+
+## 2. Dashboard & Web Services
 
 ### `flightml dashboard`
-Launch the 10-tab interactive Streamlit simulation workbench (`http://localhost:8501`).
+Launch the 4-tier interactive Streamlit simulation workbench (`http://localhost:8501`).
 ```bash
 flightml dashboard [--port 8501]
 ```
@@ -30,7 +58,7 @@ flightml serve [--host 127.0.0.1] [--port 8000]
 
 ---
 
-## 2. Dataset Summary & Search
+## 3. Dataset Summary & Search
 
 ### `flightml summary`
 ```bash
@@ -81,7 +109,7 @@ flightml search-flights --period 202510 --adep EGLL --ades KORD --limit 3
 
 ---
 
-## 3. ICAO GANP & Eurocontrol PRU KPI Commands
+## 4. ICAO GANP & Eurocontrol PRU KPI Commands
 
 ### `flightml pru-kpis <ectrl_id>`
 Compute single-flight ICAO GANP & Eurocontrol PRU indicators (`KPI04 KEP`, `KPI05 KEA`, `KPI08 ASMA`, `KPI19` level-capping).
@@ -116,7 +144,7 @@ flightml level-capping --period 202510 --top-n 5
 
 ---
 
-## 4. Airspace Saturation, AUA Dwell, FRA & VHF Radio Comms
+## 5. Airspace Saturation, AUA Dwell, FRA & VHF Radio Comms
 
 ### `flightml fir-saturation` & `flightml aua-saturation`
 ```bash
@@ -151,10 +179,19 @@ flightml radio-workload --airport EGLL --period 202510
 
 ---
 
-## 5. Fuel Burn, Surface LTO Emissions, Contrails & CRCO Costs (`€ EUR`)
+## 6. Fuel Burn, Surface LTO Emissions, Contrails & CRCO Costs (`€ EUR`)
 
 ### `flightml fuel-impact <ectrl_id>`
-Compute excess detour and holding fuel burn, $\text{CO}_2$, and weekly Jet-A spot fuel cost in Euros (`€`).
+Compute excess detour, holding, and vertical cruise altitude penalty fuel burn, $\text{CO}_2$, and weekly Jet-A spot fuel cost in Euros (`€`).
+```bash
+flightml fuel-impact 900104215 --period 202510
+```
+
+### `flightml fuel-prices`
+Display official EIA / IATA historical weekly jet fuel spot prices (converted to Euros EUR) across all supported periods.
+```bash
+flightml fuel-prices
+```
 
 ### `flightml taxi-out` & `flightml flight-taxi-out <ectrl_id>`
 Quantify `KPI02 ATOT` departure runway queue delays and **ICAO EDB v32B** 7% LTO idle pollutants ($\text{NO}_x$, $\text{CO}$, $\text{HC}$, $\text{nvPM}$ soot) and Euro fuel cost.
@@ -164,7 +201,7 @@ flightml taxi-out --period 202510 --limit 3
 
 **Synthetic Output Table:**
 ```text
-    🛞 Airport Surface Taxi-Out (KPI02 ATOT) & LTO Idle Emissions (Synthetic)
+     🛞 Airport Surface Taxi-Out (KPI02 ATOT) & LTO Idle Emissions (Synthetic)
 ┌─────────┬─────────┬───────────┬──────────┬───────────┬───────────┬──────────────┐
 │ Airport │ Flights │ Mean Taxi │ UTOT p20 │ Add. ATOT │ Excess CO₂│ Queue Cost € │
 ├─────────┼─────────┼───────────┼──────────┼───────────┼───────────┼──────────────┤
@@ -182,14 +219,14 @@ flightml route-avoidance --adep EGLL --ades LIRF --ac A320 --period 202510
 ```
 
 ### `flightml contrails <ectrl_id>`
-Analyze upper-air tailwinds (`TAS` vs `GS`) and **Schmidt-Appleman persistent contrail (`ISSR`)** formation using Open-Meteo ERA5 upper-air meteorology.
+Analyze upper-air tailwinds (`TAS` vs `GS`), Equivalent Still Air Distance (`ESAD`), and **Schmidt-Appleman persistent contrail (`ISSR`)** formation using on-demand Open-Meteo upper-air meteorology.
 ```bash
 flightml contrails 900104215 --period 202510
 ```
 
 ---
 
-## 6. Safety, Conflict Detection & Prescriptive Operations Research
+## 7. Safety, Conflict Detection & Prescriptive Operations Research
 
 ### `flightml airspace-conflicts`
 Scan 1-minute interpolated 4D trajectories for co-altitude proximity pairs (`< 5 nm` horizontal, `< 1,000 ft` vertical) and $5^\circ \times 5^\circ$ airspace complexity.

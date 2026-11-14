@@ -106,14 +106,60 @@ print(f"Additional ATOT: +{taxi.additional_atot_min:.1f} min | Excess NOx: {taxi
 crco = compute_flight_crco_charges(ds, ectrl_id=900104215)
 print(f"Service Units: {crco.total_service_units:.2f} SU | CRCO Fee: €{crco.actual_crco_charge_eur:,.2f} EUR")
 
-# 4. Upper-air winds & persistent contrail (ISSR) climate forcing
+# 4. Upper-air winds & Equivalent Still Air Distance (ESAD)
 contrail = analyze_flight_wind_and_contrails(ds, ectrl_id=900104215)
-print(f"Net Wind: {contrail.avg_tailwind_component_kts:+.1f} kts | ISSR Contrail: {contrail.persistent_contrail_distance_nm:.1f} nm")
+print(f"Net Wind: {contrail.avg_tailwind_component_kts:+.1f} kts | Air Distance (ESAD): {contrail.esad_nm:,.0f} nm ({contrail.wind_efficiency_verdict})")
 ```
 
 ---
 
-## 5. Prescriptive Hub Tail-Swap Recovery & GDP Slot Optimization (`€ EUR`)
+## 5. 3-Way Cruise Altitude Optimization & Engine Efficiency
+
+```python
+from flightml.eval.aircraft_engine_perf import (
+    resolve_aircraft_engine_perf,
+    compute_cruise_altitude_efficiency,
+)
+
+# 1. Resolve turbofan engine bypass ratio and aerodynamic optimal flight level
+eng_perf = resolve_aircraft_engine_perf("B77W", engine_override="GE90-115B")
+print(f"Engine: {eng_perf.engine_name} | BPR: {eng_perf.bypass_ratio:.1f} | Opt FL: FL{eng_perf.optimum_cruise_fl:.0f}")
+
+# 2. Evaluate planning vs. tactical ATC vertical efficiency penalties
+vert_eff = compute_cruise_altitude_efficiency(
+    ac_type="B77W",
+    actual_cruise_fl=320.0,
+    requested_fl=340.0,
+    cruise_distance_nm=3200.0,
+    engine_override="GE90-115B",
+)
+print(f"Optimal FL{vert_eff.optimal_cruise_fl:.0f} vs Actual FL{vert_eff.actual_cruise_fl:.0f}")
+print(f"Fuel Penalty: +{vert_eff.actual_burn_penalty_pct:.1f}% ({vert_eff.excess_fuel_burn_kg:.1f} kg)")
+```
+
+---
+
+## 6. Multi-Tier KPI Suite (Flight, Fleet, Airport, Network)
+
+```python
+from flightml.eval.multi_level_kpis import query_multi_level_kpis
+
+# Query aggregated KPIs for British Airways (BAW) during early October 2025
+fleet_kpis = query_multi_level_kpis(
+    ds,
+    level="fleet",
+    start_date="2025-10-01",
+    end_date="2025-10-07",
+    operator="BAW",
+)
+print(f"Analyzed {fleet_kpis.flights_analyzed:,} BAW flights:")
+print(f"Mean Dep Delay: {fleet_kpis.mean_dep_delay_min:+.1f}m | Mean Arr Delay: {fleet_kpis.mean_arr_delay_min:+.1f}m")
+print(f"Total Excess Fuel: {fleet_kpis.total_excess_fuel_kg:,.0f} kg (€{fleet_kpis.total_excess_fuel_cost_eur:,.2f} EUR)")
+```
+
+---
+
+## 7. Prescriptive Hub Tail-Swap Recovery & GDP Slot Optimization (`€ EUR`)
 
 ```python
 from flightml import optimize_hub_tail_swaps, optimize_ground_delay_program

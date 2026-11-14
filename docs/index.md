@@ -37,10 +37,10 @@ Welcome to the **FlightML** documentation. FlightML is a high-performance Python
 ├──────────────────────────┼──────────────────────────┼──────────────────────────────────┤
 │ • DuckDB Columnar Store  │ • ICAO GANP & PRU KPIs   │ • 5°×5° Hourly Saturation Maps   │
 │ • Zero-Copy Parquet      │ • KPI02/04/05/08/17/19   │ • 4D Co-Altitude Conflict Scan   │
-│ • 86,280 Waypoints & Nav │ • FRA vs. ATS Airways    │ • Eurocontrol CRCO Route Fees €  │
-│ • OpenAP + ICAO EDB v32B │ • Taxi-Out LTO Emissions │ • Hub Tail-Swap Recovery (MIP)   │
-│ • Weekly Jet-A Prices €  │ • ERA5 Contrail ISSRs    │ • Ration-by-Schedule GDP Slots   │
-│ • IEM METAR + ERA5 Winds │ • Runway Braking Safety  │ • Fleet Shock Contagion Curves   │
+│ • 119k Fixes & 26k Navs  │ • Multi-Tier KPI Suite   │ • Eurocontrol CRCO Route Fees €  │
+│ • OpenAP + ICAO EDB v32B │ • 3-Way Cruise FL Model  │ • Hub Tail-Swap Recovery (MIP)   │
+│ • Weekly Jet-A Prices €  │ • FRA vs. ATS Airways    │ • Ration-by-Schedule GDP Slots   │
+│ • IEM METAR + Upper Wind │ • Upper Winds & ESAD     │ • Fleet Shock Contagion Curves   │
 └──────────────────────────┴──────────────────────────┴──────────────────────────────────┘
 ```
 
@@ -58,7 +58,10 @@ ds = fml.FlightDataset(period="202510")
 pru = fml.compute_flight_pru_kpis(ds, ectrl_id=900104215)
 print(f"KPI04 KEP: {pru.kpi04_kep_pct:.2f}% | KPI05 KEA: {pru.kpi05_kea_pct:.2f}% ({pru.enroute_routing_verdict})")
 
-# 3. Compute fuel burn, carbon emissions, and Eurocontrol CRCO route charges (€ EUR)
+# 3. Compute fuel burn, 3-way cruise altitude optimization & Eurocontrol CRCO route charges (€ EUR)
+impact = fml.compute_flight_fuel_and_emissions(ds, ectrl_id=900104215)
+print(f"Optimal: FL{impact.optimal_cruise_fl:.0f} vs Actual: FL{impact.actual_cruise_fl:.0f} | Excess Fuel: {impact.total_excess_fuel_kg:,.1f} kg")
+
 crco = fml.compute_flight_crco_charges(ds, ectrl_id=900104215)
 print(f"CRCO Fee: €{crco.actual_crco_charge_eur:,.2f} | Total Direct Cost: €{crco.total_direct_route_cost_eur:,.2f}")
 
