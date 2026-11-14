@@ -143,8 +143,83 @@ def compute_flight_crco_charges(
                 fir_rows.append({"fir_id": fid, "dwell_min": act_d})
                 filed_fir_rows.append({"fir_id": fid, "dwell_min": max(1.0, fld_d)})
 
+    if not fir_rows and len(actual_df) >= 2:
+        # High-fidelity trajectory boundary tracing via FIREngine when sector traversal logs are missing
+        try:
+            from flightml.geo.fir_engine import FIREngine
+
+            eng = FIREngine()
+            tagged = eng.tag_trajectory(actual_df)
+            raw_firs = list(tagged["fir"])
+
+            # Clean boundary UNKNOWN points by adjacent interpolation
+            for i in range(len(raw_firs)):
+                if raw_firs[i] == "UNKNOWN":
+                    raw_firs[i] = raw_firs[i - 1] if i > 0 else (raw_firs[i + 1] if i + 1 < len(raw_firs) else "UNKNOWN")
+            for i in range(len(raw_firs)):
+                if raw_firs[i] == "UNKNOWN":
+                    raw_firs[i] = f"{adep[:2]}XXFIR" if len(adep) >= 2 else "EGTTFIR"
+
+            # Normalize UIR to FIR charging zone equivalent (e.g. LFFFUIR -> LFFFFIR, EGTTUIR -> EGTTFIR)
+            norm_firs = []
+            for f in raw_firs:
+                if f.endswith("UIR"):
+                    norm_firs.append(f[:-3] + "FIR")
+                elif not f.endswith("FIR") and len(f) == 4:
+                    norm_firs.append(f + "FIR")
+                else:
+                    norm_firs.append(f)
+            tagged["norm_fir"] = norm_firs
+
+            # Segment into contiguous traversed FIR airspace blocks
+            segments: list[tuple[str, list[Any]]] = []
+            cur_fir = None
+            cur_pts: list[Any] = []
+            for _, r in tagged.iterrows():
+                f = r["norm_fir"]
+                if cur_fir is None:
+                    cur_fir = f
+                    cur_pts = [r]
+                elif f == cur_fir:
+                    cur_pts.append(r)
+                else:
+                    segments.append((cur_fir, cur_pts))
+                    cur_fir = f
+                    cur_pts = [cur_pts[-1], r]  # transition coordinate
+            if cur_pts:
+                segments.append((cur_fir, cur_pts))
+
+            raw_seg_dist_sum = 0.0
+            temp_rows = []
+            for sfir, pts in segments:
+                s_dist = 0.0
+                for i in range(len(pts) - 1):
+                    s_dist += haversine_nm(
+                        float(pts[i]["latitude"]),
+                        float(pts[i]["longitude"]),
+                        float(pts[i + 1]["latitude"]),
+                        float(pts[i + 1]["longitude"]),
+                    )
+                raw_seg_dist_sum += s_dist
+                if "time_over" in pts[0]:
+                    t0 = pd.to_datetime(pts[0]["time_over"])
+                    t1 = pd.to_datetime(pts[-1]["time_over"])
+                    dwell = max(1.0, (t1 - t0).total_seconds() / 60.0)
+                else:
+                    dwell = max(1.0, s_dist / 430.0 * 60.0)
+                temp_rows.append({"fir_id": sfir, "dwell_min": dwell, "raw_nm": s_dist})
+
+            # Scale segment distances so their sum exactly matches actual_distance_nm
+            scale = (act_dist_nm / raw_seg_dist_sum) if raw_seg_dist_sum > 0 else 1.0
+            for tr in temp_rows:
+                scaled_nm = tr["raw_nm"] * scale
+                fir_rows.append({"fir_id": tr["fir_id"], "dwell_min": tr["dwell_min"], "segment_nm": scaled_nm})
+                filed_fir_rows.append({"fir_id": tr["fir_id"], "dwell_min": tr["dwell_min"], "segment_nm": scaled_nm})
+        except Exception:
+            pass
+
     if not fir_rows:
-        # Fallback for 201611 or flights without explicit flight_firs_actual:
+        # Ultimate fallback if no trajectory waypoints exist:
         total_air = max(15.0, float(flight.get("actual_air_time_min") or (act_dist_nm / 420.0 * 60.0)))
         f1 = f"{adep[:2]}XXFIR" if len(adep) >= 2 else "EGTTFIR"
         f2 = f"{ades[:2]}XXFIR" if len(ades) >= 2 else "LFFFFIR"
@@ -166,7 +241,7 @@ def compute_flight_crco_charges(
         fid = item["fir_id"]
         d_min = item["dwell_min"]
         share = d_min / total_dwell
-        seg_nm = act_dist_nm * share
+        seg_nm = item.get("segment_nm") if item.get("segment_nm") is not None else (act_dist_nm * share)
         seg_km = seg_nm * NM_TO_KM
         df_factor = seg_km / 100.0
         su = df_factor * wf

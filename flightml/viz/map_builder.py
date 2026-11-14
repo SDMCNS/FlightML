@@ -629,3 +629,213 @@ def create_world_navaids_map(
     m.get_root().html.add_child(folium.Element(legend_html))
     return m
 
+
+def create_flight_fir_charge_map(
+    dataset: Any,
+    ectrl_id: int,
+    crco_report: Any | None = None,
+    output_html_path: Path | str | None = None,
+) -> folium.Map:
+    """
+    Generate an interactive Leaflet/Folium map visualizing a flight's trajectory
+    underlaid with the boundary polygons of every Flight Information Region (FIR) traversed,
+    color-coded with Eurocontrol CRCO national charging rates and fee metrics.
+    """
+    from flightml.eval.crco_economics import compute_flight_crco_charges
+
+    flight = dataset.get_flight(ectrl_id) or {}
+    adep = flight.get("adep", "ADEP")
+    ades = flight.get("ades", "ADES")
+
+    trajs = dataset.get_trajectory(ectrl_id)
+    actual_df = trajs.get("actual", pd.DataFrame())
+    planned_df = trajs.get("planned", pd.DataFrame())
+
+    if crco_report is None:
+        crco_report = compute_flight_crco_charges(dataset, ectrl_id)
+
+    # Center map on mid-point
+    if not actual_df.empty:
+        center_lat = float(actual_df["latitude"].mean())
+        center_lon = float(actual_df["longitude"].mean())
+    elif not planned_df.empty:
+        center_lat = float(planned_df["latitude"].mean())
+        center_lon = float(planned_df["longitude"].mean())
+    else:
+        center_lat, center_lon = 50.0, 10.0
+
+    m = folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=4,
+        tiles=None,
+    )
+
+    # 1. Humanitarian OpenStreetMap Team (HOT) hosted by OSM France (Unblocked)
+    folium.TileLayer(
+        tiles="https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+        attr="&copy; OpenStreetMap contributors, Humanitarian OpenStreetMap Team",
+        name="Humanitarian (Unblocked)",
+        subdomains="abc",
+        show=True,
+        control=True,
+    ).add_to(m)
+
+    # 2. OSM France mirror (Unblocked)
+    folium.TileLayer(
+        tiles="https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png",
+        attr="&copy; OpenStreetMap France & OpenStreetMap contributors",
+        name="OSM France (Unblocked)",
+        subdomains="abc",
+        show=False,
+        control=True,
+    ).add_to(m)
+
+    # 3. USGS Topographic Map (Unblocked)
+    folium.TileLayer(
+        tiles="https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}",
+        attr="USGS The National Map (Public Domain)",
+        name="USGS Topo (Unblocked)",
+        show=False,
+        control=True,
+    ).add_to(m)
+
+    # 4. OpenTopoMap (Unblocked)
+    folium.TileLayer(
+        tiles="https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+        attr="Map data: &copy; OpenStreetMap contributors, SRTM | Map style: &copy; OpenTopoMap",
+        name="OpenTopoMap",
+        subdomains="abc",
+        show=False,
+        control=True,
+    ).add_to(m)
+
+    # Collect FIR IDs from CRCO report
+    fir_breakdown = crco_report.fir_breakdown if crco_report else []
+    fir_ids = [b.fir_id for b in fir_breakdown]
+    query_fir_ids = list(set(fir_ids + [f.replace("FIR", "UIR") for f in fir_ids if f.endswith("FIR")]))
+    fir_boundaries = dataset.get_fir_boundaries(query_fir_ids)
+
+    fir_palette = [
+        "#2980b9", "#27ae60", "#8e44ad", "#d35400", "#16a085",
+        "#c0392b", "#f39c12", "#2c3e50", "#1abc9c", "#7f8c8d"
+    ]
+
+    fir_group = folium.FeatureGroup(name="🗺️ Traversed FIR Airspaces & CRCO Zones", show=True)
+
+    for idx, b in enumerate(fir_breakdown):
+        color = fir_palette[idx % len(fir_palette)]
+        coords = fir_boundaries.get(b.fir_id)
+        if not coords and b.fir_id.endswith("FIR"):
+            coords = fir_boundaries.get(b.fir_id[:-3] + "UIR")
+        if not coords and len(b.fir_id) > 4:
+            coords = fir_boundaries.get(b.fir_id[:4])
+
+        if coords:
+            poly_locs = [[lat, lon] for lat, lon in coords]
+            popup_html = f"""
+            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; min-width: 240px; font-size: 13px;">
+                <div style="background-color: {color}; color: white; padding: 6px 10px; border-radius: 4px; font-weight: bold; margin-bottom: 8px;">
+                    {b.fir_id} — {b.country_name}
+                </div>
+                <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                    <tr><td style="color: #7f8c8d; padding: 3px 0;">Unit Rate:</td><td style="text-align: right; font-weight: bold; color: #27ae60;">€{b.unit_rate_eur:.2f} / SU</td></tr>
+                    <tr><td style="color: #7f8c8d; padding: 3px 0;">Traversed Distance:</td><td style="text-align: right; font-weight: bold;">{b.estimated_distance_nm:.1f} nm ({b.estimated_distance_km:.1f} km)</td></tr>
+                    <tr><td style="color: #7f8c8d; padding: 3px 0;">Airspace Dwell:</td><td style="text-align: right; font-weight: bold;">{b.dwell_min:.1f} min</td></tr>
+                    <tr><td style="color: #7f8c8d; padding: 3px 0;">Distance Factor:</td><td style="text-align: right;">{b.distance_factor:.3f}</td></tr>
+                    <tr><td style="color: #7f8c8d; padding: 3px 0;">Weight Factor:</td><td style="text-align: right;">{b.weight_factor:.3f}</td></tr>
+                    <tr><td style="color: #7f8c8d; padding: 3px 0;">Service Units (SU):</td><td style="text-align: right; font-weight: bold;">{b.service_units:.3f} SU</td></tr>
+                    <tr style="border-top: 1px solid #eee;"><td style="color: #2c3e50; padding: 6px 0; font-weight: bold;">En-Route Charge:</td><td style="text-align: right; font-weight: bold; color: #2980b9; font-size: 13px;">€{b.charge_eur:,.2f} EUR</td></tr>
+                </table>
+            </div>
+            """
+            folium.Polygon(
+                locations=poly_locs,
+                color=color,
+                weight=2.5,
+                fill=True,
+                fill_color=color,
+                fill_opacity=0.20,
+                tooltip=f"<b>{b.fir_id}</b> ({b.country_name}) — Unit Rate: €{b.unit_rate_eur:.2f}/SU | Charge: €{b.charge_eur:,.2f} EUR",
+                popup=folium.Popup(popup_html, max_width=300),
+            ).add_to(fir_group)
+
+    fir_group.add_to(m)
+
+    # Add planned trajectory line
+    if not planned_df.empty:
+        planned_coords = list(zip(planned_df["latitude"], planned_df["longitude"]))
+        folium.PolyLine(
+            planned_coords,
+            color="#2980b9",
+            weight=3,
+            dash_array="6, 6",
+            opacity=0.85,
+            tooltip=f"Filed Flight Plan ({len(planned_df)} waypoints)",
+        ).add_to(m)
+
+    # Add actual trajectory line
+    if not actual_df.empty:
+        actual_coords = list(zip(actual_df["latitude"], actual_df["longitude"]))
+        act_dist_val = crco_report.actual_distance_nm if crco_report else 0.0
+        folium.PolyLine(
+            actual_coords,
+            color="#8e44ad",
+            weight=4,
+            opacity=0.95,
+            tooltip=f"Actual Flown Track ({act_dist_val:.1f} nm)",
+        ).add_to(m)
+
+        # Mark Departure (ADEP)
+        first_pt = actual_df.iloc[0]
+        folium.Marker(
+            [first_pt["latitude"], first_pt["longitude"]],
+            tooltip=f"Departure: {adep} (Off-Block Delay: {flight.get('dep_delay_min', 0)} min)",
+            icon=folium.Icon(color="green", icon="plane-departure", prefix="fa"),
+        ).add_to(m)
+
+        # Mark Destination (ADES)
+        last_pt = actual_df.iloc[-1]
+        folium.Marker(
+            [last_pt["latitude"], last_pt["longitude"]],
+            tooltip=f"Destination: {ades} (Arrival Delay: {flight.get('arr_delay_min', 0)} min)",
+            icon=folium.Icon(color="red", icon="plane-arrival", prefix="fa"),
+        ).add_to(m)
+
+    folium.LayerControl(position="topright", collapsed=True).add_to(m)
+
+    # Floating Summary Card in bottom-left
+    if crco_report:
+        badges = []
+        for idx, b in enumerate(fir_breakdown):
+            col = fir_palette[idx % len(fir_palette)]
+            badges.append(
+                f'<span style="background-color: {col}; color: white; padding: 2px 6px; border-radius: 3px; font-weight: 500; margin-right: 4px; display: inline-block; margin-bottom: 2px;">{b.fir_id} (€{b.unit_rate_eur:.0f})</span>'
+            )
+        badge_str = "".join(badges)
+        legend_html = f"""
+        <div style="position: fixed; bottom: 20px; left: 15px; max-width: 420px;
+                    background-color: white; border: 2px solid #bdc3c7; border-radius: 8px;
+                    z-index: 9999; font-size: 12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    padding: 10px 14px; box-shadow: 2px 2px 8px rgba(0,0,0,0.22);">
+            <div style="font-size: 13.5px; font-weight: bold; color: #2c3e50; margin-bottom: 4px;">
+                💶 Eurocontrol CRCO FIR Airspace Traversal Map
+            </div>
+            <div style="color: #555; margin-bottom: 6px;">
+                <b>Total En-Route Fee:</b> <span style="color: #27ae60; font-weight: bold; font-size: 13px;">€{crco_report.actual_crco_charge_eur:,.2f} EUR</span> |
+                <b>Total SUs:</b> <b>{crco_report.total_service_units:.2f} SU</b> |
+                <b>Distance:</b> <b>{crco_report.actual_distance_nm:.0f} nm</b>
+            </div>
+            <div style="margin-top: 4px; font-size: 11.5px; line-height: 1.4;">
+                <b>Traversed FIR Charging Zones:</b><br>{badge_str}
+            </div>
+        </div>
+        """
+        m.get_root().html.add_child(folium.Element(legend_html))
+
+    if output_html_path:
+        out_p = Path(output_html_path)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        m.save(str(out_p))
+
+    return m
+

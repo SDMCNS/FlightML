@@ -20,6 +20,9 @@ from flightml.eval.aircraft_engine_perf import (
 from flightml.eval.multi_level_kpis import (
     query_multi_level_kpis,
     get_dataset_date_bounds,
+    get_available_firs,
+    query_fir_traffic_segmentation,
+    FIRTrafficSegmentSummary,
 )
 from flightml.eval.flight_twins import compare_twin_flights, render_twin_comparison_map
 from flightml.eval.cdo_analyzer import (
@@ -75,6 +78,7 @@ from flightml.eval.surface_taxi import (
 from flightml.eval.jet_fuel_prices import get_all_weekly_fuel_prices_df
 from flightml.viz.map_builder import (
     create_trajectory_map,
+    create_flight_fir_charge_map,
     create_grid_saturation_map,
     create_conflict_map,
     create_world_navaids_map,
@@ -990,6 +994,19 @@ with tab_cat_single:
                     f"+ Eurocontrol CRCO Navigation Fees: **€{crco_rep.actual_crco_charge_eur:,.2f} EUR**."
                 )
                 if crco_rep.fir_breakdown:
+                    st.subheader("🗺️ Traversed FIR Airspace & CRCO Charging Zones Map")
+                    st.caption(
+                        "Interactive map displaying the planned and flown flight path underlaid with the certified "
+                        "boundary polygon of each Flight Information Region (FIR) traversed, color-coded with Eurocontrol CRCO national charging rates (€/SU)."
+                    )
+                    fir_charge_map = create_flight_fir_charge_map(ds, int(active_flight_id), crco_report=crco_rep)
+                    st_folium(
+                        fir_charge_map,
+                        width=1200,
+                        height=480,
+                        returned_objects=[],
+                        key=f"crco_fir_map_{selected_period}_{active_flight_id}",
+                    )
                     st.dataframe(pd.DataFrame([b.__dict__ for b in crco_rep.fir_breakdown]), use_container_width=True)
 
             contrail_rep = analyze_flight_wind_and_contrails(ds, int(active_flight_id))
@@ -1149,9 +1166,14 @@ with tab_cat_system:
             d_min_obj = pd.to_datetime("2016-11-01").date()
             d_max_obj = pd.to_datetime("2016-11-30").date()
 
+        # FIR Filter options
+        avail_firs = get_available_firs(ds)
+        fir_opt_map = {f["label"]: f["fir_id"] for f in avail_firs}
+        fir_options = ["All FIRs (Network-Wide)"] + list(fir_opt_map.keys())
+
         # Timeframe & Level Scoping Bar
         with st.container():
-            col_tf1, col_tf2, col_tf3 = st.columns([2, 2, 2])
+            col_tf1, col_tf2 = st.columns([1, 1])
             with col_tf1:
                 date_range_sel = st.date_input(
                     "📅 Calendar Timeframe (Start — End):",
@@ -1183,30 +1205,46 @@ with tab_cat_system:
                 )
                 h_start, h_end = hour_range_sel[0], hour_range_sel[1]
 
+            col_tf3, col_tf4 = st.columns([2, 1])
             with col_tf3:
                 kpi_tier = st.radio(
                     "🎯 KPI Aggregation Tier:",
-                    options=["🌐 Network Level", "✈️ Fleet Level", "🛫 Airport Level", "🔍 Flight Level"],
+                    options=["🌐 Network Level", "📡 FIR Airspace Tier", "✈️ Fleet Level", "🛫 Airport Level", "🔍 Flight Level"],
                     index=0,
                     horizontal=True,
                     key=f"kpi_tier_radio_{selected_period}",
+                )
+            with col_tf4:
+                selected_fir_label = st.selectbox(
+                    "🗺️ Filter by FIR Airspace:",
+                    options=fir_options,
+                    index=0,
+                    key=f"kpi_fir_filter_{selected_period}",
+                    help="Scope metrics to flights that traversed or arrived/departed within a specific European Flight Information Region (FIR).",
+                )
+                selected_fir_id = (
+                    fir_opt_map.get(selected_fir_label, None)
+                    if selected_fir_label != "All FIRs (Network-Wide)"
+                    else None
                 )
 
         st.divider()
 
         # Tier Views
         if kpi_tier == "🌐 Network Level":
+            fir_scope_desc = f" (Scoped to {selected_fir_id})" if selected_fir_id else ""
             with st.spinner("Aggregating network-wide KPIs across filtered timeframe..."):
                 net_summary = query_multi_level_kpis(
                     ds,
                     level="network",
+                    fir_filter=selected_fir_id,
                     start_date=filter_start_str,
                     end_date=filter_end_str,
                     hour_start=h_start,
                     hour_end=h_end,
                 )
 
-            st.subheader(f"🌐 Network-Wide Operational & Environmental KPI Scorecard")
+            st.subheader(f"🌐 Network-Wide Operational & Environmental KPI Scorecard{fir_scope_desc}")
             st.info(f"📅 **Timeframe:** `{net_summary.time_window}` | **Diurnal Window:** `{net_summary.hour_window}` | **Active Network Flights:** `{net_summary.total_flights:,}`")
 
             nk1, nk2, nk3, nk4 = st.columns(4)
@@ -1220,6 +1258,120 @@ with tab_cat_system:
             nk6.metric("Avg Stage Distance", f"{net_summary.avg_actual_dist_nm:,.0f} nm")
             nk7.metric("Avg Requested Altitude", f"FL{net_summary.avg_requested_fl:.0f}")
             nk8.metric("Est. Detour Fuel Cost", f"€{net_summary.total_estimated_cost_eur:,.0f} EUR", f"{net_summary.total_estimated_fuel_penalty_kg:,.0f} kg fuel")
+
+        elif kpi_tier == "📡 FIR Airspace Tier":
+            active_fir = selected_fir_id or (avail_firs[0]["fir_id"] if avail_firs else "EGTTFIR")
+            with st.spinner(f"Analyzing FIR airspace traffic segmentation for {active_fir}..."):
+                fir_seg = query_fir_traffic_segmentation(
+                    ds,
+                    fir_id=active_fir,
+                    start_date=filter_start_str,
+                    end_date=filter_end_str,
+                    hour_start=h_start,
+                    hour_end=h_end,
+                )
+
+            st.subheader(f"📡 {fir_seg.fir_id} Airspace Operational & Traffic Segmentation Scorecard")
+            st.caption(
+                f"**Member State / Country:** `{fir_seg.country_name}` | "
+                f"**Certified CRCO Unit Rate:** `€{fir_seg.unit_rate_eur:.2f} / SU` | "
+                f"**Timeframe:** `{fir_seg.time_window}` ({fir_seg.hour_window})"
+            )
+
+            sf1, sf2, sf3, sf4, sf5 = st.columns(5)
+            sf1.metric("Total Movements", f"{fir_seg.total_flights:,}")
+            sf2.metric("Over-flights", f"{fir_seg.overflights_count:,}", f"{fir_seg.overflights_pct:.1f}% share")
+            sf3.metric("Airport Arrivals", f"{fir_seg.arrivals_count:,}", f"{fir_seg.arrivals_pct:.1f}% share")
+            sf4.metric("Airport Departures", f"{fir_seg.departures_count:,}", f"{fir_seg.departures_pct:.1f}% share")
+            sf5.metric("Internal / Domestic", f"{fir_seg.internal_count:,}", f"{fir_seg.internal_pct:.1f}% share")
+
+            # Traffic Segmentation Visual & Table
+            st.markdown("#### 📊 Airspace Traffic Segmentation Breakdown (Overflights vs. Arrivals vs. Departures vs. Internal)")
+            if fir_seg.categories:
+                cat_df = pd.DataFrame(fir_seg.categories)
+
+                col_cg1, col_cg2 = st.columns([1, 1])
+                with col_cg1:
+                    chart_vol = alt.Chart(cat_df).mark_bar().encode(
+                        x=alt.X("traffic_type:N", title="Traffic Category", sort="-y"),
+                        y=alt.Y("flight_count:Q", title="Flight Movements"),
+                        color=alt.Color(
+                            "traffic_type:N",
+                            scale=alt.Scale(
+                                domain=["Overflight", "Arrival", "Departure", "Internal"],
+                                range=["#3498db", "#2ecc71", "#e67e22", "#9b59b6"],
+                            ),
+                            legend=None,
+                        ),
+                        tooltip=["traffic_type", "flight_count", "share_pct", "avg_dwell_min", "avg_arr_delay_min"],
+                    ).properties(height=260, title="Flight Volume by Airspace Role")
+                    st.altair_chart(chart_vol, use_container_width=True)
+
+                with col_cg2:
+                    chart_delay = alt.Chart(cat_df).mark_bar().encode(
+                        x=alt.X("traffic_type:N", title="Traffic Category", sort="-y"),
+                        y=alt.Y("avg_arr_delay_min:Q", title="Avg Arrival Delay (min)"),
+                        color=alt.Color(
+                            "traffic_type:N",
+                            scale=alt.Scale(
+                                domain=["Overflight", "Arrival", "Departure", "Internal"],
+                                range=["#3498db", "#2ecc71", "#e67e22", "#9b59b6"],
+                            ),
+                            legend=None,
+                        ),
+                        tooltip=["traffic_type", "avg_arr_delay_min", "avg_dep_delay_min", "pct_severe_arr_30m"],
+                    ).properties(height=260, title="Arrival Delay Punctuality by Airspace Role")
+                    st.altair_chart(chart_delay, use_container_width=True)
+
+                st.dataframe(cat_df, use_container_width=True)
+
+            # Top City Pair Corridors Breakdown
+            st.markdown(f"#### 🛫 Top Route Corridors Crossing {fir_seg.fir_id}")
+            t_ov, t_ar, t_dp, t_in = st.tabs([
+                "✈️ Over-flight Corridors",
+                "🛬 Airport Arrival Corridors",
+                "🛫 Airport Departure Corridors",
+                "🔄 Internal / Domestic Corridors",
+            ])
+            with t_ov:
+                ov_corr = fir_seg.top_corridors.get("Overflight", [])
+                if ov_corr:
+                    st.dataframe(pd.DataFrame(ov_corr).rename(columns={"pair": "City Pair Corridor", "count": "Flights"}), use_container_width=True)
+                else:
+                    st.info("No recorded overflight city pairs matching the active filters.")
+            with t_ar:
+                ar_corr = fir_seg.top_corridors.get("Arrival", [])
+                if ar_corr:
+                    st.dataframe(pd.DataFrame(ar_corr).rename(columns={"pair": "City Pair Corridor", "count": "Flights"}), use_container_width=True)
+                else:
+                    st.info("No recorded arrival city pairs matching the active filters.")
+            with t_dp:
+                dp_corr = fir_seg.top_corridors.get("Departure", [])
+                if dp_corr:
+                    st.dataframe(pd.DataFrame(dp_corr).rename(columns={"pair": "City Pair Corridor", "count": "Flights"}), use_container_width=True)
+                else:
+                    st.info("No recorded departure city pairs matching the active filters.")
+            with t_in:
+                in_corr = fir_seg.top_corridors.get("Internal", [])
+                if in_corr:
+                    st.dataframe(pd.DataFrame(in_corr).rename(columns={"pair": "City Pair Corridor", "count": "Flights"}), use_container_width=True)
+                else:
+                    st.info("No recorded internal city pairs matching the active filters.")
+
+            # Network-Wide FIR League Table
+            st.markdown("#### 🗺️ European FIR League Table (Ranked by Total Airspace Movements)")
+            all_firs_summary = query_multi_level_kpis(
+                ds,
+                level="fir",
+                start_date=filter_start_str,
+                end_date=filter_end_str,
+                hour_start=h_start,
+                hour_end=h_end,
+                min_flights=20,
+                limit=30,
+            )
+            if all_firs_summary.records:
+                st.dataframe(pd.DataFrame(all_firs_summary.records), use_container_width=True)
 
         elif kpi_tier == "✈️ Fleet Level":
             col_fl_sub1, col_fl_sub2, col_fl_sub3 = st.columns([2, 1, 1])
@@ -1236,11 +1388,13 @@ with tab_cat_system:
                 fleet_top_n = st.slider("Top Entities Count", 5, 50, 15, key=f"fl_top_{selected_period}")
 
             grp_key = "operator" if "operator" in fleet_mode.lower() else "aircraft"
+            fir_scope_desc = f" (Scoped to {selected_fir_id})" if selected_fir_id else ""
             with st.spinner(f"Aggregating fleet KPIs by {fleet_mode}..."):
                 fleet_summary = query_multi_level_kpis(
                     ds,
                     level="fleet",
                     group_by=grp_key,
+                    fir_filter=selected_fir_id,
                     start_date=filter_start_str,
                     end_date=filter_end_str,
                     hour_start=h_start,
@@ -1249,7 +1403,7 @@ with tab_cat_system:
                     limit=fleet_top_n,
                 )
 
-            st.subheader(f"✈️ Fleet Performance Scorecard — by {fleet_summary.group_by}")
+            st.subheader(f"✈️ Fleet Performance Scorecard — by {fleet_summary.group_by}{fir_scope_desc}")
             st.info(f"📅 **Timeframe:** `{fleet_summary.time_window}` | **Diurnal Window:** `{fleet_summary.hour_window}` | **Analyzed Fleets:** `{len(fleet_summary.records)}` (≥{fleet_min_flts} flights)")
 
             if fleet_summary.records:
@@ -1278,11 +1432,13 @@ with tab_cat_system:
                 ap_top_n = st.slider("Top Hubs Count", 5, 50, 15, key=f"ap_top_{selected_period}")
 
             grp_key = "departure" if "departure" in airport_mode.lower() else "arrival"
+            fir_scope_desc = f" (Scoped to {selected_fir_id})" if selected_fir_id else ""
             with st.spinner(f"Aggregating airport KPIs by {airport_mode}..."):
                 airport_summary = query_multi_level_kpis(
                     ds,
                     level="airport",
                     group_by=grp_key,
+                    fir_filter=selected_fir_id,
                     start_date=filter_start_str,
                     end_date=filter_end_str,
                     hour_start=h_start,
@@ -1291,7 +1447,7 @@ with tab_cat_system:
                     limit=ap_top_n,
                 )
 
-            st.subheader(f"🛫 Airport Performance Scorecard — {airport_summary.group_by}")
+            st.subheader(f"🛫 Airport Performance Scorecard — {airport_summary.group_by}{fir_scope_desc}")
             st.info(f"📅 **Timeframe:** `{airport_summary.time_window}` | **Diurnal Window:** `{airport_summary.hour_window}` | **Analyzed Hubs:** `{len(airport_summary.records)}` (≥{ap_min_flts} flights)")
 
             if airport_summary.records:
@@ -1307,13 +1463,15 @@ with tab_cat_system:
                 st.dataframe(ap_df, use_container_width=True)
 
         else: # 🔍 Flight Level
-            st.subheader("🔍 Micro Flight-Level Search & KPI Inspector")
-            st.caption(f"Browse individual flight trajectories and efficiency metrics matching `{filter_start_str} to {filter_end_str}` ({h_start:02d}:00–{h_end:02d}:59 UTC).")
+            fir_scope_desc = f" traversing {selected_fir_id}" if selected_fir_id else ""
+            st.subheader(f"🔍 Micro Flight-Level Search & KPI Inspector{fir_scope_desc}")
+            st.caption(f"Browse individual flight trajectories and efficiency metrics matching `{filter_start_str} to {filter_end_str}` ({h_start:02d}:00–{h_end:02d}:59 UTC){fir_scope_desc}.")
 
             with st.spinner("Querying individual flight records matching timeframe..."):
                 flight_summary = query_multi_level_kpis(
                     ds,
                     level="flight",
+                    fir_filter=selected_fir_id,
                     start_date=filter_start_str,
                     end_date=filter_end_str,
                     hour_start=h_start,

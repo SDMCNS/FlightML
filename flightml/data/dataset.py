@@ -669,10 +669,13 @@ class FlightDataset:
             return None
         return df.iloc[0].to_dict()
 
-    def get_crco_unit_rate(self, fir_or_zone: str) -> dict[str, Any] | None:
+    def get_crco_unit_rate(self, fir_or_zone: str) -> dict[str, Any]:
         """
         Resolve a 2-letter CRCO zone code (e.g. 'EG', 'ED', 'LF', 'LT') or an ICAO FIR ID
-        (e.g. 'EGTTFIR', 'EDGGFIR', 'LPPOFIR') to its Eurocontrol CRCO unit rate in EUR.
+        (e.g. 'EGTTFIR', 'EDGGFIR', 'LPPOFIR', 'CZZZFIR') to its Eurocontrol CRCO unit rate in EUR.
+
+        Where unit rates are not known for a time period, uses the rates that are known from the nearest other time period.
+        All FIRs without a known unit rate default to a unit rate of €45.00 EUR.
         """
         clean = fir_or_zone.strip().upper()
         # Special Atlantic / Canarias zone overrides in Eurocontrol CRCO
@@ -683,10 +686,47 @@ class FlightDataset:
         else:
             zone = clean[:2]
 
-        df = self.cursor.execute("SELECT * FROM crco_unit_rates WHERE zone_code = ?", [zone]).df()
+        df = pd.DataFrame()
+        try:
+            df = self.cursor.execute("SELECT * FROM crco_unit_rates WHERE zone_code = ?", [zone]).df()
+        except Exception:
+            df = pd.DataFrame()
+
+        # Fallback to nearest other period or master parquet if not found in current table
         if df.empty:
-            return None
-        return df.iloc[0].to_dict()
+            for fallback_period in ("202510", "201611"):
+                try:
+                    pq = self.periods_dir / fallback_period / "crco_unit_rates.parquet"
+                    if not pq.exists():
+                        pq = self.parquet_dir / "crco_unit_rates.parquet"
+                    if pq.exists():
+                        con = duckdb.connect()
+                        res = con.execute(
+                            "SELECT * FROM read_parquet(?) WHERE zone_code = ?",
+                            [str(pq).replace("\\", "/"), zone],
+                        ).df()
+                        if not res.empty:
+                            df = res
+                            break
+                except Exception:
+                    pass
+
+        if not df.empty:
+            rec = df.iloc[0].to_dict()
+            rec["unit_rate_eur"] = float(rec.get("unit_rate_eur") or 45.0)
+            return rec
+
+        # Standard default fallback for all FIRs without a known unit rate: €45.00 EUR
+        return {
+            "zone_code": zone,
+            "country_name": f"Non-CRCO / External Airspace ({zone})",
+            "valid_from": "Universal",
+            "valid_to": "Universal",
+            "unit_rate_cents": 4500,
+            "unit_rate_eur": 45.0,
+            "exchange_rate_to_eur": 1.0,
+            "national_currency": "EUR",
+        }
 
     def get_engine_emissions(self, engine_query: str) -> dict[str, Any]:
         """

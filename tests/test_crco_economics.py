@@ -61,3 +61,49 @@ def test_detect_route_charge_avoidance_and_fastapi():
     assert r1.status_code == 200
     assert r1.json()["ectrl_id"] == fid
 
+
+def test_crco_transatlantic_trajectory_traversal_and_map():
+    """
+    Test transatlantic flight 202007029 (KORD -> LFPG) in period 201611:
+    - Traverses full sequence of 7 FIRs (not merely 2 naive departure/arrival FIRs).
+    - Unlisted / non-CRCO oceanic airspaces default strictly to €45.00 EUR/SU.
+    - Official CRCO rates apply for Shanwick/UK, Shannon/Ireland, London/UK, and Paris/France.
+    - create_flight_fir_charge_map generates an interactive Folium map with FIR polygons.
+    """
+    import folium
+    from flightml.viz.map_builder import create_flight_fir_charge_map
+
+    ds = FlightDataset(period="201611")
+    rep = compute_flight_crco_charges(ds, ectrl_id=202007029)
+    assert rep is not None
+    assert rep.ectrl_id == 202007029
+    assert rep.adep == "KORD"
+    assert rep.ades == "LFPG"
+
+    # Must have all 7 traversed FIRs
+    assert len(rep.fir_breakdown) == 7
+    fir_ids = [b.fir_id for b in rep.fir_breakdown]
+    assert fir_ids == ["KKKKFIR", "CCCCFIR", "CZZZFIR", "EGGXFIR", "EISNFIR", "EGTTFIR", "LFFFFIR"]
+
+    # Check fallback rates (€45.00 EUR for KKKK, CCCC, CZZZ)
+    rate_map = {b.fir_id: b.unit_rate_eur for b in rep.fir_breakdown}
+    assert rate_map["KKKKFIR"] == 45.0
+    assert rate_map["CCCCFIR"] == 45.0
+    assert rate_map["CZZZFIR"] == 45.0
+    assert rate_map["EGGXFIR"] == 87.75
+    assert rate_map["EISNFIR"] == 34.70
+    assert rate_map["EGTTFIR"] == 87.75
+    assert rate_map["LFFFFIR"] == 79.58
+
+    # Sum of segment distances matches actual flight distance
+    total_seg_nm = sum(b.estimated_distance_nm for b in rep.fir_breakdown)
+    assert abs(total_seg_nm - rep.actual_distance_nm) < 1.0
+
+    # Total navigation fee computed
+    assert rep.actual_crco_charge_eur > 6000.0
+
+    # Interactive FIR underlay Folium map
+    fir_map = create_flight_fir_charge_map(ds, 202007029, crco_report=rep)
+    assert isinstance(fir_map, folium.Map)
+
+
