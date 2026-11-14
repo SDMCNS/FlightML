@@ -228,12 +228,23 @@ def test_marl_atfm_simulator(dataset: FlightDataset):
         assert abs(strat.net_economic_payoff_eur - (strat.baseline_cost_no_gaming_eur - strat.post_gaming_cost_eur)) < 1.0
 
     # Verify blow-by-blow decision log and infilled assumptions glossary
-    assert len(res.decision_log) >= 8
+    assert len(res.decision_log) >= 30  # Comprehensive stream of all tactical flight actions (50+ steps)
     assert len(res.assumptions_glossary) >= 5
     dl0 = res.decision_log[0]
     assert dl0.step_number == 1
     assert dl0.action_type == "REGULATION_ISSUED"
     assert dl0.timestamp_rel == "T+00:00"
+
+    # Mathematical tie-out: tactical actions match aggregate network delay saved and economic payoff
+    tactical_entries = res.decision_log[2:-1]
+    assert len(tactical_entries) == sum(
+        s.slots_swapped_count + s.tactical_speedups_count + s.tactical_cancellations_count
+        for s in res.airline_strategies
+    )
+    delay_mitigated_sum = sum(-e.delay_impact_min for e in tactical_entries)
+    benefit_eur_sum = sum(e.economic_benefit_eur for e in tactical_entries)
+    assert abs(delay_mitigated_sum - res.total_network_delay_saved_min) < 1e-4
+    assert abs(benefit_eur_sum - res.total_net_economic_benefit_eur) < 1e-4
 
     d = res.to_dict()
     assert d["regulated_airport"] == "EGLL"

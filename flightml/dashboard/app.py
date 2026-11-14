@@ -4007,9 +4007,53 @@ with tab_cat_ai_lab:
             if dec_log:
                 st.subheader("📜 Blow-by-Blow Autonomous Decision Log")
                 st.caption(
-                    "Chronological sequence of autonomous decisions: Eurocontrol GDP initiation, assumption infilling, "
-                    "flagship prioritization, tactical regional cancellations, bilateral slot trades, gate delay absorption, and Nash equilibrium convergence."
+                    "Comprehensive chronological stream of autonomous decisions across all participating airline agents: "
+                    "Eurocontrol GDP initiation, assumption infilling, tactical regional cancellations, intra-fleet swaps, bilateral slot trades, en-route speedups, and Nash equilibrium convergence."
                 )
+
+                # Aggregate tactical decision metric cards
+                tot_swaps = sum(getattr(s, "slots_swapped_count", 0) for s in marl_res.airline_strategies)
+                tot_speedups = sum(getattr(s, "tactical_speedups_count", 0) for s in marl_res.airline_strategies)
+                tot_cancellations = sum(getattr(s, "tactical_cancellations_count", 0) for s in marl_res.airline_strategies)
+                tot_decisions = len(dec_log)
+
+                dl_c1, dl_c2, dl_c3, dl_c4 = st.columns(4)
+                dl_c1.metric("Total Decisions Logged", f"{tot_decisions} steps")
+                dl_c2.metric("Tactical Slot Swaps", f"{tot_swaps} swaps")
+                dl_c3.metric("Tactical Speedups", f"{tot_speedups} speedups")
+                dl_c4.metric("Tactical Cancellations", f"{tot_cancellations} cancelled")
+
+                # Interactive Filtering Controls
+                fcol1, fcol2, fcol3 = st.columns([1.2, 1.2, 2.0])
+                all_agents = sorted({entry.agent_name for entry in dec_log if entry.agent_name})
+                all_actions = sorted({entry.action_type for entry in dec_log if entry.action_type})
+
+                sel_agent = fcol1.selectbox("Filter by Airline Agent", ["All Agents"] + all_agents, key="marl_filter_agent")
+                sel_action = fcol2.selectbox("Filter by Action Type", ["All Actions"] + all_actions, key="marl_filter_action")
+                search_kw = fcol3.text_input(
+                    "Search Flight / Route / Rationale",
+                    placeholder="e.g. BAW, A320, cancellation, swap, connection...",
+                    key="marl_filter_search",
+                )
+
+                filtered_log = dec_log
+                if sel_agent != "All Agents":
+                    filtered_log = [e for e in filtered_log if e.agent_name == sel_agent]
+                if sel_action != "All Actions":
+                    filtered_log = [e for e in filtered_log if e.action_type == sel_action]
+                if search_kw.strip():
+                    kw = search_kw.strip().lower()
+                    filtered_log = [
+                        e for e in filtered_log
+                        if kw in e.flight_id.lower()
+                        or kw in e.route.lower()
+                        or kw in e.operational_reasoning.lower()
+                        or kw in e.infilled_assumptions.lower()
+                        or kw in e.counterparty.lower()
+                    ]
+
+                st.caption(f"Showing **{len(filtered_log)}** of **{len(dec_log)}** decisions matching active filters.")
+
                 log_df = pd.DataFrame([
                     {
                         "Step": f"#{entry.step_number}",
@@ -4023,9 +4067,9 @@ with tab_cat_ai_lab:
                         "Delay Impact": f"{entry.delay_impact_min:+.0f} min" if entry.delay_impact_min != 0 else "0 min",
                         "Net Value Created (€)": f"€{entry.economic_benefit_eur:,.2f} EUR" if entry.economic_benefit_eur != 0 else "€0.00 EUR",
                     }
-                    for entry in dec_log
+                    for entry in filtered_log
                 ])
-                st.dataframe(log_df, use_container_width=True)
+                st.dataframe(log_df, use_container_width=True, height=500)
 
             # Per-Airline Agent Net Gains & Losses Balance Sheet
             st.subheader("💰 Per-Airline Agent Net Gains & Losses Balance Sheet")
