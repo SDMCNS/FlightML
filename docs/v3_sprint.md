@@ -144,29 +144,41 @@ The platform operates across an indexed columnar Parquet corpus:
 
 ---
 
-### Epic 6: V3 Dashboard & REST API Evolution
+### Epic 6: V3 Dashboard & REST API Evolution [COMPLETED]
 **Goal**: Expose all longitudinal, predictive, and meteorological capabilities in the interactive UI and programmatic API.
 
-- [ ] **Task 6.1: Dedicated "Longitudinal & Seasonal Trends" View**:
-  - Add an interactive Streamlit page allowing multi-period selection and side-by-side YoY trendlines.
-  - Visualizers: Seasonal traffic curves, fleet neo/MAX share progression, and network emissions intensity.
-- [ ] **Task 6.2: Side-by-Side Period Comparison Tool**:
-  - Direct comparative analyzer: select Period A (e.g. `202410`) and Period B (e.g. `202510`) to view differential heatmaps of airspace saturation and delay deltas.
-- [ ] **Task 6.3: High-Resolution Grid Map Controls**:
-  - Incorporate the $0.5^\circ$ to $5.0^\circ$ spatial grid resolution selector directly on the saturation map.
-- [ ] **Task 6.4: FastAPI v3 Endpoints**:
-  - `/api/v3/longitudinal/trends`: Historical and seasonal traffic/emissions time-series.
-  - `/api/v3/longitudinal/compare`: Pairwise period delta comparison.
-  - `/api/v3/predict/saturation`: Forward sector saturation projections.
+- [x] **Task 6.1: Dedicated "Longitudinal & Seasonal Trends" View**:
+  - Implemented top-level category `"📈 Longitudinal & Predictive Trends"` in `flightml/dashboard/app.py`.
+  - Sub-tab 1: `📊 Multi-Period Timeline & Fleet Evolution` with cross-sectional metric KPIs, tabular data across all 7 historical archives, and interactive line charts for daily traffic volume, neo/MAX eco-fleet share, arrival delay, and flown distance.
+  - Sub-tab 2: `🔄 Year-over-Year (YoY) & Seasonality` with pairwise period delta benchmarking (daily volume, arrival delay, distance, CO₂, fleet penetration) and 3-season surge curves (Winter Feb vs Summer Jun vs Autumn Oct) identifying top leisure destination surges.
+- [x] **Task 6.2: Side-by-Side Period Comparison Tool & Policy Economics**:
+  - Built pairwise YoY comparative analyzer identifying top expanding and contracting airline carriers and aircraft models.
+  - Sub-tab 4: `💶 Airline Economics & Delay Contagion` integrating Direct Operating Cost (DOC) breakdown, route charge avoidance detour detection, Single European Sky (SES) rate harmonization impact simulation, and airframe delay contagion super-spreader detection.
+- [x] **Task 6.3: High-Resolution Grid Map & Bottleneck Forecasting Controls**:
+  - Sub-tab 3: `🔮 Predictive Airspace Saturation Forecaster` with interactive sliders for forecast horizon year (2026-2028), season (summer/winter/autumn), compound growth rate (1.0%–8.0%), spatial grid resolution (0.5°, 1.0°, 2.0°, 5.0°), and sector capacity threshold.
+  - Identifies forward sector capacity breaches and top congested spatial density hotspots.
+- [x] **Task 6.4: FastAPI v3 Endpoints**:
+  - Implemented REST API endpoints in `flightml/api/app.py`:
+    - `GET /api/v3/longitudinal/timeline`: Multi-period historical metrics & fleet shares.
+    - `GET /api/v3/longitudinal/compare`: Pairwise YoY delta benchmarking.
+    - `GET /api/v3/longitudinal/seasonality`: 3-season traffic & delay surge decomposition.
+    - `POST /api/v3/predict/airspace`: Sector capacity breach and spatial saturation forecasting.
+    - `GET /api/v3/economics/flight-doc/{ectrl_id}`: Flight DOC component breakdown (€ EUR).
+    - `GET /api/v3/economics/avoidance-corridors`: Detection of route charge avoidance detours.
+    - `POST /api/v3/economics/simulate-harmonization`: European flat rate counterfactual simulation.
+    - `GET /api/v3/delay/spreaders`: Airframe rotation delay super-spreader detection.
+    - `POST /api/v3/sim/network-shock`: Runway and sector network resilience shock simulator.
+  - Full automated test suite in `tests/test_api_v3.py` (8/8 passing).
 
 ---
 
-## 📅 Immediate Next Steps
+## 🏆 V3 Evolution Summary & Status
 
-1. **Sprint Kickoff Implementation**:
-   - Begin **Epic 1 (Task 1.1 & 1.2)**: Implement `flightml/eval/longitudinal.py` with multi-period comparative aggregators (YoY deltas, seasonal volume indices, and fleet share evolution).
-   - Write comprehensive unit tests for longitudinal comparison in `tests/test_longitudinal.py`.
-2. **Dashboard Integration**:
-   - Add the "Longitudinal & Multi-Period Trends" tab in `flightml/dashboard/app.py`.
-3. **Meteorological Pipeline**:
-   - Begin **Epic 2 (Task 2.1)**: Build the GRIB2 wind field reader to decode `data/202510.grib` and couple with October 2025 flights.
+| Epic | Description | Status | Key Deliverables |
+| :--- | :--- | :--- | :--- |
+| **Epic 1** | Multi-Period Longitudinal & YoY Comparative Engine | **COMPLETED** | `flightml/eval/longitudinal.py`, `tests/test_longitudinal.py`, CLI commands |
+| **Epic 2** | High-Resolution GRIB2 Atmospheric Reanalysis | **ON HOLD** | Deferred per user instruction (continuous GRIB source unavailable) |
+| **Epic 3** | Predictive Airspace Saturation & Bottleneck Forecaster | **COMPLETED** | `flightml/models/airspace_forecaster.py`, `tests/test_airspace_forecaster.py`, CLI |
+| **Epic 4** | Airline Behavioral Economics & Route Charge Elasticity | **COMPLETED** | `flightml/eval/airline_economics.py`, `tests/test_airline_economics.py`, CLI |
+| **Epic 5** | Aircraft Tail-Tracking & Delay Contagion Graph | **COMPLETED** | `flightml/models/delay_contagion_graph.py`, `tests/test_delay_contagion_graph.py`, CLI |
+| **Epic 6** | V3 Dashboard & REST API Evolution | **COMPLETED** | `flightml/dashboard/app.py`, `flightml/api/app.py`, `tests/test_api_v3.py` |

@@ -68,6 +68,10 @@ from flightml.eval.jet_fuel_prices import (
     get_all_weekly_fuel_prices_df,
     get_weekly_fuel_price,
 )
+from flightml.eval.longitudinal import LongitudinalEngine
+from flightml.models.airspace_forecaster import AirspaceForecaster
+from flightml.eval.airline_economics import AirlineEconomicsEngine
+from flightml.models.delay_contagion_graph import DelayContagionGraphEngine
 
 app = FastAPI(
     title="FlightML API",
@@ -807,3 +811,141 @@ def get_tail_swaps_endpoint(
     ds = FlightDataset(period=period)
     res = optimize_hub_tail_swaps(ds, operator=operator, hub_airport=airport, date_str=date)
     return res.to_dict()
+
+
+# ----------------- v3 Endpoints: Longitudinal, Predictive & Economics -----------------
+
+@app.get("/api/v3/longitudinal/timeline")
+def get_longitudinal_timeline_endpoint() -> dict[str, Any]:
+    """Retrieve multi-period macro evolution timeline across all ingested Eurocontrol archives."""
+    engine = LongitudinalEngine()
+    tl_df = engine.get_timeline_dataframe()
+    return {
+        "periods_count": len(tl_df),
+        "timeline": tl_df.to_dict(orient="records"),
+    }
+
+
+@app.get("/api/v3/longitudinal/compare")
+def get_longitudinal_compare_endpoint(
+    baseline: str = Query(default="202410", description="Baseline period ID (e.g. 202410)"),
+    target: str = Query(default="202510", description="Target period ID (e.g. 202510)"),
+) -> dict[str, Any]:
+    """Controlled Year-over-Year (YoY) comparison of traffic, delays, fleet shifts, and city pairs."""
+    engine = LongitudinalEngine()
+    yoy = engine.compare_yoy(baseline, target)
+    return yoy.to_dict()
+
+
+@app.get("/api/v3/longitudinal/seasonality")
+def get_longitudinal_seasonality_endpoint(
+    year: int = Query(default=2024, description="Analysis year (e.g. 2024 or 2025)"),
+) -> dict[str, Any]:
+    """Three-season network decomposition (Winter, Summer, Autumn) with surge rates and delay elasticity."""
+    engine = LongitudinalEngine()
+    decomp = engine.decompose_seasonality(year)
+    return decomp.to_dict()
+
+
+@app.get("/api/v3/predict/airspace")
+def get_predict_airspace_endpoint(
+    year: int = Query(default=2026, description="Forecast horizon year"),
+    season: str = Query(default="summer", description="Season archetype ('summer', 'winter', 'autumn')"),
+    growth: float = Query(default=3.5, description="Projected traffic growth rate (%)"),
+    grid_size: float = Query(default=1.0, ge=0.5, le=5.0, description="Spatial grid resolution in degrees"),
+) -> dict[str, Any]:
+    """Forward forecast of European airspace sector capacity breaches and spatial grid hotspots."""
+    forecaster = AirspaceForecaster()
+    rep = forecaster.generate_comprehensive_forecast(
+        forecast_year=year,
+        season=season,
+        growth_scenario_pct=growth,
+        grid_size_deg=grid_size,
+    )
+    return rep.to_dict()
+
+
+@app.get("/api/v3/economics/flight-doc/{ectrl_id}")
+def get_flight_doc_endpoint(
+    ectrl_id: int,
+    period: str = Query(default="202510", description="Eurocontrol period"),
+    time_cost: float = Query(default=850.0, description="Cost of flight operational time (€/hour)"),
+) -> dict[str, Any]:
+    """Total Direct Operating Cost (DOC = Fuel € + Crew/Time € + CRCO Navigation Charges €) breakdown."""
+    ds = FlightDataset(period=period)
+    engine = AirlineEconomicsEngine(ds)
+    doc = engine.evaluate_flight_doc(ectrl_id, cost_of_time_eur_per_hour=time_cost)
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Flight {ectrl_id} not found in period {period}")
+    return doc.to_dict()
+
+
+@app.get("/api/v3/economics/avoidance-corridors")
+def get_avoidance_corridors_endpoint(
+    period: str = Query(default="202510", description="Eurocontrol period"),
+    min_flights: int = Query(default=50, description="Minimum corridor flight volume"),
+    top_n: int = Query(default=10, description="Top corridors to return"),
+) -> dict[str, Any]:
+    """Scan European network city pairs for systematic FIR route charge avoidance detours."""
+    ds = FlightDataset(period=period)
+    engine = AirlineEconomicsEngine(ds)
+    avoid_list = engine.scan_network_route_charge_avoidance(min_corridor_flights=min_flights, top_n=top_n)
+    return {
+        "period": period,
+        "avoidance_corridors_count": len(avoid_list),
+        "corridors": [a.to_dict() for a in avoid_list],
+    }
+
+
+@app.get("/api/v3/economics/simulate-harmonization")
+def get_simulate_harmonization_endpoint(
+    period: str = Query(default="202510", description="Eurocontrol period"),
+    rate: float = Query(default=72.50, description="Harmonized CRCO unit rate (€/SU)"),
+    sample: int = Query(default=25, description="Sample size for Monte Carlo flight scaling"),
+) -> dict[str, Any]:
+    """Simulate Single European Sky (SES) unified CRCO en-route navigation rate policy impact."""
+    ds = FlightDataset(period=period)
+    engine = AirlineEconomicsEngine(ds)
+    sim = engine.simulate_harmonized_eurocontrol_rate(harmonized_rate_eur=rate, sample_size=sample)
+    return sim.to_dict()
+
+
+@app.get("/api/v3/delay/spreaders")
+def get_delay_spreaders_endpoint(
+    period: str = Query(default="202510", description="Eurocontrol period"),
+    date: str = Query(default="2025-10-15", description="Analysis date (YYYY-MM-DD)"),
+    min_delay: float = Query(default=20.0, description="Minimum initial departure delay (min)"),
+    top_n: int = Query(default=10, description="Number of super-spreader flights to return"),
+) -> dict[str, Any]:
+    """Identify super-spreader flights where morning departure delays infected downstream aircraft rotations."""
+    ds = FlightDataset(period=period)
+    engine = DelayContagionGraphEngine(ds)
+    spreaders = engine.identify_super_spreaders(date_str=date, min_primary_delay_min=min_delay, top_n=top_n)
+    return {
+        "period": period,
+        "date": date,
+        "spreaders_count": len(spreaders),
+        "super_spreaders": [s.to_dict() for s in spreaders],
+    }
+
+
+@app.get("/api/v3/sim/network-shock")
+def get_network_shock_endpoint(
+    target: str = Query(default="EGLL", description="Disruption target (Airport e.g. EGLL or FIR e.g. EDUUUIR)"),
+    target_type: str = Query(default="AIRPORT", description="Target type ('AIRPORT' or 'FIR')"),
+    duration: float = Query(default=2.0, description="Disruption duration in hours"),
+    capacity_cut: float = Query(default=50.0, description="Capacity reduction percentage (0 to 100)"),
+    date: str = Query(default="2025-10-15", description="Simulation date (YYYY-MM-DD)"),
+    period: str = Query(default="202510", description="Eurocontrol period"),
+) -> dict[str, Any]:
+    """Simulate systemic delay contagion from an airport runway or FIR capacity shock."""
+    ds = FlightDataset(period=period)
+    engine = DelayContagionGraphEngine(ds)
+    shock = engine.simulate_network_shock(
+        disruption_target=target,
+        target_type=target_type,
+        duration_hours=duration,
+        capacity_cut_pct=capacity_cut,
+        date_str=date,
+    )
+    return shock.to_dict()
