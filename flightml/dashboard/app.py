@@ -3254,7 +3254,7 @@ with tab_cat_ai_lab:
         f2v = Flight2VecEngine(ds, period=selected_period)
         cached_count = f2v.get_cached_count()
 
-        col_c_info, col_c_btn = st.columns([2.5, 1.5])
+        col_c_info, col_c_btn1, col_c_btn2 = st.columns([2.0, 1.0, 1.0])
         with col_c_info:
             if cached_count > 0:
                 st.success(
@@ -3266,18 +3266,148 @@ with tab_cat_ai_lab:
                     "💡 **Pre-Vectorization Available**: Pre-vectorizing flights in batch persists 128D embeddings to disk, "
                     "enabling instantaneous full-corpus operational twin retrieval."
                 )
-        with col_c_btn:
-            if st.button("⚡ Pre-Vectorize Corpus (25k Flights)", key=f"btn_pre_vec_{selected_period}"):
-                with st.spinner("Pre-vectorizing flights via PyTorch batch matrix tensor operations..."):
+        with col_c_btn1:
+            if st.button("⚡ Vectorize 25k Batch", key=f"btn_pre_vec_25k_{selected_period}"):
+                with st.spinner("Pre-vectorizing 25,000 flights via PyTorch batch matrix tensor operations..."):
                     n_vec = f2v.build_vector_cache(limit=25000)
                 st.success(f"Successfully vectorized and cached {n_vec:,} flights!")
                 st.rerun()
+        with col_c_btn2:
+            if st.button("🚀 Vectorize All in DB", key=f"btn_pre_vec_all_{selected_period}"):
+                with st.spinner("Pre-vectorizing entire flight database via high-speed neural matrix tensor operations..."):
+                    n_vec = f2v.build_vector_cache(limit=None)
+                st.success(f"Successfully vectorized and cached all {n_vec:,} flights in the database!")
+                st.rerun()
+
+        # ----------------- FLIGHT SEARCH & FILTER ENGINE -----------------
+        with st.expander("🔎 Search & Filter Flights (ADEP, ADES, Operator, Season & Delay)", expanded=False):
+            st.markdown(
+                "Filter and inspect candidate flights across corridors, airline operators, seasons, and operational delay bands "
+                "to select a target flight for Flight2Vec embedding and operational twin analysis."
+            )
+            col_s1, col_s2, col_s3 = st.columns(3)
+            s_adep = col_s1.text_input("Origin Airport (ADEP)", value="", placeholder="e.g. EGLL, LFPG, EHAM", key=f"f2v_s_adep_{selected_period}").strip().upper()
+            s_ades = col_s2.text_input("Destination Airport (ADES)", value="", placeholder="e.g. EDDF, LEMD, LIRF", key=f"f2v_s_ades_{selected_period}").strip().upper()
+            s_op = col_s3.text_input("Airline Operator", value="", placeholder="e.g. BAW, RYR, DLH, AFR", key=f"f2v_s_op_{selected_period}").strip().upper()
+
+            col_s4, col_s5, col_s6 = st.columns([1.5, 1.5, 1])
+            avail_periods = list_available_periods(ds.data_dir)
+            s_season = col_s4.selectbox(
+                "Season / Traffic Cycle",
+                ["Current Cycle", "🌱 Early Spring / Winter (Feb)", "☀️ Summer Peak (Jun)", "🍂 Autumn Shoulder (Oct)"],
+                key=f"f2v_s_season_{selected_period}",
+            )
+            s_delay = col_s5.selectbox(
+                "Punctuality / Delay Status",
+                ["All Flights", "On-Time (≤ 0 min)", "Minor Delay (0 to 15 min)", "Moderate Delay (15 to 45 min)", "Severe Delay (> 45 min)"],
+                key=f"f2v_s_delay_{selected_period}",
+            )
+            with col_s6:
+                st.write("")
+                st.write("")
+                btn_do_search = st.button("🔎 Search Flights", key=f"btn_f2v_search_{selected_period}")
+
+            if btn_do_search:
+                target_period = selected_period
+                if "Feb" in s_season:
+                    matches = [p for p in avail_periods if p.endswith("02")]
+                    if matches:
+                        target_period = matches[-1]
+                elif "Jun" in s_season:
+                    matches = [p for p in avail_periods if p.endswith("06")]
+                    if matches:
+                        target_period = matches[-1]
+                elif "Oct" in s_season:
+                    matches = [p for p in avail_periods if p.endswith("10")]
+                    if matches:
+                        target_period = matches[-1]
+
+                search_ds = ds if target_period == selected_period else FlightDataset(period=target_period)
+
+                where_clauses = ["1=1"]
+                if s_adep:
+                    where_clauses.append(f"adep = '{s_adep}'")
+                if s_ades:
+                    where_clauses.append(f"ades = '{s_ades}'")
+                if s_op:
+                    where_clauses.append(f"ac_operator = '{s_op}'")
+                if s_delay == "On-Time (≤ 0 min)":
+                    where_clauses.append("arr_delay_min <= 0")
+                elif s_delay == "Minor Delay (0 to 15 min)":
+                    where_clauses.append("arr_delay_min BETWEEN 0 AND 15")
+                elif s_delay == "Moderate Delay (15 to 45 min)":
+                    where_clauses.append("arr_delay_min BETWEEN 15 AND 45")
+                elif s_delay == "Severe Delay (> 45 min)":
+                    where_clauses.append("arr_delay_min > 45")
+
+                where_sql = " AND ".join(where_clauses)
+                search_results = search_ds.query(f"""
+                    SELECT
+                        ectrl_id, adep, ades, ac_operator, ac_type, ac_reg,
+                        actual_distance_nm, actual_air_time_min, dep_delay_min, arr_delay_min,
+                        requested_fl, actual_off_block_time, actual_arrival_time
+                    FROM flights
+                    WHERE {where_sql}
+                    ORDER BY actual_off_block_time DESC
+                    LIMIT 40;
+                """)
+                st.session_state[f"f2v_search_results_{selected_period}"] = search_results
+
+            stored_results = st.session_state.get(f"f2v_search_results_{selected_period}")
+            if stored_results is not None:
+                if stored_results.empty:
+                    st.warning("No flights matched the specified search criteria.")
+                else:
+                    st.success(f"Found {len(stored_results)} matching candidate flights.")
+                    res_options = {
+                        f"#{r['ectrl_id']}: {r['ac_operator']} ({r['adep']} ➔ {r['ades']}, {r['ac_type']}, Dist: {float(r['actual_distance_nm'] or 0):.0f}nm, Delay: {float(r['arr_delay_min'] or 0):+.0f}m, Dep: {str(r['actual_off_block_time'])[:16]})": int(r['ectrl_id'])
+                        for _, r in stored_results.iterrows()
+                    }
+                    picked_label = st.selectbox(
+                        "Select Target Flight from Results",
+                        options=list(res_options.keys()),
+                        key=f"f2v_picked_select_{selected_period}",
+                    )
+                    chosen_id = res_options[picked_label]
+                    st.session_state[f"f2v_selected_id_{selected_period}"] = chosen_id
+
+        # Determine effective target flight ID
+        effective_target_id = st.session_state.get(f"f2v_selected_id_{selected_period}", int(active_flight_id))
+        target_flt = ds.get_flight(effective_target_id)
+        if not target_flt:
+            flt_df = ds.query(f"SELECT * FROM flights WHERE ectrl_id = {effective_target_id} LIMIT 1;")
+            target_flt = flt_df.iloc[0].to_dict() if not flt_df.empty else None
+
+        # ----------------- SELECTED FLIGHT DETAILS CARD -----------------
+        if target_flt:
+            st.markdown(
+                f"#### ✈️ Selected Target Flight: `{target_flt.get('ac_operator', 'UNK')} #{effective_target_id}` "
+                f"({target_flt.get('adep')} ➔ {target_flt.get('ades')})"
+            )
+            det_c1, det_c2, det_c3, det_c4 = st.columns(4)
+            det_c1.metric("Route & Operator", f"{target_flt.get('adep')} ➔ {target_flt.get('ades')}", str(target_flt.get("ac_operator")))
+            det_c2.metric("Aircraft & Tail", f"{target_flt.get('ac_type')}", f"Tail: {target_flt.get('ac_reg', 'N/A')}")
+            det_c3.metric(
+                "Flown Distance / Air Time",
+                f"{float(target_flt.get('actual_distance_nm') or 0):.0f} nm",
+                f"{float(target_flt.get('actual_air_time_min') or 0):.1f} min air time",
+            )
+            det_c4.metric(
+                "Punctuality Profile",
+                f"{float(target_flt.get('arr_delay_min') or 0):+.1f} min arr",
+                f"Dep: {float(target_flt.get('dep_delay_min') or 0):+.1f} min",
+            )
+            st.caption(
+                f"Off-block: `{target_flt.get('actual_off_block_time')}` UTC | Arrival: `{target_flt.get('actual_arrival_time')}` UTC | "
+                f"Requested Level: `FL{target_flt.get('requested_fl')}` | Flight Type: `{target_flt.get('flight_type', 'IFR')}` | "
+                f"Segment: `{target_flt.get('market_segment', 'Commercial Air Transport')}`"
+            )
 
         col_f1, col_f2, col_f3 = st.columns([1.5, 1, 1])
         with col_f1:
             f2v_target_input = st.text_input(
                 "Target Flight ID (ECTRL ID)",
-                value=str(active_flight_id),
+                value=str(effective_target_id),
                 key=f"f2v_flt_input_{selected_period}",
             )
         with col_f2:
@@ -3289,7 +3419,7 @@ with tab_cat_ai_lab:
             try:
                 target_f_id = int(f2v_target_input.strip())
             except ValueError:
-                target_f_id = int(active_flight_id)
+                target_f_id = int(effective_target_id)
 
             with st.spinner(f"Computing 128D Flight2Vec projection for flight #{target_f_id}..."):
                 emb = f2v.embed_flight(target_f_id)
@@ -3312,7 +3442,7 @@ with tab_cat_ai_lab:
                 st.bar_chart(act_df.set_index("Dimension"), height=180)
 
                 # Twin retrieval
-                with st.spinner(f"Searching latent space across {f2v_pool_size} candidate flights..."):
+                with st.spinner(f"Searching latent space across candidate flights..."):
                     twins = f2v.find_operational_twins(target_f_id, search_sample_size=f2v_pool_size, top_k=f2v_top_k)
 
                 if twins:
@@ -3334,6 +3464,20 @@ with tab_cat_ai_lab:
                     ]
                     st.dataframe(pd.DataFrame(twin_rows), use_container_width=True)
 
+                    # ----------------- TOP 5 TWIN SIMILARITY EXPLANATIONS -----------------
+                    st.subheader("💡 Why They Are Similar (Operational Twin Similarity Explanations)")
+                    st.caption("Multi-dimensional operational alignment explaining why the Flight2Vec foundation model paired each twin in the 128D latent manifold.")
+                    for idx, t in enumerate(twins, 1):
+                        with st.expander(
+                            f"#{idx} Twin: {t.operator} #{t.ectrl_id} ({t.route}) — Match Score: {t.similarity_pct:.1f}% (cos θ = {t.cosine_similarity:.4f})",
+                            expanded=(idx <= 2),
+                        ):
+                            st.markdown(f"**Operational Summary:** {t.explanation}")
+                            if t.similarity_reasons:
+                                st.markdown("**Key Dimensional Alignments:**")
+                                for r_item in t.similarity_reasons:
+                                    st.markdown(f"- {r_item}")
+
                 # 2D PCA projection of sample flights
                 with st.spinner("Projecting latent manifold via Principal Component Analysis (PCA)..."):
                     pca_df = f2v.project_latent_space_2d(sample_size=40)
@@ -3353,6 +3497,7 @@ with tab_cat_ai_lab:
                         .properties(height=340)
                         .interactive()
                     )
+                    st.altair_chart(scatter_chart, use_container_width=True)
                     st.altair_chart(scatter_chart, use_container_width=True)
 
     # ----------------- SUB-TAB 2: PINN Mass & Contrail Surrogate -----------------

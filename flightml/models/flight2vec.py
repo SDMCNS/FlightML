@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+import time
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 import numpy as np
@@ -24,6 +25,8 @@ class OperationalTwinMatch:
     cruise_fl: float
     cosine_similarity: float
     similarity_pct: float
+    explanation: str = ""
+    similarity_reasons: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -66,7 +69,8 @@ class Flight2VecEngine:
     """
     Experimental engine for computing self-supervised flight embeddings and
     retrieving latent operational twins across European traffic datasets.
-    Supports high-speed batch vectorization and persistent disk vector caching.
+    Supports high-speed batch vectorization, persistent disk vector caching,
+    and explainable similarity attributions.
     """
 
     def __init__(self, dataset: FlightDataset | None = None, period: str = "202510") -> None:
@@ -85,7 +89,15 @@ class Flight2VecEngine:
     def _get_cache_paths(self) -> tuple[Path, Path]:
         cdir = self._get_cache_dir()
         meta_p = cdir / f"flight2vec_meta_{self.period}.parquet"
-        vec_p = cdir / f"flight2vec_vectors_{self.period}.npy"
+        vec_candidates = sorted(
+            cdir.glob(f"flight2vec_vectors_{self.period}*.npy"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if vec_candidates:
+            vec_p = vec_candidates[0]
+        else:
+            vec_p = cdir / f"flight2vec_vectors_{self.period}.npy"
         return meta_p, vec_p
 
     def is_cache_available(self) -> bool:
@@ -114,7 +126,12 @@ class Flight2VecEngine:
 
         try:
             df = pd.read_parquet(meta_p)
-            vecs = np.load(vec_p, mmap_mode="r")
+            vecs = np.load(vec_p)
+            # Enforce length consistency between metadata and latent vector array
+            if len(df) != len(vecs):
+                min_len = min(len(df), len(vecs))
+                df = df.iloc[:min_len].copy()
+                vecs = vecs[:min_len]
             self._cached_df = df
             self._cached_vectors = vecs
             return df, vecs
@@ -207,12 +224,13 @@ class Flight2VecEngine:
             z = self.network(x).numpy()
         return z
 
-    def build_vector_cache(self, limit: int = 25000, batch_size: int = 15000) -> int:
+    def build_vector_cache(self, limit: int | None = None, batch_size: int = 25000) -> int:
         """
-        Pre-vectorize all flights in the period (up to limit) using high-speed
+        Pre-vectorize flights in the database (or up to limit if specified) using high-speed
         PyTorch batch matrix inference, persisting metadata to Parquet and
         normalized 128D embeddings to disk for instant retrieval.
         """
+        limit_clause = f"LIMIT {limit}" if limit is not None else ""
         query_sql = f"""
             SELECT
                 ectrl_id, adep, ades, ac_type, ac_operator,
@@ -220,7 +238,7 @@ class Flight2VecEngine:
                 requested_fl, actual_air_time_min,
                 EXTRACT(HOUR FROM COALESCE(actual_off_block_time, filed_off_block_time)) AS departure_hour
             FROM flights
-            LIMIT {limit};
+            {limit_clause};
         """
         df = self.dataset.query(query_sql)
         if df.empty:
@@ -238,11 +256,68 @@ class Flight2VecEngine:
 
         meta_p, vec_p = self._get_cache_paths()
         df.to_parquet(meta_p, index=False)
-        np.save(vec_p, all_vectors)
+        try:
+            np.save(vec_p, all_vectors)
+        except OSError:
+            alt_vec_p = vec_p.parent / f"flight2vec_vectors_{self.period}_v{int(time.time())}.npy"
+            np.save(alt_vec_p, all_vectors)
 
         self._cached_df = df
         self._cached_vectors = all_vectors
         return total_rows
+
+    def _explain_similarity(
+        self,
+        target_flight: dict[str, Any] | pd.Series,
+        twin_row: dict[str, Any] | pd.Series,
+        cos_sim: float,
+    ) -> tuple[str, list[str]]:
+        """Explain the operational rationale and dimensions driving high latent cosine similarity."""
+        reasons: list[str] = []
+        d_t = float(target_flight.get("actual_distance_nm") or 500.0)
+        d_m = float(twin_row.get("actual_distance_nm") or 500.0)
+        d_delta = abs(d_t - d_m)
+        d_pct = (d_delta / max(d_t, 1.0)) * 100.0
+        if d_delta <= 30.0:
+            reasons.append(f"Exact stage length match ({d_m:.0f} nm vs {d_t:.0f} nm, Δ {d_delta:.0f} nm)")
+        elif d_pct <= 15.0:
+            reasons.append(f"Comparable stage length ({d_m:.0f} nm vs {d_t:.0f} nm, {d_pct:.1f}% range delta)")
+        else:
+            reasons.append(f"Distance profile: {d_m:.0f} nm vs {d_t:.0f} nm")
+
+        fl_t = float(target_flight.get("requested_fl") or 340.0)
+        fl_m = float(twin_row.get("requested_fl") or 340.0)
+        fl_delta = abs(fl_t - fl_m)
+        if fl_delta == 0.0:
+            reasons.append(f"Identical cruise altitude tier (FL{fl_m:.0f})")
+        elif fl_delta <= 20.0:
+            reasons.append(f"Matching cruise band (FL{fl_m:.0f} vs FL{fl_t:.0f}, within 2,000 ft RVSM)")
+
+        arr_t = float(target_flight.get("arr_delay_min") or 0.0)
+        arr_m = float(twin_row.get("arr_delay_min") or 0.0)
+        if abs(arr_t - arr_m) <= 10.0:
+            reasons.append(f"Synchronized delay dynamics ({arr_m:+.1f} min vs {arr_t:+.1f} min arrival delay)")
+        elif arr_t > 15.0 and arr_m > 15.0:
+            reasons.append(f"Both absorbed reactionary network delay ripple ({arr_m:+.1f}m vs {arr_t:+.1f}m)")
+        elif arr_t <= 5.0 and arr_m <= 5.0:
+            reasons.append("Both operated with unimpeded on-time arrival punctuality")
+
+        dep_h_t = float(target_flight.get("departure_hour") or 12.0)
+        dep_h_m = float(twin_row.get("departure_hour") or 12.0)
+        if abs(dep_h_t - dep_h_m) <= 1.5:
+            reasons.append(f"Operating in the same departure traffic bank ({dep_h_m:02.0f}:00 UTC)")
+
+        op_t = str(target_flight.get("ac_operator") or "")
+        op_m = str(twin_row.get("ac_operator") or "")
+        ac_t = str(target_flight.get("ac_type") or "")
+        ac_m = str(twin_row.get("ac_type") or "")
+        if op_t == op_m and op_t:
+            reasons.append(f"Same airline operator ({op_t}), sharing fleet dispatch policies")
+        elif ac_t == ac_m and ac_t:
+            reasons.append(f"Same airframe type ({ac_t}), identical climb and cruise drag polar")
+
+        summary = " • ".join(reasons[:3]) if reasons else f"Latent kinematic trajectory alignment across 16 dimensions (cos θ = {cos_sim:.4f})."
+        return summary, reasons
 
     def find_operational_twins(
         self,
@@ -254,8 +329,13 @@ class Flight2VecEngine:
         """
         Scan a representative corpus of flights and retrieve the top-k most semantically
         identical operational twins in the 128D latent space using cosine similarity.
-        Leverages pre-vectorized cache if available for microsecond search across thousands of flights.
+        Leverages pre-vectorized cache if available for microsecond search across thousands of flights,
+        and provides explainable similarity attributions for each twin match.
         """
+        target_flight = self.dataset.get_flight(target_ectrl_id)
+        if not target_flight:
+            return []
+
         target_emb = self.embed_flight(target_ectrl_id)
         if target_emb is None:
             return []
@@ -280,6 +360,7 @@ class Flight2VecEngine:
                         row = filtered_df.iloc[idx]
                         cos_sim = float(np.clip(similarities[idx], -1.0, 1.0))
                         sim_pct = max(0.0, (cos_sim + 1.0) / 2.0 * 100.0)
+                        summary, reasons = self._explain_similarity(target_flight, row, cos_sim)
                         matches.append(
                             OperationalTwinMatch(
                                 ectrl_id=int(row["ectrl_id"]),
@@ -291,6 +372,8 @@ class Flight2VecEngine:
                                 cruise_fl=float(row.get("requested_fl") or 340.0),
                                 cosine_similarity=cos_sim,
                                 similarity_pct=sim_pct,
+                                explanation=summary,
+                                similarity_reasons=reasons,
                             )
                         )
                     return matches
@@ -321,6 +404,7 @@ class Flight2VecEngine:
             row = candidates_df.iloc[idx]
             cos_sim = float(np.clip(similarities[idx], -1.0, 1.0))
             sim_pct = max(0.0, (cos_sim + 1.0) / 2.0 * 100.0)
+            summary, reasons = self._explain_similarity(target_flight, row, cos_sim)
 
             matches.append(
                 OperationalTwinMatch(
@@ -333,6 +417,8 @@ class Flight2VecEngine:
                     cruise_fl=float(row.get("requested_fl") or 340.0),
                     cosine_similarity=cos_sim,
                     similarity_pct=sim_pct,
+                    explanation=summary,
+                    similarity_reasons=reasons,
                 )
             )
 

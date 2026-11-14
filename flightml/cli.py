@@ -2476,13 +2476,16 @@ def optimize_tail_swaps_cmd(
 def vectorize_flights_cmd(
     period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol dataset period"),
     limit: int = typer.Option(25000, "--limit", "-l", help="Number of flights to vectorize in batch"),
+    all_flights: bool = typer.Option(False, "--all", "-a", help="Vectorize all flights in the database"),
 ) -> None:
     """Pre-vectorize flights into 128D Flight2Vec embeddings and persist to disk cache."""
     from flightml.models.flight2vec import Flight2VecEngine
-    console.print(f"[bold cyan]🧬 Initializing Flight2Vec batch neural vectorization for period {period} (limit: {limit:,})...[/bold cyan]")
+    effective_limit = None if all_flights else limit
+    target_lbl = "all flights" if all_flights else f"{limit:,} flights"
+    console.print(f"[bold cyan]🧬 Initializing Flight2Vec batch neural vectorization for period {period} ({target_lbl})...[/bold cyan]")
     ds = FlightDataset(period=period)
     engine = Flight2VecEngine(ds, period=period)
-    count = engine.build_vector_cache(limit=limit)
+    count = engine.build_vector_cache(limit=effective_limit)
     console.print(f"[bold green]✓ Successfully vectorized and cached {count:,} flights into 128D latent space![/bold green]")
     meta_p, vec_p = engine._get_cache_paths()
     console.print(f"  • Metadata: [dim]{meta_p}[/dim]")
@@ -2495,7 +2498,7 @@ def find_twins_cmd(
     period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol dataset period"),
     top_k: int = typer.Option(5, "--top-k", "-k", help="Number of nearest twins to retrieve"),
 ) -> None:
-    """Find operational twin flights in 128D latent space using cosine similarity."""
+    """Find operational twin flights in 128D latent space with similarity explanations."""
     from flightml.models.flight2vec import Flight2VecEngine
     ds = FlightDataset(period=period)
     engine = Flight2VecEngine(ds, period=period)
@@ -2504,6 +2507,7 @@ def find_twins_cmd(
         console.print(f"[red]No operational twins found for flight #{flight_id}.[/red]")
         return
     table = Table(title=f"🧬 Flight2Vec Operational Twins for #{flight_id}")
+    table.add_column("Rank", style="bold")
     table.add_column("Flight ID", style="cyan")
     table.add_column("Route")
     table.add_column("Operator")
@@ -2512,8 +2516,10 @@ def find_twins_cmd(
     table.add_column("Arr Delay")
     table.add_column("Cosine Sim")
     table.add_column("Match %")
-    for t in twins:
+    table.add_column("Why Similar", style="green")
+    for idx, t in enumerate(twins, 1):
         table.add_row(
+            f"#{idx}",
             str(t.ectrl_id),
             t.route,
             t.operator,
@@ -2522,6 +2528,7 @@ def find_twins_cmd(
             f"{t.arr_delay_min:+.1f} min",
             f"{t.cosine_similarity:.4f}",
             f"{t.similarity_pct:.1f}%",
+            t.explanation,
         )
     console.print(table)
 
