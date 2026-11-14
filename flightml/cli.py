@@ -26,6 +26,7 @@ from flightml.sim.what_if import simulate_turnaround_mitigation, simulate_runway
 from flightml.sim.gdp_optimizer import optimize_ground_delay_program
 from flightml.viz.map_builder import create_trajectory_map
 from flightml.eval.macro_comparison import compare_aviation_periods
+from flightml.eval.longitudinal import LongitudinalEngine
 from flightml.eval.cdo_analyzer import (
     analyze_cdo_descent,
     analyze_cco_climb,
@@ -792,6 +793,160 @@ def compare_periods_cmd(
                 f"{int(f['delta_flights']):+,}",
             )
         console.print(fleet_table)
+
+
+@app.command("longitudinal-timeline")
+def longitudinal_timeline_cmd() -> None:
+    """Display European airspace timeline & multi-period trends across all ingested archives."""
+    engine = LongitudinalEngine()
+    with console.status("[cyan]Aggregating multi-period timeline across ingested archives..."):
+        tl = engine.get_timeline_dataframe()
+
+    console.print("\n[bold green]Longitudinal Multi-Period Airspace Timeline:[/bold green]")
+    table = Table(title="European ATM Longitudinal Macro Evolution", header_style="bold magenta")
+    table.add_column("Period", style="cyan")
+    table.add_column("Season / Archetype", style="white")
+    table.add_column("Days", justify="right", style="white")
+    table.add_column("Total Flights", justify="right", style="bold white")
+    table.add_column("Daily Flights", justify="right", style="cyan")
+    table.add_column("Arr Delay", justify="right", style="yellow")
+    table.add_column("OTP (≤15m)", justify="right", style="green")
+    table.add_column("NewGen Share", justify="right", style="bold green")
+
+    for _, row in tl.iterrows():
+        table.add_row(
+            str(row["period_id"]),
+            str(row["season"]),
+            str(int(row["days"])),
+            f"{int(row['total_flights']):,}",
+            f"{row['daily_flights']:.1f}",
+            f"{row['avg_arr_delay_min']:.2f} min",
+            f"{row['otp_15_pct']:.1f}%",
+            f"{row['newgen_share_pct']:.1f}%",
+        )
+    console.print(table)
+
+
+@app.command("seasonality")
+def seasonality_cmd(
+    year: int = typer.Option(2024, "--year", "-y", help="Analysis year (e.g. 2024, 2025)"),
+) -> None:
+    """Analyze 3-season annual decomposition (Winter Trough, Summer Peak, Autumn Shoulder) and delay elasticity."""
+    engine = LongitudinalEngine()
+    with console.status(f"[cyan]Decomposing annual seasonality for {year} (Feb ➔ Jun ➔ Oct)..."):
+        decomp = engine.decompose_seasonality(year)
+
+    console.print(f"\n[bold green]Annual Seasonal Network Decomposition ({decomp.year}):[/bold green]")
+    console.print(
+        f"Winter Daily: [cyan]{decomp.winter_daily_flights:.1f}[/cyan] | "
+        f"Summer Daily: [bold cyan]{decomp.summer_daily_flights:.1f}[/bold cyan] ([bold yellow]+{decomp.summer_surge_pct:.1f}%[/bold yellow]) | "
+        f"Autumn Daily: [cyan]{decomp.autumn_daily_flights:.1f}[/cyan] ({decomp.autumn_taper_pct:.1f}%)\n"
+        f"Winter Delay: [white]{decomp.winter_avg_delay_min:.2f}m[/white] | "
+        f"Summer Delay: [bold red]{decomp.summer_avg_delay_min:.2f}m[/bold red] ([bold red]+{decomp.summer_delay_surge_pct:.1f}%[/bold red]) | "
+        f"Delay-to-Demand Elasticity: [bold magenta]{decomp.delay_demand_elasticity:.2f}x[/bold magenta]\n"
+    )
+
+    if decomp.top_surging_airports:
+        apt_tab = Table(title=f"Top Surging Leisure Airports in Summer {year} (vs Winter)", header_style="bold magenta")
+        apt_tab.add_column("Airport ICAO", style="cyan")
+        apt_tab.add_column("Winter Flights", justify="right", style="white")
+        apt_tab.add_column("Summer Flights", justify="right", style="white")
+        apt_tab.add_column("Volume Delta", justify="right", style="green")
+        apt_tab.add_column("Summer Surge (%)", justify="right", style="bold yellow")
+
+        for a in decomp.top_surging_airports[:8]:
+            apt_tab.add_row(
+                str(a["icao"]),
+                f"{int(a['winter_flights']):,}",
+                f"{int(a['summer_flights']):,}",
+                f"+{int(a['volume_increase']):,}",
+                f"+{float(a['surge_pct']):.1f}%",
+            )
+        console.print(apt_tab)
+
+    if decomp.top_surging_firs:
+        fir_tab = Table(title=f"Top Surging FIRs in Summer {year} (vs Winter)", header_style="bold magenta")
+        fir_tab.add_column("FIR ID", style="cyan")
+        fir_tab.add_column("Winter Traversals", justify="right", style="white")
+        fir_tab.add_column("Summer Traversals", justify="right", style="white")
+        fir_tab.add_column("Traversals Delta", justify="right", style="green")
+        fir_tab.add_column("Summer Surge (%)", justify="right", style="bold yellow")
+
+        for f in decomp.top_surging_firs[:8]:
+            fir_tab.add_row(
+                str(f["fir_id"]),
+                f"{int(f['winter_traversals']):,}",
+                f"{int(f['summer_traversals']):,}",
+                f"+{int(f['volume_increase']):,}",
+                f"+{float(f['surge_pct']):.1f}%",
+            )
+        console.print(fir_tab)
+
+
+@app.command("compare-yoy")
+def compare_yoy_cmd(
+    baseline: str = typer.Option("202410", "--baseline", "-b", help="Baseline period (e.g. 202410, 202406, 202402)"),
+    target: str = typer.Option("202510", "--target", "-t", help="Target period (e.g. 202510, 202506, 202502)"),
+) -> None:
+    """Conduct controlled Year-over-Year (YoY) comparative analysis (volume, delays, fleet shifts, city-pairs)."""
+    engine = LongitudinalEngine()
+    with console.status(f"[cyan]Conducting YoY comparison: {baseline} ➔ {target}..."):
+        yoy = engine.compare_yoy(baseline, target)
+
+    console.print(f"\n[bold green]Year-Over-Year Network Evolution:[/bold green] [cyan]{yoy.period_baseline}[/cyan] ➔ [cyan]{yoy.period_target}[/cyan] ({yoy.season_label})")
+
+    ov = Table(title="Macro Performance & Efficiency Comparison", header_style="bold magenta")
+    ov.add_column("Indicator", style="cyan")
+    ov.add_column(f"{yoy.period_baseline} (Baseline)", style="white")
+    ov.add_column(f"{yoy.period_target} (Target)", style="white")
+    ov.add_column("YoY Evolution", style="bold yellow")
+
+    ov.add_row("Total Flights", f"{yoy.total_flights_baseline:,}", f"{yoy.total_flights_target:,}", f"{yoy.total_flights_delta:+,} ({yoy.total_flights_growth_pct:+.2f}%)")
+    ov.add_row("Daily Flight Rate", f"{yoy.daily_flights_baseline:.1f}", f"{yoy.daily_flights_target:.1f}", f"{yoy.daily_flights_delta:+.1f} ({yoy.daily_flights_growth_pct:+.2f}%)")
+    ov.add_row("Mean Arrival Delay", f"{yoy.avg_arr_delay_baseline_min:.2f} min", f"{yoy.avg_arr_delay_target_min:.2f} min", f"{yoy.arr_delay_delta_min:+.2f} min")
+    ov.add_row("On-Time (OTP-15)", f"{yoy.otp_15_baseline_pct:.1f}%", f"{yoy.otp_15_target_pct:.1f}%", f"{yoy.otp_15_delta_pct:+.1f}%")
+    ov.add_row("New-Gen Fleet Penetration", f"{yoy.newgen_share_baseline_pct:.2f}%", f"{yoy.newgen_share_target_pct:.2f}%", f"{yoy.newgen_share_delta_pct:+.2f}%")
+    console.print(ov)
+
+    if yoy.top_aircraft_type_shifts:
+        ac_tab = Table(title="Aircraft Type Fleet Transitions (Top Shifts)", header_style="bold magenta")
+        ac_tab.add_column("Aircraft Type", style="cyan")
+        ac_tab.add_column(f"{yoy.period_baseline}", justify="right", style="white")
+        ac_tab.add_column(f"{yoy.period_target}", justify="right", style="white")
+        ac_tab.add_column("Delta Flights", justify="right", style="bold yellow")
+        ac_tab.add_column("Growth (%)", justify="right", style="green")
+
+        for ac in yoy.top_aircraft_type_shifts[:8]:
+            ac_tab.add_row(
+                str(ac["ac_type"]),
+                f"{int(ac['flights_baseline']):,}",
+                f"{int(ac['flights_target']):,}",
+                f"{int(ac['delta_flights']):+,}",
+                f"{float(ac['growth_pct']):+.1f}%" if ac.get("growth_pct") is not None else "—",
+            )
+        console.print(ac_tab)
+
+    if yoy.top_city_pairs_evolution:
+        route_tab = Table(title="Top European City-Pairs Route Evolution", header_style="bold magenta")
+        route_tab.add_column("Route", style="cyan")
+        route_tab.add_column(f"{yoy.period_baseline} Vol", justify="right", style="white")
+        route_tab.add_column(f"{yoy.period_target} Vol", justify="right", style="white")
+        route_tab.add_column("Delta Vol", justify="right", style="bold yellow")
+        route_tab.add_column("Mean Dist (NM)", justify="right", style="white")
+        route_tab.add_column("Dist Delta", justify="right", style="white")
+        route_tab.add_column("NewGen Share", justify="right", style="green")
+
+        for r in yoy.top_city_pairs_evolution[:8]:
+            route_tab.add_row(
+                str(r["route"]),
+                f"{int(r['volume_base']):,}",
+                f"{int(r['volume_targ']):,}",
+                f"{int(r['volume_delta']):+,}",
+                f"{float(r['mean_dist_targ_nm']):.1f}",
+                f"{float(r['dist_delta_nm']):+.1f} NM",
+                f"{float(r['newgen_share_targ_pct']):.1f}% ({float(r['newgen_share_delta_pct']):+.1f}%)",
+            )
+        console.print(route_tab)
 
 
 @app.command("cdo-descent")

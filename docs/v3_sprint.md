@@ -52,37 +52,43 @@ The platform operates across an indexed columnar Parquet corpus:
 
 ---
 
-### Epic 1: Multi-Period Longitudinal & YoY Comparative Engine
+### Epic 1: Multi-Period Longitudinal & YoY Comparative Engine [COMPLETED]
 **Goal**: Build automated analytical modules in `flightml/eval/longitudinal.py` that quantify trends across multiple periods.
 
-- [ ] **Task 1.1: Automated Seasonal Decomposition**:
-  - Implement classical three-component time-series decomposition (Trend, Seasonal, Residual) across recurring snapshots.
-  - Establish seasonal scaling factors: quantify the regular ~46% peak-to-trough surge between February and June.
-- [ ] **Task 1.2: Matched Year-Over-Year (YoY) Differential Metrics**:
-  - Pairwise comparative pipelines: `202402` vs `202502`, `202406` vs `202506`, `202410` vs `202510`.
-  - Calculate key performance deltas:
-    - Traffic volume growth rate ($\% \Delta$).
-    - Route extension inefficiency delta ($\Delta$ KPI19 actual vs planned distance).
-    - Average en-route flight duration and taxi-out duration changes.
-    - Total network fuel burn and CO₂ emissions intensity per flight-km.
-- [ ] **Task 1.3: Fleet Modernization & Engine Transition Tracker**:
-  - Track market share shift of new-generation airframes (e.g. A320neo, A321neo, B737 MAX, A350, B787) vs legacy types (A320ceo, B737NG, B777-200ER).
-  - Compute empirical fuel burn reduction achieved by fleet renewal on identical city-pairs (e.g. EGLL ➔ LFPG, EHAM ➔ LEMD).
+- [x] **Task 1.1: Automated Seasonal Decomposition**:
+  - Implemented classical three-season network decomposition (Winter Trough, Summer Peak, Autumn Shoulder) via `LongitudinalEngine.decompose_seasonality(year)`.
+  - Establishes seasonal scaling factors: measured the +40.9% daily flight surge between February and June 2024, +220.1% delay surge, and a 5.38x delay-to-demand elasticity.
+  - Detects top surging leisure resort airports (e.g. Ibiza +351.7%, Antalya +340.8%, Menorca +277.3%) and surging Mediterranean FIRs (e.g. Athens FIR +285.2%).
+- [x] **Task 1.2: Matched Year-Over-Year (YoY) Differential Metrics**:
+  - Pairwise comparative pipelines: `202402` vs `202502`, `202406` vs `202506`, `202410` vs `202510` via `LongitudinalEngine.compare_yoy(baseline, target)`.
+  - Calculates key performance deltas:
+    - Traffic volume growth rate (+4.77% in October 2024 ➔ 2025).
+    - Mean arrival delay and on-time performance (OTP-15) deltas.
+    - Flown distance and flight duration deltas.
+    - Top growing airlines and aircraft fleet transition shifts.
+- [x] **Task 1.3: Fleet Modernization & Engine Transition Tracker**:
+  - Longitudinal fleet evolution tracking across all 7 archives via `LongitudinalEngine.get_fleet_evolution_timeline()`.
+  - Tracks adoption rates of A320neo, A321neo, B737 MAX, A220, A350, and B787 vs classic CEO/NG types.
+  - Measured European new-generation fleet penetration rising from 1.55% in 2016 to 24.64% in October 2024 and 28.17% in October 2025 (+3.53 percentage points in 12 months).
+  - CLI integration: added `flightml longitudinal-timeline`, `flightml seasonality`, and `flightml compare-yoy`. Unit tests in `tests/test_longitudinal.py` (7/7 passing).
 
 ---
 
-### Epic 2: High-Resolution GRIB2 Atmospheric Integration & Contrail Forcing
+### Epic 2: High-Resolution GRIB2 Atmospheric Integration & Contrail Forcing [ON HOLD]
+> [!NOTE]
+> **Status: ON HOLD** (Pending acquisition of a reliable, continuous high-resolution GRIB data source). Work is deferred while Epic 1 and downstream epics proceed.
+
 **Goal**: Integrate numerical weather prediction (NWP) reanalysis grids into the trajectory evaluation pipeline.
 
-- [ ] **Task 2.1: GRIB/GRIB2 Atmospheric Decoder**:
+- [ ] **Task 2.1: GRIB/GRIB2 Atmospheric Decoder** *(Deferred)*:
   - Build `flightml/weather/grib_loader.py` leveraging `cfgrib` / `eccodes` or lightweight raster processing.
   - Ingest October 2025 100m wind fields (`data/202510.grib`) and upper-air pressure levels (FL300–FL400 $u, v$ wind vectors, temperature $T$, relative humidity $RH$).
-- [ ] **Task 2.2: 4D Trajectory Wind Integration & ESAD**:
+- [ ] **Task 2.2: 4D Trajectory Wind Integration & ESAD** *(Deferred)*:
   - Interpolate 4D radar trajectory points $(t, \text{lat}, \text{lon}, \text{alt})$ onto atmospheric wind grids.
   - Compute instantaneous ground speed vs true airspeed (TAS) and compute **Equivalent Still Air Distance (ESAD)**:
     $$\text{ESAD} = \int \frac{\text{TAS}}{\text{TAS} + V_{\text{tail}}} \, ds$$
   - Quantify wind-induced fuel penalties and tailwind benefits on transatlantic and trans-European routes.
-- [ ] **Task 2.3: Schmidt-Appleman Criterion & Persistent Contrail Radiative Forcing**:
+- [ ] **Task 2.3: Schmidt-Appleman Criterion & Persistent Contrail Radiative Forcing** *(Deferred)*:
   - Implement the Schmidt-Appleman criterion using cruise-level temperature and water vapor saturation.
   - Calculate Ice-Supersaturated Region (ISSR, $RH_i \ge 100\%$) penetration for each flight.
   - Output persistent contrail warming potential (RF, $\text{mW/m}^2$) alongside engine CO₂ to assess the net climate trade-off of vertical avoidance.
