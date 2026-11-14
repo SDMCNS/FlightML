@@ -363,6 +363,10 @@ class LongitudinalEngine:
             })
         return pd.DataFrame(rows).sort_values("period_id").reset_index(drop=True)
 
+    def build_longitudinal_timeline(self) -> pd.DataFrame:
+        """Alias for get_timeline_dataframe for backward compatibility."""
+        return self.get_timeline_dataframe()
+
     def compare_yoy(
         self, period_baseline: str, period_target: str
     ) -> YearOverYearDelta:

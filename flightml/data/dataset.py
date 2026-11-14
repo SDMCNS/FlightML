@@ -27,6 +27,7 @@ class FlightDataset:
         self.parquet_dir = Path(parquet_dir or PARQUET_DIR)
         self.data_dir = Path(data_dir or DATA_DIR)
         self.periods_dir = PERIODS_PARQUET_DIR
+        self.db_path = str(db_path)
         self.con = duckdb.connect(db_path)
         self._init_views()
 

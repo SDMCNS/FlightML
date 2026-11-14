@@ -1824,75 +1824,72 @@ with tab_cat_longitudinal:
         )
 
         @st.cache_data(show_spinner=False)
-        def _get_cached_longitudinal_timeline(db_path: str):
-            eng = LongitudinalEngine(db_path)
-            return eng.build_longitudinal_timeline()
+        def _get_cached_longitudinal_df():
+            eng = LongitudinalEngine()
+            return eng.get_timeline_dataframe()
 
         with st.spinner("Compiling multi-period longitudinal timeline across archives..."):
-            timeline_res = _get_cached_longitudinal_timeline(ds.db_path)
+            t_df = _get_cached_longitudinal_df()
 
-        if not timeline_res:
+        if t_df.empty:
             st.warning("No longitudinal archive periods currently detected in database.")
         else:
-            t_df = pd.DataFrame([
-                {
-                    "Period": m.period,
-                    "Name": m.label,
-                    "Year": m.year,
-                    "Month": m.month,
-                    "Days": m.total_days,
-                    "Total Flights": m.total_flights,
-                    "Daily Flights": round(m.avg_daily_flights, 1),
-                    "Mean Air Time (min)": round(m.mean_air_time_min, 1),
-                    "Mean Distance (nm)": round(m.mean_distance_nm, 1),
-                    "Mean Arr Delay (min)": round(m.mean_arr_delay_min, 1),
-                    "Max Peak Flights/hr": m.peak_hourly_flights,
-                    "Neo/MAX Share (%)": round(m.neo_max_share_pct, 2),
-                    "Estimated Total CO₂ (t)": round(m.total_co2_tonnes, 1),
-                }
-                for m in timeline_res
-            ])
-
             col_tl1, col_tl2, col_tl3, col_tl4 = st.columns(4)
-            col_tl1.metric("Indexed Periods", f"{len(timeline_res)} archives", "2016 – 2025")
-            latest_m = timeline_res[-1]
-            earliest_m = timeline_res[0]
+            col_tl1.metric("Indexed Periods", f"{len(t_df)} archives", "2016 – 2025")
+            latest_row = t_df.iloc[-1]
+            earliest_row = t_df.iloc[0]
             col_tl2.metric(
                 "Fleet Modernization",
-                f"{latest_m.neo_max_share_pct:.1f}% Neo/MAX",
-                f"+{latest_m.neo_max_share_pct - earliest_m.neo_max_share_pct:.1f} pp vs {earliest_m.period}",
+                f"{latest_row['newgen_share_pct']:.1f}% Neo/MAX",
+                f"+{latest_row['newgen_share_pct'] - earliest_row['newgen_share_pct']:.1f} pp vs {earliest_row['period_id']}",
             )
-            peak_period_m = max(timeline_res, key=lambda x: x.avg_daily_flights)
+            peak_row = t_df.loc[t_df['daily_flights'].idxmax()]
             col_tl3.metric(
                 "Peak Observed Daily Traffic",
-                f"{peak_period_m.avg_daily_flights:,.0f} /day",
-                f"{peak_period_m.label}",
+                f"{peak_row['daily_flights']:,.0f} /day",
+                f"{peak_row['period_id']} ({peak_row['season']})",
             )
-            total_historical_flights = sum(m.total_flights for m in timeline_res)
-            col_tl4.metric("Total Indexed Flights", f"{total_historical_flights:,}")
+            col_tl4.metric("Total Indexed Flights", f"{t_df['total_flights'].sum():,}")
 
             st.subheader("Historical Timeline Summary Table")
-            st.dataframe(t_df, use_container_width=True)
+            display_tl_df = t_df.rename(
+                columns={
+                    "period_id": "Period",
+                    "year": "Year",
+                    "month": "Month",
+                    "season": "Season",
+                    "days": "Days",
+                    "total_flights": "Total Flights",
+                    "daily_flights": "Daily Flights",
+                    "avg_arr_delay_min": "Avg Arr Delay (min)",
+                    "avg_dep_delay_min": "Avg Dep Delay (min)",
+                    "otp_15_pct": "OTP 15 (%)",
+                    "avg_distance_nm": "Avg Distance (nm)",
+                    "avg_air_time_min": "Avg Air Time (min)",
+                    "newgen_share_pct": "Neo/MAX Share (%)",
+                }
+            )
+            st.dataframe(display_tl_df, use_container_width=True)
 
             st.subheader("Key Longitudinal Trajectories")
             c1, c2 = st.columns(2)
             with c1:
                 st.markdown("**Daily Flight Volume Progression**")
-                vol_chart = t_df.set_index("Period")[["Daily Flights"]]
+                vol_chart = t_df.set_index("period_id")[["daily_flights"]].rename(columns={"daily_flights": "Daily Flights"})
                 st.line_chart(vol_chart)
             with c2:
                 st.markdown("**New-Gen Eco Fleet Penetration (% A320neo, B737 MAX, A350, B787)**")
-                fleet_chart = t_df.set_index("Period")[["Neo/MAX Share (%)"]]
+                fleet_chart = t_df.set_index("period_id")[["newgen_share_pct"]].rename(columns={"newgen_share_pct": "Neo/MAX Share (%)"})
                 st.line_chart(fleet_chart)
 
             c3, c4 = st.columns(2)
             with c3:
                 st.markdown("**Average Arrival Delay Trend (min)**")
-                delay_chart = t_df.set_index("Period")[["Mean Arr Delay (min)"]]
+                delay_chart = t_df.set_index("period_id")[["avg_arr_delay_min"]].rename(columns={"avg_arr_delay_min": "Avg Arr Delay (min)"})
                 st.line_chart(delay_chart)
             with c4:
                 st.markdown("**Mean Flown Distance per Flight (NM)**")
-                dist_chart = t_df.set_index("Period")[["Mean Distance (nm)"]]
+                dist_chart = t_df.set_index("period_id")[["avg_distance_nm"]].rename(columns={"avg_distance_nm": "Avg Distance (nm)"})
                 st.line_chart(dist_chart)
 
     # ----------------- SUB-TAB 2: Year-over-Year (YoY) & Seasonality -----------------
@@ -1904,34 +1901,33 @@ with tab_cat_longitudinal:
         )
 
         st.subheader("1. Pairwise Year-over-Year (YoY) Analyzer")
-        all_periods = [m.period for m in timeline_res] if timeline_res else available_periods
+        all_periods = t_df["period_id"].tolist() if not t_df.empty else available_periods
         y_col1, y_col2 = st.columns(2)
         base_p = y_col1.selectbox("Baseline Period (Prior Year)", all_periods, index=all_periods.index("202410") if "202410" in all_periods else 0, key="yoy_base")
         targ_p = y_col2.selectbox("Target Period (Recent Year)", all_periods, index=all_periods.index("202510") if "202510" in all_periods else len(all_periods)-1, key="yoy_targ")
 
         if st.button("Compute Year-over-Year Delta Analysis", key="btn_run_yoy"):
             with st.spinner(f"Analyzing delta between {base_p} and {targ_p}..."):
-                eng = LongitudinalEngine(ds.db_path)
-                yoy = eng.compare_year_over_year(base_p, targ_p)
+                eng = LongitudinalEngine()
+                yoy = eng.compare_yoy(base_p, targ_p)
 
             ym1, ym2, ym3, ym4 = st.columns(4)
-            ym1.metric("Daily Flights Delta", f"{yoy.target_daily_flights:,.0f}/day", f"{yoy.traffic_growth_pct:+.2f}% ({yoy.daily_flights_delta:+.0f}/day)")
-            ym2.metric("Mean Arrival Delay Delta", f"{yoy.target_mean_arr_delay_min:+.1f} min", f"{yoy.mean_arr_delay_delta_min:+.1f} min")
-            ym3.metric("Neo/MAX Fleet Penetration", f"{yoy.target_neo_max_share_pct:.2f}%", f"{yoy.neo_max_share_delta_pp:+.2f} percentage points")
-            ym4.metric("Total CO₂ Footprint Delta", f"{yoy.target_co2_tonnes:,.0f} t", f"{yoy.co2_growth_pct:+.2f}%")
+            ym1.metric("Daily Flights Delta", f"{yoy.daily_flights_target:,.0f}/day", f"{yoy.daily_flights_growth_pct:+.2f}% ({yoy.daily_flights_delta:+.0f}/day)")
+            ym2.metric("Mean Arrival Delay Delta", f"{yoy.avg_arr_delay_target_min:+.1f} min", f"{yoy.arr_delay_delta_min:+.1f} min")
+            ym3.metric("Neo/MAX Fleet Penetration", f"{yoy.newgen_share_target_pct:.2f}%", f"{yoy.newgen_share_delta_pct:+.2f} percentage points")
+            ym4.metric("Total Monthly Movements", f"{yoy.total_flights_target:,}", f"{yoy.total_flights_growth_pct:+.2f}% ({yoy.total_flights_delta:+,})")
 
             y_t1, y_t2 = st.columns(2)
             with y_t1:
                 st.markdown("#### Top Expanding Airline Operators")
-                st.dataframe(pd.DataFrame(yoy.top_expanding_airlines), use_container_width=True)
-                st.markdown("#### Top Contracting Airline Operators")
-                st.dataframe(pd.DataFrame(yoy.top_contracting_airlines), use_container_width=True)
-
+                st.dataframe(pd.DataFrame(yoy.top_growing_airlines), use_container_width=True)
             with y_t2:
-                st.markdown("#### Top Expanding Aircraft Types (Modernization Drivers)")
-                st.dataframe(pd.DataFrame(yoy.top_expanding_aircraft_types), use_container_width=True)
-                st.markdown("#### Top Contracting Aircraft Types (Retirements & Phased Out)")
-                st.dataframe(pd.DataFrame(yoy.top_contracting_aircraft_types), use_container_width=True)
+                st.markdown("#### Aircraft Type Modernization Shifts")
+                st.dataframe(pd.DataFrame(yoy.top_aircraft_type_shifts), use_container_width=True)
+
+            if yoy.top_city_pairs_evolution:
+                st.markdown("#### Top City Pair Corridors Evolution")
+                st.dataframe(pd.DataFrame(yoy.top_city_pairs_evolution), use_container_width=True)
 
         st.markdown("---")
         st.subheader("2. Annual Seasonal Decomposition (Winter ➔ Summer ➔ Autumn)")
@@ -1939,13 +1935,13 @@ with tab_cat_longitudinal:
         target_year = s_col1.selectbox("Select Seasonality Year", [2024, 2025], index=0, key="seas_year")
         if s_col1.button("Decompose Annual Seasonality", key="btn_seas"):
             with st.spinner(f"Decomposing {target_year} seasonal elasticity..."):
-                eng = LongitudinalEngine(ds.db_path)
-                decomp = eng.decompose_annual_seasonality(target_year)
+                eng = LongitudinalEngine()
+                decomp = eng.decompose_seasonality(int(target_year))
 
             sm1, sm2, sm3, sm4 = st.columns(4)
             sm1.metric("Winter Trough (Feb)", f"{decomp.winter_daily_flights:,.0f} /day")
             sm2.metric("Summer Peak (Jun)", f"{decomp.summer_daily_flights:,.0f} /day", f"{decomp.summer_surge_pct:+.1f}% vs Feb")
-            sm3.metric("Autumn Shoulder (Oct)", f"{decomp.autumn_daily_flights:,.0f} /day")
+            sm3.metric("Autumn Shoulder (Oct)", f"{decomp.autumn_daily_flights:,.0f} /day", f"{decomp.autumn_taper_pct:+.1f}% vs Jun")
             sm4.metric("Delay Surge Elasticity", f"{decomp.delay_surge_ratio:.2f}x", f"Delay jumped {decomp.summer_delay_surge_pct:+.1f}%")
 
             st.info(
@@ -1977,42 +1973,40 @@ with tab_cat_longitudinal:
         fc_growth = fc_c3.slider("Annual Compound Traffic Growth Rate (%)", min_value=1.0, max_value=8.0, value=3.5, step=0.5, key="fc_growth")
         fc_grid = fc_c4.selectbox("Spatial Grid Size Resolution", [0.5, 1.0, 2.0, 5.0], index=1, format_func=lambda x: f"{x:.1f}° × {x:.1f}°", key="fc_grid")
 
-        fc_thresh = st.slider("Sector Capacity Threshold (Max Flights / Hour)", min_value=30, max_value=120, value=50, step=5, key="fc_thresh")
-
         if st.button("Generate Airspace Bottleneck Forecast", key="btn_run_forecast"):
             with st.spinner(f"Simulating forward airspace demand for {fc_season.capitalize()} {fc_year} at +{fc_growth}% annual growth..."):
-                eng = LongitudinalEngine(ds.db_path)
-                forecaster = AirspaceForecaster(eng)
-                report = forecaster.forecast_airspace_demand(
-                    target_year=int(fc_year),
+                forecaster = AirspaceForecaster()
+                report = forecaster.generate_comprehensive_forecast(
+                    forecast_year=int(fc_year),
                     season=str(fc_season),
-                    annual_growth_rate=float(fc_growth),
-                    grid_step_deg=float(fc_grid),
-                    sector_capacity_threshold=int(fc_thresh),
+                    growth_scenario_pct=float(fc_growth),
+                    grid_size_deg=float(fc_grid),
                 )
 
             fm1, fm2, fm3, fm4 = st.columns(4)
-            fm1.metric("Projected Daily Traffic", f"{report.projected_daily_flights:,.0f} /day", f"{report.growth_multiplier_vs_baseline:.3f}x baseline")
-            fm2.metric("Baseline Daily Flights", f"{report.baseline_daily_flights:,.0f} /day", f"Period: {report.baseline_period}")
-            fm3.metric("Projected Capacity Breaches", f"{len(report.sector_capacity_breaches)} sectors", f">{fc_thresh} flt/hr")
-            fm4.metric("Grid Hotspot Cells", f"{len(report.critical_spatial_cells)} cells", f"Res: {fc_grid}°")
+            fm1.metric("Forecast Scope", report.forecast_label)
+            fm2.metric("Sectors Analyzed", f"{report.total_sectors_analyzed} FIR sectors", f"Base: {report.baseline_period}")
+            fm3.metric("Capacity Breaches", f"{report.breached_sectors_count} Critical / {report.severe_sectors_count} Severe", f"{report.elevated_sectors_count} Elevated")
+            fm4.metric("Network Risk Index", f"{report.network_atfm_risk_index:.1f} / 10.0", f"Res: {fc_grid}°")
 
             st.subheader("Projected Airspace Sector Capacity Breaches")
-            if not report.sector_capacity_breaches:
+            if not report.top_capacity_breaches:
                 st.success("No airspace sectors projected to breach hourly capacity threshold under specified growth parameters.")
             else:
                 b_df = pd.DataFrame([
                     {
                         "Sector / FIR": b.sector_id,
-                        "Baseline Daily Traffic": b.baseline_daily_flights,
-                        "Projected Daily Demand": round(b.projected_daily_flights, 1),
-                        "Baseline Peak (flt/hr)": b.baseline_peak_hourly,
+                        "Nominal Hourly Capacity": b.nominal_capacity_hourly,
+                        "Baseline Peak (flt/hr)": b.historical_peak_hourly_baseline,
+                        "Target Peak (flt/hr)": b.historical_peak_hourly_target,
+                        "Historical Growth (%)": f"{b.historical_growth_pct:+.1f}%",
                         "Projected Peak (flt/hr)": round(b.projected_peak_hourly, 1),
-                        "Hourly Threshold": b.capacity_threshold,
-                        "Breach Severity Index (%)": f"{b.breach_severity_pct:+.1f}%",
-                        "Risk Classification": b.status,
+                        "Projected Saturation (%)": f"{b.projected_saturation_pct:.1f}%",
+                        "Breach Level": b.breach_level,
+                        "Estimated Daily Delay (min)": b.estimated_daily_atfm_delay_min,
+                        "Mitigation Strategy": b.mitigation_recommendation,
                     }
-                    for b in report.sector_capacity_breaches
+                    for b in report.top_capacity_breaches
                 ])
                 st.dataframe(b_df, use_container_width=True)
 
@@ -2020,12 +2014,14 @@ with tab_cat_longitudinal:
             grid_df = pd.DataFrame([
                 {
                     "Cell Coordinates (Lat/Lon)": f"{c.cell_lat:.1f}°, {c.cell_lon:.1f}°",
-                    "Projected Flight Hours / Day": round(c.projected_daily_flight_hours, 1),
-                    "Projected Daily Flights": round(c.projected_daily_flights, 1),
-                    "Baseline Daily Flights": c.baseline_daily_flights,
-                    "Density Severity Level": c.saturation_level,
+                    "Projected Flights": round(c.projected_flights, 1),
+                    "Peak Hourly Flights": c.peak_hourly_flights,
+                    "Baseline Flights": c.flights_baseline,
+                    "Target Flights": c.flights_target,
+                    "Growth (%)": f"{c.historical_growth_pct:+.1f}%",
+                    "Complexity Score": c.complexity_score,
                 }
-                for c in report.critical_spatial_cells[:20]
+                for c in report.top_grid_hotspots
             ])
             st.dataframe(grid_df, use_container_width=True)
 
@@ -2047,17 +2043,20 @@ with tab_cat_longitudinal:
             doc_flt_id = st.text_input("Eurocontrol Flight ID", value=str(active_flight_id), key="doc_flt_id").strip()
             if st.button("Evaluate Flight Operating Cost (€)", key="btn_doc_eval"):
                 with st.spinner(f"Evaluating DOC for flight {doc_flt_id}..."):
-                    econ_eng = AirlineEconomicsEngine(ds.db_path)
+                    econ_eng = AirlineEconomicsEngine(ds, period=selected_period)
                     try:
-                        doc = econ_eng.evaluate_flight_doc(int(doc_flt_id), selected_period)
-                        dm1, dm2, dm3, dm4 = st.columns(4)
-                        dm1.metric("Total DOC", f"€{doc.total_direct_operating_cost_eur:,.2f}")
-                        dm2.metric("Fuel Cost", f"€{doc.fuel_cost_eur:,.2f}", f"{doc.fuel_cost_share_pct:.1f}%")
-                        dm3.metric("Crew/Time Cost", f"€{doc.crew_time_cost_eur:,.2f}", f"{doc.crew_time_cost_share_pct:.1f}%")
-                        dm4.metric("CRCO Route Charges", f"€{doc.navigation_charges_eur:,.2f}", f"{doc.navigation_charges_share_pct:.1f}%")
+                        doc = econ_eng.evaluate_flight_doc(int(doc_flt_id))
+                        if doc:
+                            dm1, dm2, dm3, dm4 = st.columns(4)
+                            dm1.metric("Total DOC", f"€{doc.total_doc_eur:,.2f}")
+                            dm2.metric("Fuel Cost", f"€{doc.fuel_cost_eur:,.2f}", f"{doc.fuel_cost_share_pct:.1f}%")
+                            dm3.metric("Crew/Time Cost", f"€{doc.time_crew_cost_eur:,.2f}", f"{doc.time_cost_share_pct:.1f}%")
+                            dm4.metric("CRCO Route Charges", f"€{doc.crco_navigation_charges_eur:,.2f}", f"{doc.crco_cost_share_pct:.1f}%")
 
-                        st.write(f"**Route:** `{doc.adep}` ➔ `{doc.ades}` | **Operator:** `{doc.ac_operator}` | **Type:** `{doc.ac_type}` | **MTOW:** `{doc.mtow_tonnes:.1f} t`")
-                        st.write(f"**Flown Distance:** `{doc.actual_distance_nm:.1f} nm` | **Air Time:** `{doc.air_time_min:.1f} min` | **Fuel Burn:** `{doc.fuel_burn_kg:,.1f} kg`")
+                            st.write(f"**Route:** `{doc.route}` | **Operator:** `{doc.ac_operator}` | **Type:** `{doc.ac_type}`")
+                            st.write(f"**Flown Distance:** `{doc.distance_nm:.1f} nm` | **Air Time:** `{doc.flight_duration_min:.1f} min` | **Fuel Burn:** `{doc.fuel_burn_kg:,.1f} kg`")
+                        else:
+                            st.warning(f"Could not calculate DOC for flight {doc_flt_id}.")
                     except Exception as e:
                         st.error(f"Error evaluating DOC for flight {doc_flt_id}: {e}")
 
@@ -2067,23 +2066,24 @@ with tab_cat_longitudinal:
             min_c_flts = st.slider("Minimum Corridor Flights", min_value=20, max_value=200, value=50, step=10, key="avoid_min_flts")
             if st.button("Scan Avoidance Corridors", key="btn_scan_avoid"):
                 with st.spinner("Scanning network corridors for route charge avoidance detours..."):
-                    econ_eng = AirlineEconomicsEngine(ds.db_path)
-                    avoid_corridors = econ_eng.scan_network_route_charge_avoidance(selected_period, min_flights=int(min_c_flts), top_n=5)
+                    econ_eng = AirlineEconomicsEngine(ds, period=selected_period)
+                    avoid_corridors = econ_eng.scan_network_route_charge_avoidance(min_corridor_flights=int(min_c_flts), top_n=5)
 
                 if not avoid_corridors:
                     st.info("No significant route avoidance corridors identified with current criteria.")
                 else:
                     av_data = [
                         {
-                            "Corridor": f"{c.adep} ➔ {c.ades}",
+                            "Corridor": c.route,
                             "Flights Analyzed": c.total_flights_analyzed,
-                            "Direct Dist (nm)": round(c.direct_distance_nm, 1),
-                            "Mean Flown Dist (nm)": round(c.mean_flown_distance_nm, 1),
-                            "Mean Detour (nm)": f"+{c.mean_detour_distance_nm:.1f} nm",
-                            "Extra Fuel Burn (kg)": f"+{c.mean_extra_fuel_kg:.1f} kg",
-                            "CRCO Fee Delta (€)": f"€{c.mean_crco_delta_eur:+,.2f}",
-                            "Net Cost Incentive (€)": f"€{c.mean_net_avoidance_incentive_eur:+,.2f}",
-                            "Avoidance Incentive?": "YES" if c.avoidance_incentive_confirmed else "No",
+                            "Avoidance Flights": c.avoidance_flights_count,
+                            "Avoidance Share (%)": f"{c.avoidance_share_pct:.1f}%",
+                            "Mean Detour (nm)": f"+{c.mean_extra_distance_nm:.1f} nm",
+                            "Mean CRCO Saved (€)": f"€{c.mean_crco_savings_eur:,.2f}",
+                            "Extra Fuel (kg)": f"+{c.mean_extra_fuel_kg:.1f} kg",
+                            "Net Cost Benefit (€)": f"€{c.net_economic_benefit_eur:+,.2f}",
+                            "Avoided FIR": c.avoided_fir or "None",
+                            "Preferred Cheaper FIR": c.preferred_lower_fee_fir or "None",
                         }
                         for c in avoid_corridors
                     ]
@@ -2097,19 +2097,19 @@ with tab_cat_longitudinal:
             harm_rate = st.slider("Harmonized European Unit Rate (€ / Service Unit)", min_value=50.0, max_value=100.0, value=72.50, step=2.5, key="harm_rate")
             if st.button("Simulate SES Policy Harmonization", key="btn_sim_ses"):
                 with st.spinner("Simulating European rate harmonization impact..."):
-                    econ_eng = AirlineEconomicsEngine(ds.db_path)
-                    ses_res = econ_eng.simulate_harmonized_eurocontrol_rate(selected_period, harmonized_rate_eur=float(harm_rate), sample_corridors=25)
+                    econ_eng = AirlineEconomicsEngine(ds, period=selected_period)
+                    ses_res = econ_eng.simulate_harmonized_eurocontrol_rate(harmonized_rate_eur=float(harm_rate), sample_size=100)
 
                 sm_c1, sm_c2 = st.columns(2)
-                sm_c1.metric("Eliminated Detour Flights", f"{ses_res.annualized_avoidance_flights_eliminated:,} flights/yr")
-                sm_c2.metric("Annual Jet-A Fuel Saved", f"{ses_res.annualized_fuel_saved_tonnes:,.0f} tonnes")
+                sm_c1.metric("Eliminated Detour Flights", f"{ses_res.estimated_annual_avoidance_flights_eliminated:,} flights/yr")
+                sm_c2.metric("Annual Jet-A Fuel Saved", f"{ses_res.estimated_annual_fuel_saved_tonnes:,.0f} tonnes")
                 sm_c3, sm_c4 = st.columns(2)
-                sm_c3.metric("Annual CO₂ Emissions Mitigated", f"{ses_res.annualized_co2_mitigated_tonnes:,.0f} tonnes")
-                sm_c4.metric("Airlines Net Annual Saving", f"€{ses_res.annualized_airline_savings_eur:,.0f} EUR")
+                sm_c3.metric("Annual CO₂ Emissions Mitigated", f"{ses_res.estimated_annual_co2_saved_tonnes:,.0f} tonnes")
+                sm_c4.metric("Airlines Net Annual Saving", f"€{ses_res.estimated_annual_airline_cost_saved_eur:,.0f} EUR")
 
                 st.success(
                     f"**SES Policy Implication:** Flat rate of €{harm_rate:.2f}/SU eliminates detour flight incentives, "
-                    f"returning direct traffic to central European airspace while mitigating ~{ses_res.annualized_co2_mitigated_tonnes:,.0f} tonnes of CO₂ annually."
+                    f"returning direct traffic to central European airspace while mitigating ~{ses_res.estimated_annual_co2_saved_tonnes:,.0f} tonnes of CO₂ annually."
                 )
 
             st.markdown("---")
@@ -2117,28 +2117,30 @@ with tab_cat_longitudinal:
             st.markdown(
                 "Identifies morning departures whose delays trigger downstream cascading infections along aircraft rotations."
             )
-            col_sp_dt, col_sp_leg = st.columns(2)
+            col_sp_dt, col_sp_del = st.columns(2)
             default_date = "2025-10-15" if selected_period == "202510" else f"{selected_period[:4]}-{selected_period[4:6]}-15"
             sp_date = col_sp_dt.text_input("Operating Date (YYYY-MM-DD)", value=default_date, key="sp_date").strip()
-            sp_min_legs = col_sp_leg.slider("Min Downstream Infected Legs", min_value=1, max_value=5, value=2, key="sp_min_legs")
+            sp_min_del = col_sp_del.slider("Min Primary Departure Delay (min)", min_value=10, max_value=60, value=25, key="sp_min_del")
 
             if st.button("Detect Delay Super-Spreaders", key="btn_find_spreaders"):
                 with st.spinner(f"Tracing airframe delay contagion for {sp_date}..."):
-                    delay_eng = DelayContagionGraphEngine(ds.db_path)
-                    spreaders = delay_eng.identify_super_spreaders(selected_period, sp_date, min_downstream_legs=int(sp_min_legs))
+                    delay_eng = DelayContagionGraphEngine(ds, period=selected_period)
+                    spreaders = delay_eng.identify_super_spreaders(date_str=sp_date, min_primary_delay_min=float(sp_min_del), top_n=15)
 
                 if not spreaders:
-                    st.info(f"No multi-leg super-spreaders found for date {sp_date} with >={sp_min_legs} downstream legs.")
+                    st.info(f"No multi-leg super-spreaders found for date {sp_date} with >={sp_min_del}m departure delay.")
                 else:
                     sp_df = pd.DataFrame([
                         {
-                            "Root Flight ID": s.root_ectrl_id,
-                            "Tail": s.aircraft_reg,
+                            "Root Flight ID": s.ectrl_id,
+                            "Tail": s.ac_reg,
                             "Carrier": s.operator,
-                            "Initial Departure Delay": f"{s.initial_dep_delay_min:+.0f} min",
-                            "Infected Downstream Legs": s.infected_downstream_legs_count,
-                            "Cumulative Reactionary Delay": f"{s.cumulative_downstream_delay_min:.0f} min ({s.reactionary_delay_hours:.1f} hrs)",
-                            "Reactionary Cost (€)": f"€{s.reactionary_delay_cost_eur:,.0f}",
+                            "Origin Hub": s.origin_hub,
+                            "Destination": s.destination,
+                            "Initial Departure Delay": f"{s.primary_delay_min:+.0f} min",
+                            "Infected Downstream Legs": s.infected_downstream_legs,
+                            "Downstream Reactionary Delay": f"{s.total_downstream_delay_min:.0f} min",
+                            "Reactionary Delay Cost (€)": f"€{s.reactionary_delay_cost_eur:,.0f}",
                         }
                         for s in spreaders[:15]
                     ])
