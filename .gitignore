@@ -63,3 +63,7 @@ venv/
 
 # Generated HTML visualization maps from CLI runs
 *.html
+
+# Internal sprint & planning roadmaps
+docs/v3_sprint.md
+docs/v4_plan.md

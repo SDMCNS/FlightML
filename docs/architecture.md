@@ -193,5 +193,5 @@ FlightML features an experimental machine learning and operations research suite
 
 ### 8. Multimodal Aeronautical Copilot Architecture (Epic 6 - Specification)
 - **Document Text Corpus**: Designed to ingest Eurocontrol Route Availability Document (RAD), national Aeronautical Information Publications (AIPs), active NOTAMs, and METAR/TAF weather briefings into a vector database with hybrid BM25 + dense neural retrieval.
-- **Implementation Status**: Architecturally documented in `docs/v4_plan.md`; implementation deferred pending authoritative raw document text pipelines.
+- **Implementation Status**: Architectural specification defined; implementation deferred pending authoritative raw document text pipelines.
 

@@ -32,7 +32,6 @@ Detailed manuals and developer guides are located in the [**`docs/`**](docs/inde
 - 🏛️ [**Architecture & Methodology**](docs/architecture.md): DuckDB columnar execution, ICAO GANP & Eurocontrol PRU formulas, OpenAP & ICAO EDB v32B physics, Eurocontrol CRCO charges (`€`), operations research models, and v4 neural architectures.
 - 🤖 [**Model Context Protocol (MCP) Server Guide**](docs/mcp_server.md): Exposing FlightML tools to local LLMs (LM Studio, Claude Desktop, Cursor) via MCP.
 - 💬 [**LM Studio + Qwen 2.5 Coder Example Transcript**](docs/mcp_example_lmstudio.md): End-to-end multi-turn transcript querying flight telemetry, calculating punctuality, and rendering markdown tables.
-- 🗺️ [**FlightML v4 Strategic Plan**](docs/v4_plan.md): Comprehensive vision for Neural Airspace Intelligence, Spatio-Temporal GNNs, Generative Diffusion, Multi-Agent RL, and Multimodal Copilot.
 
 ---
 
