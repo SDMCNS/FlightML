@@ -63,7 +63,7 @@ from flightml.eval.surface_taxi import (
 )
 from flightml.eval.fuel_carbon import compute_flight_fuel_and_emissions
 from flightml.eval.aircraft_engine_perf import resolve_aircraft_engine_perf
-from flightml.eval.multi_level_kpis import query_multi_level_kpis
+from flightml.eval.multi_level_kpis import query_multi_level_kpis, get_dataset_date_bounds
 from flightml.eval.jet_fuel_prices import (
     get_all_weekly_fuel_prices_df,
     get_weekly_fuel_price,
@@ -940,6 +940,7 @@ def get_repeat_offender_routes_endpoint(
     """Scan reporting period for chronic repeat offender routes causing downstream delay contagion."""
     ds = FlightDataset(period=period)
     engine = DelayContagionGraphEngine(ds)
+    start_date, end_date = get_dataset_date_bounds(ds)
     routes = engine.scan_repeat_offender_routes(
         min_primary_delay_min=min_delay,
         min_propagated_delay_min=min_propagated,
@@ -948,6 +949,8 @@ def get_repeat_offender_routes_endpoint(
     )
     return {
         "period": period,
+        "start_date": start_date,
+        "end_date": end_date,
         "routes_count": len(routes),
         "repeat_offender_routes": [r.to_dict() for r in routes],
     }
@@ -964,6 +967,7 @@ def get_repeat_offender_operators_endpoint(
     """Scan reporting period for airline operators generating systemic delay contagion across airframe chains."""
     ds = FlightDataset(period=period)
     engine = DelayContagionGraphEngine(ds)
+    start_date, end_date = get_dataset_date_bounds(ds)
     operators = engine.scan_repeat_offender_operators(
         min_primary_delay_min=min_delay,
         min_propagated_delay_min=min_propagated,
@@ -972,6 +976,8 @@ def get_repeat_offender_operators_endpoint(
     )
     return {
         "period": period,
+        "start_date": start_date,
+        "end_date": end_date,
         "operators_count": len(operators),
         "repeat_offender_operators": [o.to_dict() for o in operators],
     }

@@ -88,6 +88,9 @@ def test_api_v3_repeat_offender_routes(client):
     assert response.status_code == 200
     data = response.json()
     assert data["period"] == "202510"
+    assert "start_date" in data and len(data["start_date"]) == 10
+    assert "end_date" in data and len(data["end_date"]) == 10
+    assert data["start_date"] <= data["end_date"]
     assert "repeat_offender_routes" in data
     assert len(data["repeat_offender_routes"]) > 0
     r0 = data["repeat_offender_routes"][0]
@@ -100,6 +103,9 @@ def test_api_v3_repeat_offender_operators(client):
     assert response.status_code == 200
     data = response.json()
     assert data["period"] == "202510"
+    assert "start_date" in data and len(data["start_date"]) == 10
+    assert "end_date" in data and len(data["end_date"]) == 10
+    assert data["start_date"] <= data["end_date"]
     assert "repeat_offender_operators" in data
     assert len(data["repeat_offender_operators"]) > 0
     o0 = data["repeat_offender_operators"][0]

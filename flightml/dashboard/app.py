@@ -2161,9 +2161,11 @@ with tab_cat_longitudinal:
 
             st.markdown("---")
             st.subheader("4. Airframe Delay Contagion & Repeat Offender Analyzer")
+            p_start_date, p_end_date = get_dataset_date_bounds(ds)
             st.markdown(
-                "Detects morning departures whose delays trigger downstream cascading infections along aircraft rotations, "
-                "and identifies chronic repeat offender routes and operators causing systemic network delay propagation."
+                f"Detects morning departures whose delays trigger downstream cascading infections along aircraft rotations, "
+                f"and identifies chronic repeat offender routes and operators causing systemic network delay propagation.\n\n"
+                f"🗓️ **Analyzed Reporting Period:** `{selected_period}` | **Coverage Window:** **{p_start_date}** to **{p_end_date}**"
             )
 
             contagion_scope = st.radio(
@@ -2180,12 +2182,13 @@ with tab_cat_longitudinal:
                     horizontal=True,
                     key="offender_dim_radio",
                 )
+                st.info(f"📊 **Period-Wide Scan Scope:** Analyzing all sequential airframe rotations between **{p_start_date}** and **{p_end_date}** (Period `{selected_period}`)")
                 col_of1, col_of2 = st.columns(2)
                 min_pri_del = col_of1.slider("Min Primary Departure Delay (min)", min_value=15, max_value=60, value=25, key="of_min_pri_del")
                 min_prop_del = col_of2.slider("Min Propagated Reactionary Delay (min)", min_value=5, max_value=30, value=10, key="of_min_prop_del")
 
                 if st.button("Scan Reporting Period for Repeat Offenders", key="btn_scan_offenders"):
-                    with st.spinner("Scanning entire monthly archive for repeat contagion sources..."):
+                    with st.spinner(f"Scanning archive {selected_period} ({p_start_date} to {p_end_date}) for repeat contagion sources..."):
                         delay_eng = DelayContagionGraphEngine(ds, period=selected_period)
                         if "Routes" in offender_sub_choice:
                             off_routes = delay_eng.scan_repeat_offender_routes(
@@ -2195,9 +2198,11 @@ with tab_cat_longitudinal:
                                 top_n=20,
                             )
                             if not off_routes:
-                                st.info("No repeat offender routes found with current criteria.")
+                                st.info(f"No repeat offender routes found between {p_start_date} and {p_end_date} with current criteria.")
                             else:
-                                om1, om2, om3 = st.columns(3)
+                                st.success(f"**Period Scope:** Analyzed all rotations from **{p_start_date}** to **{p_end_date}** (Period `{selected_period}`).")
+                                om0, om1, om2, om3 = st.columns(4)
+                                om0.metric("Analysis Period", f"{selected_period}", f"{p_start_date} to {p_end_date}")
                                 om1.metric("Worst Offender Route", off_routes[0].route, f"{off_routes[0].incident_count} delay infection days")
                                 om2.metric("Max Reactionary Delay", f"{off_routes[0].total_reactionary_delay_hours:.1f} hrs", f"Avg Leg 1 Delay: {off_routes[0].avg_primary_dep_delay_min:.0f}m")
                                 om3.metric("Max Financial Damage", f"€{off_routes[0].total_reactionary_cost_eur:,.0f} EUR", f"{off_routes[0].total_downstream_legs_infected} legs infected")
@@ -2212,6 +2217,7 @@ with tab_cat_longitudinal:
                                         "Downstream Legs Infected": r.total_downstream_legs_infected,
                                         "Reactionary Delay (hrs)": f"{r.total_reactionary_delay_hours:.1f} hrs",
                                         "Reactionary Cost (€)": f"€{r.total_reactionary_cost_eur:,.0f}",
+                                        "Period Window": f"{p_start_date} to {p_end_date}",
                                     }
                                     for r in off_routes
                                 ])
@@ -2224,9 +2230,11 @@ with tab_cat_longitudinal:
                                 top_n=20,
                             )
                             if not off_ops:
-                                st.info("No repeat offender operators found with current criteria.")
+                                st.info(f"No repeat offender operators found between {p_start_date} and {p_end_date} with current criteria.")
                             else:
-                                om1, om2, om3 = st.columns(3)
+                                st.success(f"**Period Scope:** Analyzed all carrier rotations from **{p_start_date}** to **{p_end_date}** (Period `{selected_period}`).")
+                                om0, om1, om2, om3 = st.columns(4)
+                                om0.metric("Analysis Period", f"{selected_period}", f"{p_start_date} to {p_end_date}")
                                 om1.metric("Highest Contagion Carrier", off_ops[0].operator, f"{off_ops[0].total_root_spreader_flights} spreader flights")
                                 om2.metric("Total Downstream Delay", f"{off_ops[0].total_reactionary_delay_hours:,.1f} hrs", f"{off_ops[0].total_downstream_legs_infected} legs infected")
                                 om3.metric("Total Reactionary Cost", f"€{off_ops[0].total_reactionary_cost_eur:,.0f} EUR", f"Multiplier: {off_ops[0].downstream_infection_multiplier:.2f}x")
@@ -2240,6 +2248,7 @@ with tab_cat_longitudinal:
                                         "Infection Multiplier": f"{o.downstream_infection_multiplier:.2f}x",
                                         "Reactionary Delay (hrs)": f"{o.total_reactionary_delay_hours:.1f} hrs",
                                         "Reactionary Cost (€)": f"€{o.total_reactionary_cost_eur:,.0f}",
+                                        "Period Window": f"{p_start_date} to {p_end_date}",
                                     }
                                     for o in off_ops
                                 ])
@@ -2247,8 +2256,8 @@ with tab_cat_longitudinal:
 
             else:
                 col_sp_dt, col_sp_del = st.columns(2)
-                default_date = "2025-10-15" if selected_period == "202510" else f"{selected_period[:4]}-{selected_period[4:6]}-15"
-                sp_date = col_sp_dt.text_input("Operating Date (YYYY-MM-DD)", value=default_date, key="sp_date").strip()
+                default_date = p_start_date if p_start_date else "2025-10-15"
+                sp_date = col_sp_dt.text_input(f"Operating Date (within {p_start_date} to {p_end_date})", value=default_date, key="sp_date").strip()
                 sp_min_del = col_sp_del.slider("Min Primary Departure Delay (min)", min_value=10, max_value=60, value=25, key="sp_min_del")
 
                 if st.button("Detect Delay Super-Spreaders", key="btn_find_spreaders"):
@@ -2259,6 +2268,7 @@ with tab_cat_longitudinal:
                     if not spreaders:
                         st.info(f"No multi-leg super-spreaders found for date {sp_date} with >={sp_min_del}m departure delay.")
                     else:
+                        st.success(f"**Date Analyzed:** {sp_date} (within period `{selected_period}` coverage: **{p_start_date}** to **{p_end_date}**)")
                         sp_df = pd.DataFrame([
                             {
                                 "Root Flight ID": s.ectrl_id,
@@ -2270,9 +2280,11 @@ with tab_cat_longitudinal:
                                 "Infected Downstream Legs": s.infected_downstream_legs,
                                 "Downstream Reactionary Delay": f"{s.total_downstream_delay_min:.0f} min",
                                 "Reactionary Delay Cost (€)": f"€{s.reactionary_delay_cost_eur:,.0f}",
+                                "Period Analyzed": f"{p_start_date} to {p_end_date}",
                             }
                             for s in spreaders[:15]
                         ])
+                        st.dataframe(sp_df, use_container_width=True)
                         st.dataframe(sp_df, use_container_width=True)
 
 

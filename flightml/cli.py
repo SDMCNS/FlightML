@@ -55,6 +55,7 @@ from flightml.geo.conflict_scanner import (
 from flightml.weather.runway_safety import assess_flight_runway_safety
 from flightml.eval.contrail_climate import analyze_flight_wind_and_contrails
 from flightml.sim.tail_swap_optimizer import optimize_hub_tail_swaps
+from flightml.eval.multi_level_kpis import get_dataset_date_bounds
 from flightml.data.archive_ingest import EurocontrolArchiveIngestor, list_available_periods
 from flightml.weather.network_weather_impact import analyze_network_weather_impact
 from flightml.geo.airac_diff import compare_airac_cycles
@@ -1190,22 +1191,23 @@ def delay_offenders_cmd(
     """Scan reporting period for chronic repeat offender routes and operators causing systemic delay contagion."""
     ds = FlightDataset(period=period)
     engine = DelayContagionGraphEngine(ds)
+    start_date, end_date = get_dataset_date_bounds(ds)
     t_type = target_type.strip().lower()
 
     if "op" in t_type:
-        with console.status(f"[cyan]Scanning period {period} for repeat offender airline operators..."):
+        with console.status(f"[cyan]Scanning period {period} ({start_date} to {end_date}) for repeat offender airline operators..."):
             operators = engine.scan_repeat_offender_operators(
                 min_primary_delay_min=min_delay,
                 min_propagated_delay_min=min_propagated,
                 min_spreader_flights=5,
                 top_n=top_n,
             )
-        console.print(f"\n[bold green]Top Delay Contagion Offender Airline Operators (Period {period}):[/bold green]")
+        console.print(f"\n[bold green]Top Delay Contagion Offender Airline Operators (Period {period}, {start_date} to {end_date}):[/bold green]")
         if not operators:
-            console.print("[yellow]No repeat offender operators found meeting threshold.[/yellow]")
+            console.print(f"[yellow]No repeat offender operators found between {start_date} and {end_date} meeting threshold.[/yellow]")
             return
 
-        op_tab = Table(title="Airline Operators Triggering Systemic Downstream Delay Cascades", header_style="bold magenta")
+        op_tab = Table(title=f"Airline Operators Triggering Systemic Downstream Delay Cascades ({start_date} to {end_date})", header_style="bold magenta")
         op_tab.add_column("Airline", style="cyan")
         op_tab.add_column("Spreader Flights", justify="right", style="bold red")
         op_tab.add_column("Avg Initial Delay", justify="right", style="white")
@@ -1226,19 +1228,19 @@ def delay_offenders_cmd(
             )
         console.print(op_tab)
     else:
-        with console.status(f"[cyan]Scanning period {period} for chronic repeat offender routes..."):
+        with console.status(f"[cyan]Scanning period {period} ({start_date} to {end_date}) for chronic repeat offender routes..."):
             routes = engine.scan_repeat_offender_routes(
                 min_primary_delay_min=min_delay,
                 min_propagated_delay_min=min_propagated,
                 min_incidents=3,
                 top_n=top_n,
             )
-        console.print(f"\n[bold green]Top Delay Contagion Repeat Offender Routes (Period {period}):[/bold green]")
+        console.print(f"\n[bold green]Top Delay Contagion Repeat Offender Routes (Period {period}, {start_date} to {end_date}):[/bold green]")
         if not routes:
-            console.print("[yellow]No repeat offender routes found meeting threshold.[/yellow]")
+            console.print(f"[yellow]No repeat offender routes found between {start_date} and {end_date} meeting threshold.[/yellow]")
             return
 
-        rt_tab = Table(title="City-Pair Routes Triggering Systemic Downstream Reactionary Delay Contagion", header_style="bold magenta")
+        rt_tab = Table(title=f"City-Pair Routes Triggering Systemic Downstream Reactionary Delay Contagion ({start_date} to {end_date})", header_style="bold magenta")
         rt_tab.add_column("Route", style="cyan")
         rt_tab.add_column("Contagion Incidents", justify="right", style="bold red")
         rt_tab.add_column("Avg Initial Delay", justify="right", style="white")

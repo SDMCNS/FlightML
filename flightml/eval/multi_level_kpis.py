@@ -76,7 +76,7 @@ def get_dataset_date_bounds(ds: FlightDataset) -> tuple[str, str]:
         FROM flights
     """)
     if not bounds.empty and bounds.iloc[0]["min_date"] is not None:
-        return str(bounds.iloc[0]["min_date"]), str(bounds.iloc[0]["max_date"])
+        return str(bounds.iloc[0]["min_date"])[:10], str(bounds.iloc[0]["max_date"])[:10]
     fallback_min = "2016-11-01" if ds.period == "201611" else "2025-10-01"
     fallback_max = "2016-11-30" if ds.period == "201611" else "2025-10-31"
     return fallback_min, fallback_max
