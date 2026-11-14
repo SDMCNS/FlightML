@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import altair as alt
+import numpy as np
 import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
@@ -3250,6 +3251,28 @@ with tab_cat_ai_lab:
             "Enables zero-shot operational twin search, semantic flight classification, and unsupervised anomaly detection."
         )
 
+        f2v = Flight2VecEngine(ds, period=selected_period)
+        cached_count = f2v.get_cached_count()
+
+        col_c_info, col_c_btn = st.columns([2.5, 1.5])
+        with col_c_info:
+            if cached_count > 0:
+                st.success(
+                    f"⚡ **Pre-Vectorized Corpus Active**: **{cached_count:,} flights** cached in `data/cache/flight2vec/`. "
+                    f"Twin queries search across the entire pre-vectorized corpus via matrix BLAS dot product in **<5 ms**."
+                )
+            else:
+                st.info(
+                    "💡 **Pre-Vectorization Available**: Pre-vectorizing flights in batch persists 128D embeddings to disk, "
+                    "enabling instantaneous full-corpus operational twin retrieval."
+                )
+        with col_c_btn:
+            if st.button("⚡ Pre-Vectorize Corpus (25k Flights)", key=f"btn_pre_vec_{selected_period}"):
+                with st.spinner("Pre-vectorizing flights via PyTorch batch matrix tensor operations..."):
+                    n_vec = f2v.build_vector_cache(limit=25000)
+                st.success(f"Successfully vectorized and cached {n_vec:,} flights!")
+                st.rerun()
+
         col_f1, col_f2, col_f3 = st.columns([1.5, 1, 1])
         with col_f1:
             f2v_target_input = st.text_input(
@@ -3260,7 +3283,7 @@ with tab_cat_ai_lab:
         with col_f2:
             f2v_top_k = st.slider("Top Twins to Retrieve", 3, 10, 5, key=f"f2v_top_k_{selected_period}")
         with col_f3:
-            f2v_pool_size = st.slider("Search Corpus Sample Size", 50, 300, 150, key=f"f2v_pool_{selected_period}")
+            f2v_pool_size = st.slider("Search Corpus Sample Size (Fallback)", 50, 1000, 250, key=f"f2v_pool_{selected_period}")
 
         if st.button("Generate 128D Embedding & Retrieve Latent Twins", key=f"btn_f2v_{selected_period}"):
             try:
@@ -3269,7 +3292,6 @@ with tab_cat_ai_lab:
                 target_f_id = int(active_flight_id)
 
             with st.spinner(f"Computing 128D Flight2Vec projection for flight #{target_f_id}..."):
-                f2v = Flight2VecEngine(ds, period=selected_period)
                 emb = f2v.embed_flight(target_f_id)
 
             if emb is None:

@@ -186,3 +186,21 @@ def test_marl_atfm_simulator(dataset: FlightDataset):
     d = res.to_dict()
     assert d["regulated_airport"] == "EGLL"
     assert len(d["airline_strategies"]) == 4
+
+
+def test_flight2vec_prevectorization_cache(dataset: FlightDataset, sample_flight_id: int):
+    f2v = Flight2VecEngine(dataset)
+    # Pre-vectorize a small test slice (e.g. 100 flights)
+    count = f2v.build_vector_cache(limit=100)
+    assert count == 100
+    assert f2v.is_cache_available() is True
+    assert f2v.get_cached_count() >= 100
+
+    # Retrieve twins using the pre-vectorized cache
+    cached_twins = f2v.find_operational_twins(sample_flight_id, top_k=3, use_cache=True)
+    assert isinstance(cached_twins, list)
+    if cached_twins:
+        t = cached_twins[0]
+        assert -1.0 <= t.cosine_similarity <= 1.001
+        assert 0.0 <= t.similarity_pct <= 100.0
+

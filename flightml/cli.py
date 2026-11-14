@@ -2472,6 +2472,60 @@ def optimize_tail_swaps_cmd(
         console.print(table)
 
 
+@app.command("vectorize-flights")
+def vectorize_flights_cmd(
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol dataset period"),
+    limit: int = typer.Option(25000, "--limit", "-l", help="Number of flights to vectorize in batch"),
+) -> None:
+    """Pre-vectorize flights into 128D Flight2Vec embeddings and persist to disk cache."""
+    from flightml.models.flight2vec import Flight2VecEngine
+    console.print(f"[bold cyan]🧬 Initializing Flight2Vec batch neural vectorization for period {period} (limit: {limit:,})...[/bold cyan]")
+    ds = FlightDataset(period=period)
+    engine = Flight2VecEngine(ds, period=period)
+    count = engine.build_vector_cache(limit=limit)
+    console.print(f"[bold green]✓ Successfully vectorized and cached {count:,} flights into 128D latent space![/bold green]")
+    meta_p, vec_p = engine._get_cache_paths()
+    console.print(f"  • Metadata: [dim]{meta_p}[/dim]")
+    console.print(f"  • Latent Vectors: [dim]{vec_p}[/dim]")
+
+
+@app.command("find-twins")
+def find_twins_cmd(
+    flight_id: int = typer.Argument(..., help="Target flight ECTRL ID"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol dataset period"),
+    top_k: int = typer.Option(5, "--top-k", "-k", help="Number of nearest twins to retrieve"),
+) -> None:
+    """Find operational twin flights in 128D latent space using cosine similarity."""
+    from flightml.models.flight2vec import Flight2VecEngine
+    ds = FlightDataset(period=period)
+    engine = Flight2VecEngine(ds, period=period)
+    twins = engine.find_operational_twins(flight_id, top_k=top_k)
+    if not twins:
+        console.print(f"[red]No operational twins found for flight #{flight_id}.[/red]")
+        return
+    table = Table(title=f"🧬 Flight2Vec Operational Twins for #{flight_id}")
+    table.add_column("Flight ID", style="cyan")
+    table.add_column("Route")
+    table.add_column("Operator")
+    table.add_column("Aircraft")
+    table.add_column("Distance")
+    table.add_column("Arr Delay")
+    table.add_column("Cosine Sim")
+    table.add_column("Match %")
+    for t in twins:
+        table.add_row(
+            str(t.ectrl_id),
+            t.route,
+            t.operator,
+            t.ac_type,
+            f"{t.flown_distance_nm:.0f} nm",
+            f"{t.arr_delay_min:+.1f} min",
+            f"{t.cosine_similarity:.4f}",
+            f"{t.similarity_pct:.1f}%",
+        )
+    console.print(table)
+
+
 @app.command("dashboard")
 def dashboard_cmd(
     port: int = typer.Option(8501, "--port", "-p", help="Port for the Streamlit dashboard"),
