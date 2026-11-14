@@ -68,6 +68,17 @@ def test_query_fir_traffic_segmentation_201611():
     assert total_sum == seg.total_flights
 
 
+def test_eisn_overflights_no_false_positives():
+    """Verify that EISNFIR overflights do not include clipping UK domestic flights (e.g. EGAA ➔ EGKK)."""
+    for period in ["202510", "201611"]:
+        ds = FlightDataset(period=period)
+        seg = query_fir_traffic_segmentation(ds, fir_id="EISNFIR")
+        pairs = [c["pair"] for c in seg.top_corridors.get("Overflight", [])]
+        assert not any("EGAA" in p for p in pairs), f"EGAA should not be in EISNFIR overflights ({period}): {pairs}"
+        assert not any("EGKK" in p for p in pairs), f"EGKK should not be in EISNFIR overflights ({period}): {pairs}"
+        assert any("KJFK" in p or "KEWR" in p or "KORD" in p for p in pairs), f"Expected transatlantic corridor for EISNFIR ({period}): {pairs}"
+
+
 def test_query_multi_level_kpis_fir_and_filter():
     ds = FlightDataset(period="202510")
 

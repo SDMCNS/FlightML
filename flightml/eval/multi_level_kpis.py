@@ -332,8 +332,14 @@ def query_fir_traffic_segmentation(
                       AND longitude BETWEEN {min_lon} AND {max_lon}
                 )
             """
-            where_clause = f"{date_filter} AND (f.adep LIKE '{pfx}' OR f.ades LIKE '{pfx}' OR f.ectrl_id IN (SELECT ectrl_id FROM fir_pts))"
-            ov_cond = f"f.adep NOT LIKE '{pfx}' AND f.ades NOT LIKE '{pfx}' AND f.ectrl_id IN (SELECT ectrl_id FROM fir_pts)"
+            where_clause = (
+                f"{date_filter} AND (f.adep LIKE '{pfx}' OR f.ades LIKE '{pfx}' OR "
+                f"(f.ectrl_id IN (SELECT ectrl_id FROM fir_pts) AND NOT (SUBSTR(f.adep, 1, 2) = SUBSTR(f.ades, 1, 2) AND f.adep NOT LIKE '{pfx}')))"
+            )
+            ov_cond = (
+                f"f.adep NOT LIKE '{pfx}' AND f.ades NOT LIKE '{pfx}' AND "
+                f"f.ectrl_id IN (SELECT ectrl_id FROM fir_pts) AND NOT (SUBSTR(f.adep, 1, 2) = SUBSTR(f.ades, 1, 2) AND f.adep NOT LIKE '{pfx}')"
+            )
         else:
             traj_cte = ""
             where_clause = f"{date_filter} AND (f.adep LIKE '{pfx}' OR f.ades LIKE '{pfx}')"
@@ -363,8 +369,50 @@ def query_fir_traffic_segmentation(
         """
         df = ds.query(sql)
 
+        # Polygon-accurate verification for Overflight corridors via FIREngine to reject clipping flights
+        u_poly = None
+        try:
+            from flightml.geo.fir_engine import FIREngine
+            from shapely.ops import unary_union
+            from shapely.geometry import LineString
+            eng = FIREngine()
+            polys = [s.polygon for s in eng.sectors if s.airspace_id in (clean_fir, uir_id) or s.airspace_id.startswith(clean_fir[:4])]
+            if polys:
+                u_poly = unary_union(polys)
+        except Exception:
+            u_poly = None
+
+        ov_c_sql = f"""
+            {traj_cte}
+            SELECT f.adep, f.ades, f.adep || ' ➔ ' || f.ades AS city_pair, count(*) AS flt_cnt, min(f.ectrl_id) AS sample_id
+            FROM flights f
+            WHERE {date_filter} AND {ov_cond}
+            GROUP BY f.adep, f.ades
+            ORDER BY flt_cnt DESC
+            LIMIT 30;
+        """
+        ov_c_df = ds.query(ov_c_sql)
+        verified_ov = []
+        if not ov_c_df.empty:
+            for _, r in ov_c_df.iterrows():
+                s_id = int(r["sample_id"])
+                is_valid = True
+                if u_poly is not None:
+                    try:
+                        traj_dict = ds.get_trajectory(s_id)
+                        pts = traj_dict["actual"] if isinstance(traj_dict, dict) and "actual" in traj_dict else traj_dict
+                        if pts is not None and len(pts) >= 2:
+                            line = LineString(zip(pts["longitude"], pts["latitude"]))
+                            is_valid = u_poly.intersects(line)
+                    except Exception:
+                        is_valid = True
+                if is_valid:
+                    verified_ov.append({"pair": str(r["city_pair"]), "count": int(r["flt_cnt"])})
+                    if len(verified_ov) >= 5:
+                        break
+        top_corridors["Overflight"] = verified_ov
+
         for cat, cond in [
-            ("Overflight", ov_cond),
             ("Arrival", f"f.adep NOT LIKE '{pfx}' AND f.ades LIKE '{pfx}'"),
             ("Departure", f"f.adep LIKE '{pfx}' AND f.ades NOT LIKE '{pfx}'"),
             ("Internal", f"f.adep LIKE '{pfx}' AND f.ades LIKE '{pfx}'"),
@@ -476,7 +524,9 @@ def query_multi_level_kpis(
                 pass
             if min_lat is not None and max_lat is not None:
                 where_parts.append(
-                    f"(f.adep LIKE '{pfx}%' OR f.ades LIKE '{pfx}%' OR f.ectrl_id IN (SELECT DISTINCT ectrl_id FROM trajectory_actual WHERE latitude BETWEEN {min_lat} AND {max_lat} AND longitude BETWEEN {min_lon} AND {max_lon}))"
+                    f"(f.adep LIKE '{pfx}%' OR f.ades LIKE '{pfx}%' OR "
+                    f"(f.ectrl_id IN (SELECT DISTINCT ectrl_id FROM trajectory_actual WHERE latitude BETWEEN {min_lat} AND {max_lat} AND longitude BETWEEN {min_lon} AND {max_lon}) "
+                    f"AND NOT (SUBSTR(f.adep, 1, 2) = SUBSTR(f.ades, 1, 2) AND f.adep NOT LIKE '{pfx}%')))"
                 )
             else:
                 where_parts.append(f"(f.adep LIKE '{pfx}%' OR f.ades LIKE '{pfx}%')")
