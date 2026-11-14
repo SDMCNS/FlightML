@@ -131,10 +131,17 @@ def test_st_gnn_delay_propagation(dataset: FlightDataset):
     assert res.total_flights_impacted >= 0
     assert isinstance(res.sample_impacted_flights, list)
     assert isinstance(res.sample_turnaround_rotations, list)
+    assert res.total_freed_slots_count >= 0
+    assert res.unserved_rotations_count >= 0
+    assert isinstance(res.downstream_airports_impacted, list)
+    assert res.backlog_acceleration_pct >= 0.0
 
     d = res.to_dict()
     assert d["shock_origin_node"] == "EGLL"
     assert len(d["top_vulnerable_nodes"]) == len(res.top_vulnerable_nodes)
+    assert "total_freed_slots_count" in d
+    assert "unserved_rotations_count" in d
+    assert "backlog_acceleration_pct" in d
 
     # Test with explicit shock date and time and duration
     valid_date = res.shock_datetime.split()[0]
@@ -169,10 +176,16 @@ def test_airspace_closure_simulator(dataset: FlightDataset):
     assert res.total_extra_fuel_burned_tonnes > 0.0
     assert res.total_airline_economic_loss_eur > 0.0
     assert res.post_reopening_recovery_hours > 0.0
+    assert res.unserved_return_flights_count >= 0
+    assert res.total_freed_slots_count >= 0
+    assert isinstance(res.downstream_airports_impacted, list)
+    assert res.backlog_acceleration_pct >= 0.0
+    assert isinstance(res.sample_tail_rotations, list)
     assert len(res.recovery_curve) > 0
     c0 = res.recovery_curve[0]
     assert "time_utc" in c0
     assert "backlog_flights" in c0
+    assert "naive_backlog_flights" in c0
     assert "sector_surge_capacity" in c0
     assert "Hours_Post_Reopening" in c0
     assert "Remaining_Backlog_Flights" in c0
@@ -188,6 +201,9 @@ def test_airspace_closure_simulator(dataset: FlightDataset):
     d = res.to_dict()
     assert d["target_fir"] == "LSASFIR"
     assert len(d["sample_rerouted_flights"]) == len(res.sample_rerouted_flights)
+    assert "unserved_return_flights_count" in d
+    assert "total_freed_slots_count" in d
+    assert "backlog_acceleration_pct" in d
 
     # Test with explicit date_str
     res_date = sim.simulate_fir_closure(

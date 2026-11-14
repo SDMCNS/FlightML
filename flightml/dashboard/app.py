@@ -3751,20 +3751,31 @@ with tab_cat_ai_lab:
                 st.dataframe(impacted_df, use_container_width=True)
 
             if prop_res.sample_turnaround_rotations:
-                st.subheader("🔄 Downstream Airframe Rotations & Knock-On Reactionary Delays")
-                st.caption("Identifies the physical aircraft tails (ac_reg) landing at downstream hubs that transmit rotational delay to their next scheduled departure.")
+                st.subheader("🔄 Aircraft Tail Tracking: Downstream Rotations & Liberated Slot Capacity")
+                st.caption(
+                    "Follows physical aircraft tails (`ac_reg`) across scheduled daily rotations: when an aircraft never takes off or arrives with severe delay, "
+                    "downstream departures relying on that tail cannot operate, spreading contagion to other hubs. "
+                    "Crucially, because those unserved flights cannot fly, they vacate arrival and departure slots, liberating runway capacity at congested hubs to accelerate backlog clearance."
+                )
+
+                tm1, tm2, tm3, tm4 = st.columns(4)
+                tm1.metric("Unserved Rotations", f"{getattr(prop_res, 'unserved_rotations_count', 0)} flights", "Missing Aircraft Tails")
+                tm2.metric("Freed Runway Slots", f"{getattr(prop_res, 'total_freed_slots_count', 0)} slots", "Liberated Runway Capacity")
+                tm3.metric("Downstream Hubs Impacted", f"{len(getattr(prop_res, 'downstream_airports_impacted', []))} airports", "Contagion Footprint")
+                tm4.metric("Queue Drainage Acceleration", f"+{getattr(prop_res, 'backlog_acceleration_pct', 0.0):.1f}%", "Accelerated Clearance")
+
                 turns_df = pd.DataFrame([
                     {
-                        "Leg 1 Flight ID": tr["leg1_id"],
-                        "Inbound Flight": tr["leg1_route"],
-                        "Downstream Arrival Time": tr["leg1_arr"],
-                        "Aircraft Tail": tr["ac_reg"],
-                        "Leg 2 Flight ID": tr["leg2_id"],
-                        "Next Outbound Rotation": tr["leg2_route"],
-                        "Next Scheduled Departure": tr["leg2_dep"],
-                        "Propagated Reactionary Delay": f"+{tr['reactionary_delay_min']:.0f} min",
+                        "Aircraft Tail": tr.get("ac_reg", "—"),
+                        "Leg 1 Initial Flight": f"#{tr['leg1_id']} ({tr['leg1_route']})",
+                        "Downstream Rotation": f"#{tr['leg2_id']} ({tr['leg2_route']})",
+                        "Downstream Hub": tr.get("downstream_outstation", tr["leg2_route"].split("➔")[-1].strip()),
+                        "Downstream Status": tr.get("downstream_status", "REACTIONARY_ROTATIONAL_DELAY"),
+                        "Reactionary Delay": f"+{tr['reactionary_delay_min']:.0f} min" if tr['reactionary_delay_min'] > 0 else "0 min",
+                        "Slots Liberated": f"+{tr.get('slots_liberated', 0)} slots" if tr.get("slots_liberated", 0) > 0 else "0 slots",
+                        "Operational Consequence": tr.get("operational_consequence", "Rotational delay transmitted along tail rotation."),
                     }
-                    for tr in prop_res.sample_turnaround_rotations
+                    for tr in prop_res.sample_turnaround_rotations[:25]
                 ])
                 st.dataframe(turns_df, use_container_width=True)
 
@@ -3780,10 +3791,15 @@ with tab_cat_ai_lab:
                     2. **Multi-Hop Spatio-Temporal Graph WaveNet Architecture**:
                        - Combines **spatial diffusion graph convolutions** ($K$-hop neighborhood information diffusion) with **dilated causal temporal 1D convolutions**.
                        - Allows the neural network to capture both immediate spatial neighbors ($t=1\\text{h}$) and multi-hop network echo waves ($t=2\\text{h}, 4\\text{h}, 6\\text{h}$).
-                    3. **Rotational Reactionary Delay Contagion**:
-                       - Airframe utilization in Europe is intense: narrowbody aircraft execute 4–6 flight legs per day with tight 35–45 minute gate turnaround buffers.
-                       - When an inbound aircraft arrives with delay exceeding the turnaround buffer, the reactionary delay is transferred directly to the subsequent outbound rotation (`ac_reg` tail continuity).
-                    4. **Vulnerability Index & Shock Absorber Classification**:
+                    3. **Aircraft Tail Tracking & Downstream Contagion**:
+                       - Narrowbody commercial airliners fly 4 to 8 flight legs per day across Europe with tight 35–45 minute turnaround buffers.
+                       - When an aircraft never takes off or arrives with catastrophic delay, the subsequent flight relying on that tail number cannot depart on schedule.
+                       - This spreads contagion outward to other European airports (outstations where return flights are cancelled and passengers stranded).
+                    4. **Countervailing Slot Relief (Backlog Clearance Acceleration)**:
+                       - Because those tail numbers cannot operate their subsequent return flights, the scheduled departure and arrival slots for those flights are **vacated**.
+                       - This thins competing movement demand during the disruption window, liberating runway capacity for remaining flights with aircraft and crew on the ramp.
+                       - Consequently, the delay backlog clears significantly faster than naive linear queue models predict.
+                    5. **Vulnerability Index & Shock Absorber Classification**:
                        - Hubs are ranked by their vulnerability index $\\mathcal{V}_i$, distinguishing **Critical Shock Absorbers** (hubs absorbing high reactionary delay while buffering downstream neighbors) from **Nominal Absorbers**.
                     """
                 )
@@ -3860,6 +3876,12 @@ with tab_cat_ai_lab:
             em3.metric("Airline Direct Loss (€)", f"€{c_res.total_airline_economic_loss_eur:,.2f} EUR")
             em4.metric("Post-Reopening Recovery Duration", f"{c_res.post_reopening_recovery_hours:.1f} hours", f"Rebound @ {c_res.network_stability_rebound_time}")
 
+            tm1, tm2, tm3, tm4 = st.columns(4)
+            tm1.metric("Unserved Return Flights", f"{getattr(c_res, 'unserved_return_flights_count', 0)} flights", "Missing Aircraft Tails")
+            tm2.metric("Freed Runway Slots", f"{getattr(c_res, 'total_freed_slots_count', 0)} slots", "Liberated Runway Capacity")
+            tm3.metric("Downstream Outstations Impacted", f"{len(getattr(c_res, 'downstream_airports_impacted', []))} airports", "Network Contagion")
+            tm4.metric("Backlog Clearance Boost", f"+{getattr(c_res, 'backlog_acceleration_pct', 0.0):.1f}%", "Accelerated Throughput")
+
             if c_res.sample_rerouted_flights:
                 st.subheader(f"✈️ Sample 4D Traffic Detours Bypassing {fir_code}")
                 detour_df = pd.DataFrame([
@@ -3880,11 +3902,36 @@ with tab_cat_ai_lab:
                 ])
                 st.dataframe(detour_df, use_container_width=True)
 
+            tail_rots = getattr(c_res, "sample_tail_rotations", [])
+            if tail_rots:
+                st.subheader("🔄 Aircraft Tail Tracking: Downstream Rotations & Liberated Slot Capacity")
+                st.caption(
+                    "Follows physical aircraft tails (`ac_reg`): if a flight never took off or suffered extreme ground hold, "
+                    "the downstream flight relying on that tail cannot depart on schedule, spreading contagion to outstations. "
+                    "However, because those return rotations cannot fly, they vacate arrival and departure slots, liberating runway throughput to clear the backlog."
+                )
+                rot_df = pd.DataFrame([
+                    {
+                        "Aircraft Tail": tr["tail_number"],
+                        "Operator": tr["operator"],
+                        "Leg 1 Initial Flight": f"#{tr['leg1_id']} ({tr['leg1_route']})",
+                        "Leg 1 Status": tr["leg1_status"],
+                        "Downstream Leg": f"#{tr['leg2_id']} ({tr['leg2_route']})",
+                        "Outstation Impacted": tr["downstream_outstation"],
+                        "Downstream Status": tr["downstream_status"],
+                        "Slots Liberated": f"+{tr['slots_liberated']} slots" if tr['slots_liberated'] > 0 else "0 slots",
+                        "Operational Consequence": tr["operational_consequence"],
+                    }
+                    for tr in tail_rots[:25]
+                ])
+                st.dataframe(rot_df, use_container_width=True)
+
             if c_res.recovery_curve:
                 st.subheader("⏱️ Post-Reopening Backlog Depletion & Recovery Queue Dynamics")
-                st.caption("Models non-linear queue drainage once the FIR reopens: surge acceptance rate vs. backlog decay until nominal stability.")
+                st.caption("Models non-linear queue drainage once the FIR reopens: comparing actual accelerated drainage (benefiting from liberated return slots) against naive unmitigated queue decay.")
                 rec_df = pd.DataFrame(c_res.recovery_curve).set_index("time_utc")
-                st.line_chart(rec_df[["backlog_flights", "sector_surge_capacity"]])
+                chart_cols = [c for c in ["backlog_flights", "naive_backlog_flights", "sector_surge_capacity"] if c in rec_df.columns]
+                st.line_chart(rec_df[chart_cols])
 
             with st.expander("ℹ️ Operational Flow Management Logic & Physics Behind FIR Closure Disruption", expanded=False):
                 st.markdown(
@@ -3897,16 +3944,15 @@ with tab_cat_ai_lab:
                        - To prevent severe airborne holding stacks, fuel starvation, and safety hazards, Eurocontrol issues mandatory **Ground Delay Program (GDP)** slots. Aircraft are held at their departure gates across Europe (or at Swiss gates) absorbing delay on the ground with engines off.
                     2. **Cancellation Risk (Duty Period & Curfew Breaches)**:
                        - Flights receiving extreme ground delays (>135 minutes) risk breaching flight crew maximum duty limits under **EASA Subpart-FTL** (Flight Time Limitations) or missing destination airport night noise curfews. Airlines voluntarily cancel or consolidate these flights.
-                    3. **Lateral En-Route Rerouting (Overflights)**:
+                    3. **Aircraft Tail Tracking & Outstation Contagion**:
+                       - Physical airframes (`ac_reg`) operate multi-leg rotations throughout the day. When an aircraft never arrives at its destination (or arrives too late for turnaround), the subsequent flight using that airframe **cannot take off**.
+                       - The contagion spreads to outstation airports across Europe where passengers on return legs are stranded.
+                    4. **Countervailing Slot Relief & Accelerated Backlog Drainage**:
+                       - Because those missing aircraft cannot serve their return flights, those scheduled flights drop out of the departure and arrival queues, **liberating runway and gate slots**.
+                       - This liberated capacity relieves the bottleneck at congested airports, allowing the remaining backlog of flights with aircraft and crew on the ramp to clear significantly faster.
+                    5. **Lateral En-Route Rerouting (Overflights)**:
                        - Transiting flights that neither take off nor land in Switzerland (e.g., London to Rome, Frankfurt to Madrid, Amsterdam to Nice) cannot enter `LSASFIR`.
-                       - Eurocontrol Network Manager and airline flight dispatch re-clear them onto adjacent bypass corridors:
-                         - **Western Corridor via France (`LFFFFIR` - Paris/Marseille)**
-                         - **Northern/Eastern Corridor via Germany (`EDUUUIR` - Rhine Upper Area)**
-                         - **Southern Corridor via Italy (`LIRRFIR` - Milan)**
-                       - These detours add 40 to 110+ nautical miles (+5% to +17%), burning hundreds of kilograms of extra Jet-A fuel and tons of excess $\\text{CO}_2$.
-                    4. **Post-Reopening Recovery Dynamics (Non-Linear Queue Drainage)**:
-                       - When the FIR reopens at the end of the closure window, the airspace cannot instantly accept the accumulated backlog of delayed flights plus normal scheduled traffic without immediate sector overload.
-                       - En-route sectors operate at a temporary **Surge Capacity** (typically ~115% of nominal throughput). The accumulated backlog decays non-linearly over a **recovery duration of 2 to 4 hours** until nominal equilibrium is restored.
+                       - Eurocontrol Network Manager and airline flight dispatch re-clear them onto adjacent bypass corridors (`LFFFFIR`, `EDUUUIR`, `LIRRFIR`).
                     """
                 )
 
