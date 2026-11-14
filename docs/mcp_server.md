@@ -245,3 +245,10 @@ Returns nominal hourly movement capacity and operational profile for a European 
 2. **Tool Returns**: 577 flights impacted, 280 tactical reroutes, 41,200 extra nautical miles, +210 tonnes Jet-A fuel burned, and €482,000 in direct airline losses.
 3. **LLM Responds**:
    > *"Closing LSASFIR impacts 577 flights. 280 transiting flights must divert around French (LFFFFIR) and German (EDUUUIR) airspace, adding 41,200 nautical miles and €482,000 EUR in airline operating costs. Post-reopening recovery will take ~3.5 hours to clear the accumulated 72-flight ground holding backlog."*
+
+---
+
+## 6. Real-World LM Studio Conversation Transcript
+
+For an exported multi-turn session transcript showing `qwen/qwen2.5-coder-14b` querying EHAM $\to$ EGLL flights, computing punctuality statistics, and tabulating records without hallucination, see:
+- 📖 [**Full LM Studio + Qwen 2.5 Coder 14B Transcript**](mcp_example_lmstudio.md)
