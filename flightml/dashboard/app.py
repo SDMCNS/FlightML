@@ -1259,6 +1259,24 @@ with tab_cat_system:
             nk7.metric("Avg Requested Altitude", f"FL{net_summary.avg_requested_fl:.0f}")
             nk8.metric("Est. Detour Fuel Cost", f"€{net_summary.total_estimated_cost_eur:,.0f} EUR", f"{net_summary.total_estimated_fuel_penalty_kg:,.0f} kg fuel")
 
+            if selected_fir_id:
+                with st.spinner(f"Extracting traffic segmentation breakdown for {selected_fir_id}..."):
+                    net_fir_seg = query_fir_traffic_segmentation(
+                        ds,
+                        fir_id=selected_fir_id,
+                        start_date=filter_start_str,
+                        end_date=filter_end_str,
+                        hour_start=h_start,
+                        hour_end=h_end,
+                    )
+                st.markdown(f"#### 📡 {selected_fir_id} Airspace Traffic Breakdown ({net_fir_seg.country_name})")
+                st.caption(f"Certified CRCO Unit Rate: **€{net_fir_seg.unit_rate_eur:.2f} / SU** | Total FIR Traffic: **{net_fir_seg.total_flights:,} movements**")
+                bf1, bf2, bf3, bf4 = st.columns(4)
+                bf1.metric("Over-flights", f"{net_fir_seg.overflights_count:,}", f"{net_fir_seg.overflights_pct:.1f}% share")
+                bf2.metric("Airport Arrivals", f"{net_fir_seg.arrivals_count:,}", f"{net_fir_seg.arrivals_pct:.1f}% share")
+                bf3.metric("Airport Departures", f"{net_fir_seg.departures_count:,}", f"{net_fir_seg.departures_pct:.1f}% share")
+                bf4.metric("Internal / Domestic", f"{net_fir_seg.internal_count:,}", f"{net_fir_seg.internal_pct:.1f}% share")
+
         elif kpi_tier == "📡 FIR Airspace Tier":
             active_fir = selected_fir_id or (avail_firs[0]["fir_id"] if avail_firs else "EGTTFIR")
             with st.spinner(f"Analyzing FIR airspace traffic segmentation for {active_fir}..."):
@@ -1371,7 +1389,29 @@ with tab_cat_system:
                 limit=30,
             )
             if all_firs_summary.records:
-                st.dataframe(pd.DataFrame(all_firs_summary.records), use_container_width=True)
+                league_df = pd.DataFrame(all_firs_summary.records)
+                rename_cols = {
+                    "entity_id": "FIR Airspace",
+                    "country_name": "Country / State",
+                    "unit_rate_eur": "CRCO Unit Rate (€/SU)",
+                    "total_flights": "Total Movements",
+                    "overflights_count": "Over-flights",
+                    "arrivals_count": "Arrivals",
+                    "departures_count": "Departures",
+                    "internal_count": "Internal / Domestic",
+                    "overflights_pct": "Overflight Share (%)",
+                    "avg_arr_delay_min": "Avg Arr Delay (min)",
+                    "pct_severe_arr_30m": "Severe Delays >30m (%)",
+                    "avg_requested_fl": "Avg Requested FL",
+                    "total_excess_fuel_cost_eur": "Est. Detour Cost (€)",
+                }
+                disp_df = league_df.rename(columns={k: v for k, v in rename_cols.items() if k in league_df.columns})
+                primary_cols = [
+                    "FIR Airspace", "Country / State", "Total Movements", "Over-flights", "Arrivals", "Departures",
+                    "Internal / Domestic", "Overflight Share (%)", "CRCO Unit Rate (€/SU)", "Avg Arr Delay (min)", "Severe Delays >30m (%)"
+                ]
+                final_cols = [c for c in primary_cols if c in disp_df.columns] + [c for c in disp_df.columns if c not in primary_cols]
+                st.dataframe(disp_df[final_cols], use_container_width=True)
 
         elif kpi_tier == "✈️ Fleet Level":
             col_fl_sub1, col_fl_sub2, col_fl_sub3 = st.columns([2, 1, 1])

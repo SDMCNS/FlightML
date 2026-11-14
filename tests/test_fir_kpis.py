@@ -60,7 +60,12 @@ def test_query_fir_traffic_segmentation_201611():
     assert seg.arrivals_count > 0
     assert seg.departures_count > 0
     assert seg.internal_count > 0
+    assert seg.overflights_count > 0
     assert seg.total_flights > 0
+    assert len(seg.top_corridors["Overflight"]) > 0
+
+    total_sum = seg.overflights_count + seg.arrivals_count + seg.departures_count + seg.internal_count
+    assert total_sum == seg.total_flights
 
 
 def test_query_multi_level_kpis_fir_and_filter():
@@ -71,6 +76,15 @@ def test_query_multi_level_kpis_fir_and_filter():
     assert kpi_fir.level == "fir"
     assert len(kpi_fir.records) > 0
     assert kpi_fir.records[0]["total_flights"] > 0
+    assert "overflights_count" in kpi_fir.records[0]
+    assert kpi_fir.records[0]["overflights_count"] > 0
+
+    # 201611 FIR tier grouping
+    ds16 = FlightDataset(period="201611")
+    kpi_fir16 = query_multi_level_kpis(ds16, level="fir", limit=5)
+    assert kpi_fir16.level == "fir"
+    assert len(kpi_fir16.records) > 0
+    assert kpi_fir16.records[0]["overflights_count"] > 0
 
     # Fleet tier scoped to EGTTFIR
     kpi_fleet_fir = query_multi_level_kpis(ds, level="fleet", fir_filter="EGTTFIR", limit=5)
