@@ -40,7 +40,7 @@ Welcome to the **FlightML** documentation. FlightML is a high-performance Python
 │ • 119k Fixes & 26k Navs  │ • Multi-Tier KPI Suite   │ • Airspace Breach Forecaster     │
 │ • OpenAP + ICAO EDB v32B │ • 3-Way Cruise FL Model  │ • Airline DOC & FIR Detours €    │
 │ • Weekly Jet-A Prices €  │ • FRA vs. ATS Airways    │ • SES Flat-Rate Counterfactual   │
-│ • 7 Historical Archives  │ • Upper Winds & ESAD     │ • Delay Contagion & Super-Spread │
+│ • Multi-Period Ingestion │ • Upper Winds & ESAD     │ • Delay Contagion & Super-Spread │
 │ • IEM METAR + Upper Wind │ • Contrail ISSR Radiance │ • Repeat Offender Routes & Ops   │
 │ • Thread-Safe Cursors    │ • Dynamic Complexity     │ • Hub Tail-Swaps & Date GDP Slots│
 └──────────────────────────┴──────────────────────────┴──────────────────────────────────┘

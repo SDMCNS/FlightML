@@ -43,7 +43,7 @@ FlightML fuses multi-gigabyte 4D trajectories, global aeronautical navigation da
 - **🌱 OpenAP Fuel Burn, ICAO EDB v32B LTO Emissions & Contrail Physics**: Quantifies trajectory detour fuel waste, terminal holding penalties, ground taxi queue $\text{NO}_x / \text{CO} / \text{HC} / \text{nvPM}$ soot emissions, and **Schmidt-Appleman persistent contrail (`ISSR`)** radiative forcing (`CO₂e`).
 - **💶 Eurocontrol CRCO Route Charges & Weekly Jet-A Spot Pricing (`€ EUR`)**: Computes exact FIR-by-FIR Service Units (`SU`) and en-route navigation fees (`€`), weekly EIA/Platts Jet-A spot fuel costs in Euros (`€`), Direct Operating Cost (DOC) allocation, and Corridor Route-Charge Avoidance vs. Fuel Burn trade-offs.
 - **🔮 Prescriptive Operations Research & Stress Testing**: Includes **Network-Wide Hub Tail-Swap Recovery (`Tail A ⇄ Tail B`)**, **Ration-by-Schedule Ground Delay Program (`GDP` / ATFM Slot) Optimization** with date bounds, **Turnaround Buffer Sensitivity**, and **Multi-Operator Fleet Shock Contagion Curves**.
-- **📈 Multi-Period Longitudinal Intelligence & Airspace Forecasting**: Contemporary Year-over-Year (YoY) cohort matching across 7 historical archives (`201611`, `202402`, `202406`, `202410`, `202502`, `202506`, `202510`), 3-season demand/delay elasticity curves, forward sector capacity breach prediction, and **Period-Wide Repeat Offender Route and Operator Delay Contagion Detection**.
+- **📈 Multi-Period Longitudinal Intelligence & Airspace Forecasting**: Contemporary Year-over-Year (YoY) cohort matching across ingested monthly archives, 3-season demand/delay elasticity curves (Winter Trough, Summer Peak, Autumn Shoulder), forward sector capacity breach prediction, and **Period-Wide Repeat Offender Route and Operator Delay Contagion Detection**.
 
 ---
 
@@ -96,16 +96,18 @@ The ingestion engine automatically:
 
 ### Step 3: Verify Ingested Periods (`flightml list-periods`)
 
+Users are free to download and ingest any monthly archive from Eurocontrol DDR2 (e.g. `202510.zip`, `202406.zip`). Once ingested, `flightml list-periods` dynamically displays all ready periods:
+
 ```bash
 flightml list-periods
 ```
 
 ```text
-      Available Aviation Data Periods      
+       Available Aviation Data Periods (Example)
 ┌───────────┬─────────────────────────────┐
 │ Period ID │ Status                      │
 ├───────────┼─────────────────────────────┤
-│ 201611    │ Ready (Parquet Partitioned) │
+│ 202410    │ Ready (Parquet Partitioned) │
 │ 202510    │ Ready (Parquet Partitioned) │
 └───────────┴─────────────────────────────┘
 ```
@@ -281,8 +283,8 @@ Opens at **`http://localhost:8501`** organized into **5 primary operational cate
 
 ### 4. Longitudinal & Predictive Trends
 9. 📈 **Longitudinal & Predictive Trends**:
-   - **Multi-Period Timeline & Fleet Evolution**: Cross-sectional KPIs across all 7 archives with contemporary YoY cohort filtering (`2024-2025`) vs legacy baseline (`2016`).
-   - **Year-over-Year (YoY) & Seasonality**: Pairwise matched seasonal benchmarking (`202402 ➔ 202502`, `202406 ➔ 202506`, `202410 ➔ 202510`) and 3-season elasticity curves.
+   - **Multi-Period Timeline & Fleet Evolution**: Cross-sectional KPIs across ingested monthly archives with contemporary YoY cohort filtering vs historical baselines.
+   - **Year-over-Year (YoY) & Seasonality**: Pairwise matched seasonal benchmarking across matching periods (e.g. Winter vs Winter, Summer vs Summer) and 3-season elasticity curves.
    - **Predictive Airspace Saturation Forecaster**: Forward-looking sector capacity breach predictor and dynamic spatial density hotspot mapping.
    - **Airline Economics & Delay Contagion**: DOC cost breakdown, route charge avoidance detour detection, Single European Sky (SES) rate harmonization, airframe super-spreader flights, and period-wide repeat offender routes & operators.
 

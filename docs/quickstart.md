@@ -74,16 +74,18 @@ The ingestion pipeline automatically:
 
 ### Step 3: Verify Ingested Periods (`flightml list-periods`)
 
+Users can download and ingest any monthly archive from Eurocontrol DDR2. Running `flightml list-periods` dynamically reflects whatever archives you have ingested:
+
 ```bash
 flightml list-periods
 ```
 
 ```text
-      Available Aviation Data Periods      
+       Available Aviation Data Periods (Example)
 ┌───────────┬─────────────────────────────┐
 │ Period ID │ Status                      │
 ├───────────┼─────────────────────────────┤
-│ 201611    │ Ready (Parquet Partitioned) │
+│ 202410    │ Ready (Parquet Partitioned) │
 │ 202510    │ Ready (Parquet Partitioned) │
 └───────────┴─────────────────────────────┘
 ```
@@ -106,14 +108,8 @@ flightml/data/
 │   └── nav_aids_xplane.parquet           # 26,767 global VOR/DME/ILS navaids (nav.dat)
 ├── fuel/
 │   └── weekly_jet_fuel_prices.csv        # Weekly Jet-A spot prices converted to Euros (€)
-└── parquet/periods/                      # Partitioned Parquet tables per traffic period
-    ├── 201611/                           # Baseline historical anchor period (Nov 2016)
-    ├── 202402/                           # Winter Trough 2024 (Leap year)
-    ├── 202406/                           # Summer Peak 2024
-    ├── 202410/                           # Autumn Shoulder 2024
-    ├── 202502/                           # Winter Trough 2025
-    ├── 202506/                           # Summer Peak 2025
-    └── 202510/                           # Autumn Shoulder 2025
+└── parquet/periods/                      # Partitioned Parquet tables per ingested traffic period
+    └── {period_id}/                      # E.g., 202510, 202410, or any ingested monthly archive
         ├── flights.parquet               # Flight headers, delays, aircraft type & operator
         ├── trajectory_actual.parquet     # 4D actual radar coordinates, groundspeed & FL
         ├── trajectory_planned.parquet    # 4D filed flight plan coordinates & requested FL
@@ -151,8 +147,8 @@ Opens at **`http://localhost:8501`** organized into **5 primary operational cate
 
 ### 4. Longitudinal & Predictive Trends
 9. **📈 Longitudinal & Predictive Trends**:
-   - **Sub-tab 1: Multi-Period Timeline & Fleet Evolution**: Cross-sectional KPIs across all 7 archives with contemporary YoY cohort filtering (`2024-2025`) vs legacy baseline (`2016`).
-   - **Sub-tab 2: Year-over-Year (YoY) & Seasonality**: Pairwise matched seasonal benchmarking (`202402 ➔ 202502`, `202406 ➔ 202506`, `202410 ➔ 202510`) and 3-season elasticity curves.
+   - **Sub-tab 1: Multi-Period Timeline & Fleet Evolution**: Cross-sectional KPIs across ingested monthly archives with contemporary YoY cohort filtering vs historical baselines.
+   - **Sub-tab 2: Year-over-Year (YoY) & Seasonality**: Pairwise matched seasonal benchmarking across matching quarters/months and 3-season elasticity curves.
    - **Sub-tab 3: Predictive Airspace Saturation Forecaster**: Forward-looking sector capacity breach predictor and dynamic spatial density hotspot mapping.
    - **Sub-tab 4: Airline Economics & Delay Contagion**: DOC cost breakdown, route charge avoidance detour detection, Single European Sky (SES) rate harmonization, airframe super-spreader flights, and period-wide repeat offender routes & operators.
 

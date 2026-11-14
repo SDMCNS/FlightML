@@ -11,7 +11,7 @@
 
 While **FlightML v2** established a high-performance aeronautical analytics engine capable of processing single-month European flight archives with exact physics (OpenAP fuel/CO₂, ICAO EDB LTO emissions, CRCO navigation charges, and FIR/AUA saturation), **FlightML v3** transforms the platform from a *retrospective snapshot analyzer* into a **longitudinal network intelligence and predictive foresight engine**.
 
-With **7 full Eurocontrol archives** now ingested (>5.7M flights spanning `201611`, `202402`, `202406`, `202410`, `202502`, `202506`, `202510`), FlightML v3 leverages repeating seasonal snapshots (Winter Trough, Summer Peak, Autumn Shoulder) and controlled Year-over-Year (YoY) pairings to:
+Designed for open-ended multi-period ingestion, FlightML v3 leverages repeating seasonal snapshots (Winter Trough, Summer Peak, Autumn Shoulder) and controlled Year-over-Year (YoY) pairings across whatever monthly archives users download and ingest from the data provider to:
 1. **Disentangle secular trends from seasonal weather & leisure oscillations**.
 2. **Forecast airspace chokepoints and capacity breaches months in advance**.
 3. **Decode GRIB2 upper-air winds to compute true Equivalent Still Air Distance (ESAD) and Schmidt-Appleman contrail climate forcing**.
@@ -20,19 +20,19 @@ With **7 full Eurocontrol archives** now ingested (>5.7M flights spanning `20161
 
 ---
 
-## 📊 Ingested Data Matrix (V3 Baseline)
+## 📊 Multi-Period Ingestion & Seasonal Pairing Paradigm
 
-The platform operates across an indexed columnar Parquet corpus:
+Users can ingest any combination of historical and contemporary monthly archives from Eurocontrol OneSky Online / DDR2. As an illustrative reference of repeating seasonal snapshots and YoY pairings, the platform handles matrix regimes such as:
 
-| Period | Season / Archetype | Total Flights | YoY Growth (2024 ➔ 2025) | Analytical Significance |
+| Period | Season / Archetype | Total Flights (Approx) | YoY Growth (Sample) | Analytical Significance |
 | :--- | :--- | :---: | :---: | :--- |
-| **`201611`** | Historical Baseline | 697,326 | — | Pre-COVID, pre-conflict airspace closures, legacy fleet baseline |
-| **`202402`** | Winter Trough (Leap) | 641,952 | — | Structural demand floor, winter de-icing/storm delay regimes |
-| **`202406`** | Summer Peak | 935,934 | — | Peak holiday surge (+45.8% over Feb), convective storm reroutes |
-| **`202410`** | Autumn Shoulder | 891,648 | — | High business travel, transatlantic transition, calm weather baseline |
-| **`202502`** | Winter Trough | 656,458 | **+2.26%** | Structural growth baseline under cold-front meteorology |
-| **`202506`** | Summer Peak | 957,457 | **+2.30%** | All-time network load peak, maximum ATFM slot delays |
-| **`202510`** | Autumn Shoulder | 934,141 | **+4.77%** | Strong late-season extension, long-haul fleet modernization |
+| **`YYYYMM`** | Historical Baseline | ~700k | — | Pre-COVID, pre-conflict airspace closures, legacy fleet baseline |
+| **`202402`** | Winter Trough (Leap) | ~642k | — | Structural demand floor, winter de-icing/storm delay regimes |
+| **`202406`** | Summer Peak | ~936k | — | Peak holiday surge (+45.8% over Feb), convective storm reroutes |
+| **`202410`** | Autumn Shoulder | ~892k | — | High business travel, transatlantic transition, calm weather baseline |
+| **`202502`** | Winter Trough | ~656k | **+2.26%** | Structural growth baseline under cold-front meteorology |
+| **`202506`** | Summer Peak | ~957k | **+2.30%** | All-time network load peak, maximum ATFM slot delays |
+| **`202510`** | Autumn Shoulder | ~934k | **+4.77%** | Strong late-season extension, long-haul fleet modernization |
 
 ---
 
@@ -71,7 +71,7 @@ The platform operates across an indexed columnar Parquet corpus:
     - Flown distance and flight duration deltas.
     - Top growing airlines and aircraft fleet transition shifts.
 - [x] **Task 1.3: Fleet Modernization & Engine Transition Tracker**:
-  - Longitudinal fleet evolution tracking across all 7 archives via `LongitudinalEngine.get_fleet_evolution_timeline()`.
+  - Longitudinal fleet evolution tracking across ingested monthly archives via `LongitudinalEngine.get_fleet_evolution_timeline()`.
   - Tracks adoption rates of A320neo, A321neo, B737 MAX, A220, A350, and B787 vs classic CEO/NG types.
   - Measured European new-generation fleet penetration rising from 1.55% in 2016 to 24.64% in October 2024 and 28.17% in October 2025 (+3.53 percentage points in 12 months).
   - CLI integration: added `flightml longitudinal-timeline`, `flightml seasonality`, and `flightml compare-yoy`. Unit tests in `tests/test_longitudinal.py` (7/7 passing).
@@ -158,7 +158,7 @@ The platform operates across an indexed columnar Parquet corpus:
 
 - [x] **Task 6.1: Dedicated "Longitudinal & Seasonal Trends" View**:
   - Implemented top-level category `"📈 Longitudinal & Predictive Trends"` in `flightml/dashboard/app.py`.
-  - Sub-tab 1: `📊 Multi-Period Timeline & Fleet Evolution` with cross-sectional metric KPIs, tabular data across all 7 historical archives, and interactive line charts for daily traffic volume, neo/MAX eco-fleet share, arrival delay, and flown distance.
+  - Sub-tab 1: `📊 Multi-Period Timeline & Fleet Evolution` with cross-sectional metric KPIs, tabular data across ingested historical archives, and interactive line charts for daily traffic volume, neo/MAX eco-fleet share, arrival delay, and flown distance.
   - Sub-tab 2: `🔄 Year-over-Year (YoY) & Seasonality` with pairwise period delta benchmarking (daily volume, arrival delay, distance, CO₂, fleet penetration) and 3-season surge curves (Winter Feb vs Summer Jun vs Autumn Oct) identifying top leisure destination surges.
 - [x] **Task 6.2: Side-by-Side Period Comparison Tool & Policy Economics**:
   - Built pairwise YoY comparative analyzer identifying top expanding and contracting airline carriers and aircraft models.

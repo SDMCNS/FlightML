@@ -29,7 +29,7 @@ flightml serve --host 127.0.0.1 --port 8000
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `GET` | `/` | Service health status and link to `/docs`. |
-| `GET` | `/api/v1/periods` | List all ingested Eurocontrol periods (`201611`, `202510`). |
+| `GET` | `/api/v1/periods` | List all ingested Eurocontrol periods (e.g. `202510`, `202410`). |
 | `GET` | `/api/v1/summary` | Global dataset statistics (total flights, operators, airports, delays). |
 | `GET` | `/api/v1/flights/search` | Multi-criteria flight search with human-readable labels. |
 | `GET` | `/api/v1/flights/{ectrl_id}` | Retrieve flight metadata, filed vs. actual route, and 4D holding summary. |
