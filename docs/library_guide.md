@@ -277,3 +277,105 @@ shock = contagion_engine.simulate_network_shock(
 )
 print(f"Shock Result: {shock.total_impacted_flights:,} flights impacted | Cumulative Delay: {shock.total_delay_hours_incurred:.1f} hrs (€{shock.total_economic_delay_cost_eur:,.2f} EUR)")
 ```
+
+---
+
+## 8. Neural Airspace Intelligence, Counterfactual Simulators & FastMCP
+
+### A. Flight2Vec 128D Trajectory Embeddings & Operational Twins
+```python
+from flightml.models.flight2vec import Flight2VecEngine
+
+f2v = Flight2VecEngine(ds)
+
+# 1. Pre-vectorize flights into high-speed on-disk cache
+cached_count = f2v.build_vector_cache(limit=1000)
+print(f"Pre-vectorized {cached_count} flights into local vector cache.")
+
+# 2. Find operational twins for a commercial flight (with airframe taxonomy filtering)
+twins = f2v.find_operational_twins(target_ectrl_id=901045971, top_k=3)
+for t in twins:
+    print(f"Twin {t.ectrl_id} ({t.route}, {t.ac_type}): Cosine Similarity = {t.cosine_similarity:.4f} ({t.similarity_pct:.1f}%)")
+    print(f"   Explanation: {t.explanation}")
+```
+
+### B. Spatio-Temporal Graph WaveNet (ST-GNN) Delay Contagion
+```python
+from flightml.models.st_gnn import SpatioTemporalDelayEngine
+
+st_engine = SpatioTemporalDelayEngine(ds, period="202510")
+
+# Simulate a 60-min delay shock at London Heathrow under high runway saturation
+prop_res = st_engine.simulate_delay_propagation(
+    shock_origin="EGLL",
+    injected_delay_min=60.0,
+    shock_date="2025-10-15",
+    shock_time_hour=10,
+    shock_duration_hours=2.0,
+)
+
+print(f"Origin Hub: {prop_res.shock_origin_node} (Runway Saturation: {prop_res.origin_saturation_pct:.1f}%, Spare Buffer: {prop_res.origin_spare_capacity:.1f} mvts/hr)")
+print(f"Total Network Reactionary Delay: {prop_res.total_network_reactionary_delay_hours:,.1f} delay hours across {prop_res.total_flights_impacted:,} flights.")
+print(f"Peak Downstream Hub: {prop_res.top_vulnerable_nodes[1].node_id} (+{prop_res.top_vulnerable_nodes[1].reactionary_delay_hours:.1f} reactionary hrs)")
+```
+
+### C. 4D Airspace (FIR) Closure Counterfactual Simulator
+```python
+from flightml.sim.airspace_closure import AirspaceClosureSimulator
+
+fir_sim = AirspaceClosureSimulator(ds, period="202510")
+
+# Simulate temporary 3-hour closure of Swiss airspace (LSASFIR)
+closure_res = fir_sim.simulate_fir_closure(
+    target_fir="LSASFIR",
+    closure_start_hour=10,
+    closure_duration_hours=3.0,
+    date_str="2025-10-15",
+)
+
+print(f"Impacted Flights: {closure_res.total_flights_impacted:,} | Tactical Reroutes: {closure_res.rerouted_flights_count:,}")
+print(f"Detour Distance: +{closure_res.total_extra_distance_flown_nm:,.0f} NM | Extra Fuel: +{closure_res.total_extra_fuel_burned_tonnes:,.1f} tonnes")
+print(f"Total Airline Operating Loss: €{closure_res.total_airline_economic_loss_eur:,.2f} EUR")
+print(f"Post-Reopening Queue Recovery Time: {closure_res.post_reopening_recovery_hours:.1f} hours")
+```
+
+### D. Multi-Agent Reinforcement Learning (MARL) ATFM Slot Gaming
+```python
+from flightml.sim.marl_atfm import MultiAgentATFMSimulator
+
+marl_sim = MultiAgentATFMSimulator(ds, period="202510")
+
+# Simulate decentralized slot gaming under a 40% arrival rate reduction at Heathrow
+marl_res = marl_sim.run_marl_simulation(
+    regulated_airport="EGLL",
+    capacity_cut_pct=40.0,
+    date_str="2025-10-15",
+    start_time_hour=10,
+    duration_hours=3.0,
+)
+
+print(f"System Delay Saved: {marl_res.total_network_delay_saved_min:,.0f} min | Net Economic Payoff: €{marl_res.total_net_economic_benefit_eur:,.2f} EUR")
+print(f"Cooperative vs Competitive Efficiency Gap: {marl_res.cooperative_vs_competitive_efficiency_gap_pct:.1f}%")
+
+# Inspect airline balance sheets
+for strat in marl_res.airline_strategies:
+    print(f"Agent: {strat.airline_name} ({strat.flights_regulated} flights)")
+    print(f"   Baseline Cost: €{strat.baseline_cost_no_gaming_eur:,.0f} EUR -> Post-Gaming Cost: €{strat.post_gaming_cost_eur:,.0f} EUR (Net Payoff: €{strat.net_economic_payoff_eur:,.0f} EUR)")
+    print(f"   Dominant Strategy: {strat.dominant_strategy}")
+
+# Inspect first 3 chronological steps of the blow-by-blow decision log
+for step in marl_res.decision_log[:3]:
+    print(f"Step #{step.step_number} [{step.timestamp_rel}] {step.agent_name} -> {step.action_type}: {step.flight_id} ({step.route})")
+```
+
+### E. Model Context Protocol (FastMCP) Integration
+```python
+from flightml.mcp.server import create_mcp_server
+
+# Create and configure the FastMCP server
+mcp_server = create_mcp_server()
+
+# Run via stdio transport for local desktop LLMs (LM Studio, Claude Desktop, Cursor)
+# mcp_server.run(transport="stdio")
+```
+```

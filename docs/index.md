@@ -46,6 +46,17 @@ Welcome to the **FlightML** documentation. FlightML is a high-performance Python
 │ • Multi-Period Ingestion │ • Upper Winds & ESAD     │ • Delay Contagion & Super-Spread │
 │ • IEM METAR + Upper Wind │ • Contrail ISSR Radiance │ • Repeat Offender Routes & Ops   │
 │ • Thread-Safe Cursors    │ • Dynamic Complexity     │ • Hub Tail-Swaps & Date GDP Slots│
+├──────────────────────────┼──────────────────────────┼──────────────────────────────────┤
+│    NEURAL AIRSPACE       │   COUNTERFACTUAL &       │   LOCAL LLM AGENTS &             │
+│    INTELLIGENCE (v4)     │   GAME THEORY SIMULATION │   MODEL CONTEXT PROTOCOL (MCP)   │
+├──────────────────────────┼──────────────────────────┼──────────────────────────────────┤
+│ • 128D Flight2Vec Twins  │ • 4D Airspace Closure    │ • FastMCP Server Architecture    │
+│ • Deterministic Weights  │ • Detour NM & Fuel Waste │ • LM Studio, Claude & Cursor     │
+│ • Commercial Taxonomy    │ • Non-Linear Backlog     │ • 8 Tools & Dynamic Resources    │
+│ • PINN Mass Inversion    │ • MARL ATFM Slot Gaming  │ • Zero-Hallucination Radar Search│
+│ • Contrail Fast Surrogate│ • 10-Step Decision Trace │ • Multi-Turn Context Retention   │
+│ • ST-GNN Delay Contagion │ • Infilled Assumptions   │ • Disruption Briefing Prompts    │
+│ • Runway Saturation Queues│ • Balance Sheet (€ EUR) │ • JSON-RPC stdio & SSE Transports│
 └──────────────────────────┴──────────────────────────┴──────────────────────────────────┘
 ```
 

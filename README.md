@@ -29,8 +29,10 @@ Detailed manuals and developer guides are located in the [**`docs/`**](docs/inde
 - 🐍 [**Python Library Guide**](docs/library_guide.md): Developer guide with complete Python code recipes for all modules.
 - 💻 [**CLI Reference Manual**](docs/cli_reference.md): Exhaustive guide for all 45+ `flightml` terminal commands and synthetic sample outputs.
 - 🌐 [**REST API Reference**](docs/rest_api.md): Complete FastAPI endpoints catalog, request/response schemas, and Swagger docs.
-- 🏛️ [**Architecture & Methodology**](docs/architecture.md): DuckDB columnar execution, ICAO GANP & Eurocontrol PRU formulas, OpenAP & ICAO EDB v32B physics, Eurocontrol CRCO charges (`€`), and operations research models.
-- 🤖 [**Model Context Protocol (MCP) Server Guide**](docs/mcp_server.md): Exposing FlightML as an AI tool to local LLMs (LM Studio, Claude Desktop, Cursor) via MCP.
+- 🏛️ [**Architecture & Methodology**](docs/architecture.md): DuckDB columnar execution, ICAO GANP & Eurocontrol PRU formulas, OpenAP & ICAO EDB v32B physics, Eurocontrol CRCO charges (`€`), operations research models, and v4 neural architectures.
+- 🤖 [**Model Context Protocol (MCP) Server Guide**](docs/mcp_server.md): Exposing FlightML tools to local LLMs (LM Studio, Claude Desktop, Cursor) via MCP.
+- 💬 [**LM Studio + Qwen 2.5 Coder Example Transcript**](docs/mcp_example_lmstudio.md): End-to-end multi-turn transcript querying flight telemetry, calculating punctuality, and rendering markdown tables.
+- 🗺️ [**FlightML v4 Strategic Plan**](docs/v4_plan.md): Comprehensive vision for Neural Airspace Intelligence, Spatio-Temporal GNNs, Generative Diffusion, Multi-Agent RL, and Multimodal Copilot.
 
 ---
 
@@ -38,6 +40,12 @@ Detailed manuals and developer guides are located in the [**`docs/`**](docs/inde
 
 FlightML fuses multi-gigabyte 4D trajectories, global aeronautical navigation databases (**86,280 5-letter RNAV waypoints**, **17,090 VHF navaids**, **48,405 runways**, **30,192 VHF radio frequencies**), aircraft performance models (**OpenAP** & **ICAO Engine Emissions Databank v32B**), **Eurocontrol CRCO en-route unit rates (`€`)**, and historical **IEM ASOS/METAR & Open-Meteo ERA5 upper-air meteorology**:
 
+- **🧠 128D Flight2Vec Hypersphere & Explainable Operational Twins**: Self-supervised trajectory embeddings capturing kinematic, temporal, and spatial flight profiles, with commercial aircraft taxonomy filtering (excluding helicopters and turboprops from commercial jets) and human-readable similarity explanations.
+- **⚡ Spatio-Temporal Graph WaveNet (`ST-GNN`) & Runway Capacity Saturation**: Models multi-horizon European delay propagation ($t=0\text{h}, 1\text{h}, 2\text{h}, 4\text{h}, 6\text{h}$), physical airport runway throughput limits, point-queue bottlenecks under empirical saturation ($U \approx 99\%$), and knock-on reactionary delays along aircraft tail rotations (`ac_reg`).
+- **🌪️ 4D Airspace (FIR) Closure Counterfactual Simulator**: Simulates temporary FIR closures (e.g., Swiss LSASFIR, French LFFFFIR), predicting tactical traffic rerouting, nautical mile extensions, extra fuel burn & $\text{CO}_2$, airline operating losses (`€ EUR`), and non-linear recovery backlog curves.
+- **🤝 Multi-Agent RL (`MARL`) ATFM Slot Gaming & Nash Equilibrium**: Decentralized airline digital twin simulation with transparent infilled domain assumptions (connecting passenger banks, EU261 liabilities, EASA crew duty limits), 10-step blow-by-blow decision logs, Pareto-improving bilateral slot swaps, and per-airline balance sheet economics.
+- **🤖 Model Context Protocol (`MCP`) Server for Local LLMs**: Native FastMCP integration enabling local models (LM Studio, Claude Desktop, Cursor) to invoke FlightML engines and query radar archives autonomously via standard tool-calling.
+- **🔬 Physics-Informed Neural Networks (`PINN`) & Contrail Surrogate**: Reconstructs unknown takeoff mass ($M_0$) from 4D climb telemetry and provides sub-millisecond evaluation of Schmidt-Appleman persistent contrail radiative forcing ($mW/m^2$).
 - **🗺️ $5^\circ \times 5^\circ$ Hourly Airspace Saturation & 4D Conflict Maps**: Period-averaged hourly flight density, peak traffic load, vertical climb/descent share, Dynamic Complexity Index, and 1-minute interpolated 4D co-altitude proximity detection (`< 5 nm` / `< 1,000 ft`).
 - **📏 ICAO GANP & Eurocontrol PRU KPI Suite**: Complete implementation of **KPI02** (Additional Taxi-Out Time `ATOT`), **KPI04** (`KEP` Filed En-Route Extension), **KPI05** (`KEA` Actual En-Route Extension & Tactical ATC Attribution), **KPI08** (40 nm `ASMA` Terminal Transit Time), **KPI17** (Continuous Climb Operations `CCO`), and **KPI19** (Continuous Descent Operations `CDO` & Cruise Level-Capping).
 - **🛣️ Free Route Airspace (`FRA`) & VHF Comms Workload**: Snaps 4D trajectories against published ATS airways and 5-letter fixes to quantify `FRA / DCT` directness vs. fixed airway adherence, and models ATC controller-pilot VHF voice channel occupancy (`%`).

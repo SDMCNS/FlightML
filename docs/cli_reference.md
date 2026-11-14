@@ -473,3 +473,23 @@ Directly Delayed Flights: 72 | Reactionary Infected Rotations: 148 | Total Impac
 Cumulative Delay: 184.5 flight hours | Economic Delay Cost: €1,162,350.00 EUR
 Passenger Misconnections: 1,840 passengers | Cancellation Risk Flights: 14 flights
 ```
+
+---
+
+## 9. Model Context Protocol (MCP) Server
+
+### `flightml mcp`
+Launch the FlightML Model Context Protocol (MCP) server over standard I/O (`stdio`) or Server-Sent Events (`sse`), exposing FlightML trajectory analytics and simulation engines to local LLM hosts (LM Studio, Claude Desktop, Cursor).
+
+```bash
+# Standard I/O transport (default for LM Studio, Claude Desktop, Cursor)
+flightml mcp
+
+# Server-Sent Events (SSE) mode on port 8000
+flightml mcp --transport sse --port 8000
+```
+
+**Options:**
+- `--transport, -t`: Transport mechanism (`stdio`, `sse`, `streamable-http`) [default: `stdio`]
+- `--port, -p`: Port for SSE transport [default: `8000`]
+- `--help`: Show command documentation and exit.

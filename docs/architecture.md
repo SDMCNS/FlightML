@@ -144,9 +144,10 @@ FlightML features an experimental machine learning and operations research suite
 
 ### 1. Flight2Vec Trajectory Foundation Embeddings
 - **Architecture**: A self-supervised projection neural network mapping 16 kinematic and operational features (actual distance, departure/arrival delays, requested and cruise flight levels, climb energy, airframe and operator hashes, diurnal departure hour, route charge avoidance indicator, heavy wake class, and tactical reroute flags) into a dense 128-dimensional unit hypersphere $\mathbb{S}^{127}$.
-- **Metric Space**: Cosine similarity $\cos\theta = \mathbf{z}_1 \cdot \mathbf{z}_2$ represents operational similarity, preserving distance, vertical energy profile, and delay dynamics.
-- **Operational Twin Finder**: Scans hundreds of candidate flights in sub-second time to identify exact twin flights across different operators and city pairs.
-- **Manifold Projection**: Dimensionality reduction via Principal Component Analysis (PCA) maps the 128D latent space to 2D for exploratory cohort visualization.
+- **Seeded Determinism**: Uses fixed random seeds (`torch.manual_seed(42)`) and 32-bit CRC32 deterministic hashing to guarantee identical embedding coordinates across Python process restarts.
+- **Operational Aircraft Taxonomy Filtering**: Categorizes aircraft into strict operational cohorts (`COMMERCIAL_JET_NARROWBODY`, `COMMERCIAL_JET_WIDEBODY`, `REGIONAL_TURBOPROP`, `BUSINESS_JET`, `HELICOPTER`, `GENERAL_AVIATION`). Twin search filters out incompatible airframe categories (e.g. preventing an S-92 helicopter from matching an A320 commercial jet).
+- **High-Speed Vector Cache**: Pre-vectorizes flights in batches into an on-disk binary cache (`_v2`), enabling sub-millisecond similarity scans over thousands of candidate flights.
+- **Explainable Twin Similarity**: Generates human-readable explanations detailing why two flights are operational twins (range delta %, airframe drag polar, RVSM cruise band alignment, punctuality correlation, operator fleet policy).
 
 ### 2. Physics-Informed Neural Network (PINN) for Aircraft Mass Inversion
 - **Aerodynamic Conservation Constraint**: Inverts unknown Takeoff Gross Weight (TGW) and commercial payload directly from initial climb radar points (below FL220) by embedding the longitudinal equation of motion:
@@ -157,26 +158,40 @@ FlightML features an experimental machine learning and operations research suite
 - **Thermodynamic Basis**: Enforces the Schmidt-Appleman criterion ($T \le -39.5^\circ\text{C}$) and Ice Super-Saturated Region (ISSR) condition ($\text{RH}_{\text{ice}} \ge 100\%$).
 - **Sub-Millisecond Inference**: Evaluates non-linear optical depth $\tau$ and instantaneous radiative forcing ($\text{mW/m}^2$) in $<15\,\mu\text{s}$ per waypoint, facilitating dynamic en-route re-clearing.
 
-### 4. Spatio-Temporal Graph WaveNet (ST-GNN) Delay Contagion
+### 4. Spatio-Temporal Graph WaveNet (ST-GNN) Delay Contagion & Runway Saturation
 - **Network Graph**: Models European airspace as a directed weighted graph $\mathcal{G} = (\mathcal{V}, \mathcal{E}, W)$ with nodes representing major hubs (EGLL, LFPG, EHAM, EDDF, LEMD, LIRF, etc.) and high-density FIR sectors (EDUUUIR, LFFFFIR, EGTTFIR, LSASFIR).
-- **Graph Diffusion**: Combines spatial graph convolution $A \cdot X$ with temporal gated causal projections to forecast delay shockwave propagation over multi-horizon lookaheads ($t = 1\text{h}, 2\text{h}, 4\text{h}, 6\text{h}$).
-- **Vulnerability Metric**: Calculates node vulnerability indices and classifies network nodes into `CRITICAL_SHOCK_ABSORBER`, `ELEVATED_RIPPLE_RISK`, and `NOMINAL_ABSORPTION`.
+- **Graph Diffusion**: Combines spatial graph convolution $A \cdot X$ with temporal gated causal projections to forecast delay shockwave propagation over multi-horizon lookaheads ($t = 0\text{h}, 1\text{h}, 2\text{h}, 4\text{h}, 6\text{h}$).
+- **Physical Runway Capacity Limits & Point-Queue Bottlenecks**: Incorporates hourly physical runway movement throughput limits ($C_i$). Computes empirical runway saturation $U = \text{Movements} / C_i$ and spare recovery capacity buffer ($C_i - \text{Movements}$). For saturated hubs like Heathrow ($U \approx 99\%$, spare buffer $\approx 1.0\text{ mvts/hr}$), departures and arrivals cannot outstrip runway limits, causing point-queue delay to persist across multi-hour horizons ($t=4\text{h}$ and $t=6\text{h}$).
+- **Rotational Reactionary Delay Contagion**: Models physical aircraft tail rotations (`ac_reg`), tracking inbound delays exceeding turnaround buffers and transferring reactionary delay downstream to subsequent flights.
+- **Temporal Event Controls**: Accepts explicit shock date, UTC start hour, and disruption duration.
 
 ### 5. 4D Trajectory Counterfactual & FIR Closure Simulator
-- **Airspace Disruption Model**: Simulates the temporary closure of a Flight Information Region (e.g. `LSASFIR`, `EDUUUIR`, `LFFFFIR`) from Time A to Time B.
-- **Detour Diversion Corridors**: Automatically maps traffic into adjacent bypass FIRs, computing extra track miles, additional cruise fuel burn, $\text{CO}_2$ emissions, and airline direct costs (`€ EUR`).
+- **Airspace Disruption Model**: Simulates the temporary closure of a Flight Information Region (e.g. `LSASFIR`, `EDUUUIR`, `LFFFFIR`) with user-specified closure date, UTC start time, and duration.
+- **Detour Diversion Corridors**: Automatically identifies transiting flights and maps them into adjacent bypass FIRs, computing extra track miles, additional cruise fuel burn, $\text{CO}_2$ emissions, and airline direct costs (`€ EUR`).
 - **Post-Reopening Recovery Dynamics**: Solves non-linear queue drainage when the closed sector reopens, modeling backlog flight decay against surge sector throughput:
   $$T_{\text{recovery}} = \frac{\text{Backlog Flights}}{\mu_{\text{surge}} - \mu_{\text{nominal}}}$$
 
-### 6. Multi-Agent Reinforcement Learning (MARL) ATFM Slot Gaming
+### 6. Multi-Agent Reinforcement Learning (MARL) ATFM Slot Gaming & Nash Equilibrium
 - **Decentralized Game Theory**: Models strategic competition between heterogeneous airline archetypes under ATFM arrival rate restrictions:
   - *Network Legacy Carrier*: Prioritizes connecting passenger value, swaps slots to protect long-haul arrivals, and speeds up flights at higher fuel burn.
-  - *Low-Cost Carrier (LCC)*: Prioritizes fuel conservation and turnaround punctuality, cancels late flights to prevent aircraft sleeping out-of-base.
+  - *Low-Cost Carrier (LCC)*: Prioritizes fuel conservation and turnaround punctuality, absorbs ground delay at gate with engines off, and engages in bilateral trades for compensation credits.
   - *Hybrid European Carrier*: Balances slot swaps on corporate business routes with strategic flight cancellations.
-  - *Express Cargo Operator*: Defers flights to night curfew windows with zero passenger compensation exposure.
-- **Equilibrium Outcome**: Computes mixed-strategy Nash equilibrium payoffs, gross delays saved, EU261 fines avoided, and the cooperative vs. competitive efficiency gap.
+  - *Express Cargo Operator*: Tactically defers arrival slots to off-peak daytime windows with zero passenger impact, earning peak-period fee credits.
+- **Infilled Domain Assumptions**: Raw Eurocontrol DDR2 radar tracks lack passenger manifests and crew rosters; airline agents infill operational parameters:
+  - *Connecting Passengers*: 35%–50% on long-haul widebodies (~80–140 pax), 20%–35% on European feeders (~25–50 pax), 0%–4% on LCCs.
+  - *EU261 Compensation Exposure*: Delays $\ge 180\text{ min}$ incur €250 (<1,500 km), €400 (1,500–3,500 km), or €600 (>3,500 km).
+  - *EASA Crew Duty Limits*: 35–55 min remaining FDP buffer on tail-end long-haul rotations (critical timeout risk).
+  - *Missed Connection Care*: €220 per missed connecting passenger.
+  - *Speedup Fuel Burn*: CI 30 $\to$ CI 80 burns ~280–340 kg Jet-A at €0.85/kg (~€240–€290 EUR).
+- **Blow-by-Blow Autonomous Decision Log**: 10-step chronological trace of autonomous decisions (regulation issuance, assumption infilling, prioritization, tactical cancellation, intra-fleet swaps, bilateral slot trading, speedup, gate hold, slot deferral, and Nash convergence).
+- **Financial Balance Sheet**: Rigorously computes baseline unmitigated costs vs post-gaming costs, proving net economic payoff ($\text{Baseline Cost} - \text{Post-Gaming Cost} = \text{Net Economic Payoff}$) in Euros (`€ EUR`).
 
-### 7. Multimodal Aeronautical Copilot Architecture (Epic 6 - Specification)
+### 7. Model Context Protocol (MCP) Server Architecture
+- **FastMCP Protocol Bridge**: Implements the Model Context Protocol over standard input/output (`stdio`) and Server-Sent Events (`SSE`), enabling any local LLM runner (LM Studio, Claude Desktop, Cursor) to invoke FlightML engines as structured tools.
+- **Tool Suite**: Exposes 8 tools (`get_flight_details`, `search_flights`, `find_operational_twins`, `simulate_delay_contagion`, `simulate_fir_closure`, `simulate_marl_slot_gaming`, `evaluate_contrail_climate_forcing`, `get_airport_capacity`).
+- **Dynamic Resources & Prompts**: Exposes airport capacity profiles (`flightml://airports/{icao}/capacity`), MARL assumptions glossary (`flightml://assumptions/marl_glossary`), and pre-engineered disruption briefing prompts.
+
+### 8. Multimodal Aeronautical Copilot Architecture (Epic 6 - Specification)
 - **Document Text Corpus**: Designed to ingest Eurocontrol Route Availability Document (RAD), national Aeronautical Information Publications (AIPs), active NOTAMs, and METAR/TAF weather briefings into a vector database with hybrid BM25 + dense neural retrieval.
 - **Implementation Status**: Architecturally documented in `docs/v4_plan.md`; implementation deferred pending authoritative raw document text pipelines.
 
