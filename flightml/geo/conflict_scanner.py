@@ -288,21 +288,38 @@ def compute_hourly_grid_saturation(
     max_lat: float = 65.0,
     min_lon: float = -15.0,
     max_lon: float = 35.0,
-    min_avg_flights: float = 3.0,
+    min_avg_flights: float | None = None,
+    grid_size_deg: float = 5.0,
 ) -> dict[str, Any]:
     """
     Compute the average hourly traffic density, peak hourly flights, vertical climb/descent share,
-    and dynamic complexity index for every 5°x5° geographic square across the dataset period
+    and dynamic complexity index for geographic squares across the dataset period
     for a selected hour of the day (`0` to `23` UTC).
+    Supports variable resolution from 5.0° x 5.0° macro squares down to 0.5° x 0.5° micro squares.
     """
     hr = max(0, min(23, int(hour_utc)))
-    sql = """
+    grid_size = max(0.2, min(10.0, float(grid_size_deg)))
+
+    if min_avg_flights is not None:
+        threshold_flts = float(min_avg_flights)
+    else:
+        # Dynamically scale filtering threshold with cell area
+        if grid_size >= 4.0:
+            threshold_flts = 3.0
+        elif grid_size >= 2.0:
+            threshold_flts = 2.0
+        elif grid_size >= 1.0:
+            threshold_flts = 1.0
+        else:
+            threshold_flts = 0.5
+
+    sql = f"""
         WITH pts AS (
             SELECT
                 CAST(time_over AS DATE) AS dt,
                 ectrl_id,
-                CAST(floor(latitude / 5.0) * 5 AS INT) AS cell_lat,
-                CAST(floor(longitude / 5.0) * 5 AS INT) AS cell_lon,
+                ROUND(floor(latitude / {grid_size}) * {grid_size}, 2) AS cell_lat,
+                ROUND(floor(longitude / {grid_size}) * {grid_size}, 2) AS cell_lon,
                 flight_level,
                 abs(flight_level - lag(flight_level) OVER (PARTITION BY ectrl_id ORDER BY seq_num)) AS dfl
             FROM trajectory_actual
@@ -327,8 +344,6 @@ def compute_hourly_grid_saturation(
         SELECT
             cell_lat,
             cell_lon,
-            CAST(cell_lat AS VARCHAR) || '°N to ' || CAST(cell_lat + 5 AS VARCHAR) || '°N, ' ||
-            CAST(cell_lon AS VARCHAR) || '°E to ' || CAST(cell_lon + 5 AS VARCHAR) || '°E' AS grid_sector,
             CAST(count(distinct dt) AS INT) AS active_days,
             round(avg(daily_flights), 1) AS avg_flights_per_hour,
             CAST(max(daily_flights) AS INT) AS peak_flights_per_hour,
@@ -346,31 +361,48 @@ def compute_hourly_grid_saturation(
         ORDER BY dynamic_complexity_score DESC;
     """
     df = dataset.cursor.execute(
-        sql, [hr, min_lat, max_lat, min_lon, max_lon, float(min_avg_flights)]
+        sql, [hr, min_lat, max_lat, min_lon, max_lon, float(threshold_flts)]
     ).df()
+
+    def _fmt_deg(val: float) -> str:
+        rounded = round(val, 2)
+        return f"{int(rounded)}" if rounded.is_integer() else f"{rounded:.2f}".rstrip("0").rstrip(".")
 
     cells: list[dict[str, Any]] = []
     if not df.empty:
         max_comp = max(1.0, float(df["dynamic_complexity_score"].max()))
+        area_factor = (grid_size / 5.0) ** 1.2
+        crit_vol = max(15.0, 180.0 * area_factor)
+        high_vol = max(8.0, 100.0 * area_factor)
+        mod_vol = max(3.0, 45.0 * area_factor)
+
         for _, r in df.iterrows():
             comp = float(r["dynamic_complexity_score"])
             avg_f = float(r["avg_flights_per_hour"])
+            c_lat = float(r["cell_lat"])
+            c_lon = float(r["cell_lon"])
+
+            lat_lbl = f"{_fmt_deg(c_lat)}°N to {_fmt_deg(c_lat + grid_size)}°N"
+            lon_lbl = f"{_fmt_deg(c_lon)}°E to {_fmt_deg(c_lon + grid_size)}°E"
+            sector_lbl = f"{lat_lbl}, {lon_lbl}"
+
             ratio = comp / max_comp
-            if ratio >= 0.65 or avg_f >= 180.0:
+            if ratio >= 0.65 or avg_f >= crit_vol:
                 status = "CRITICAL_SATURATION"
-            elif ratio >= 0.40 or avg_f >= 100.0:
+            elif ratio >= 0.40 or avg_f >= high_vol:
                 status = "HIGH_DENSITY"
-            elif ratio >= 0.20 or avg_f >= 45.0:
+            elif ratio >= 0.20 or avg_f >= mod_vol:
                 status = "MODERATE_FLOW"
             else:
                 status = "LOW_DENSITY"
 
             cells.append(
                 {
-                    "cell_lat": int(r["cell_lat"]),
-                    "cell_lon": int(r["cell_lon"]),
-                    "grid_sector": str(r["grid_sector"]),
-                    "cell_label": str(r["grid_sector"]),
+                    "cell_lat": c_lat,
+                    "cell_lon": c_lon,
+                    "grid_size_deg": grid_size,
+                    "grid_sector": sector_lbl,
+                    "cell_label": sector_lbl,
                     "active_days": int(r["active_days"]),
                     "avg_flights_per_hour": avg_f,
                     "peak_flights_per_hour": int(r["peak_flights_per_hour"]),
@@ -390,6 +422,7 @@ def compute_hourly_grid_saturation(
     return {
         "period": dataset.period,
         "hour_utc": hr,
+        "grid_size_deg": grid_size,
         "total_active_squares": len(cells),
         "critical_squares_count": crit_count,
         "high_density_squares_count": high_count,

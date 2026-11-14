@@ -775,10 +775,11 @@ def get_flight_contrails_endpoint(
 def get_airspace_grid_saturation_endpoint(
     hour: int = Query(default=10, ge=0, le=23, description="UTC hour of day (0-23) averaged across the period"),
     period: str = Query(default="202510", description="Data period ID"),
+    grid_size: float = Query(default=5.0, ge=0.5, le=10.0, description="Square resolution in degrees (from 0.5 to 5.0)"),
 ) -> dict[str, Any]:
-    """Compute average hourly flight density and complexity per 5° x 5° geographic square across the period."""
+    """Compute average hourly flight density and complexity per geographic square across the period."""
     ds = FlightDataset(period=period)
-    return compute_hourly_grid_saturation(ds, hour_utc=hour)
+    return compute_hourly_grid_saturation(ds, hour_utc=hour, grid_size_deg=grid_size)
 
 
 @app.get("/api/v1/flights/{ectrl_id}/navaids-rnp")

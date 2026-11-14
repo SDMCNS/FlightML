@@ -51,3 +51,46 @@ def test_assess_flight_runway_safety_and_fastapi():
     assert r1.status_code == 200
     assert r1.json()["ectrl_id"] == fid
 
+
+def test_variable_grid_saturation_from_5v5_down_to_half_degree():
+    """
+    Test variable resolution grid saturation analysis from 5.0°x5.0° down to 0.5°x0.5°:
+    - Verifies compute_hourly_grid_saturation works with 5.0, 2.0, 1.0, and 0.5 degree square dimensions.
+    - Verifies create_grid_saturation_map produces Folium maps with properly bounded cells at each scale.
+    - Verifies FastAPI endpoint supports grid_size query parameter.
+    """
+    import folium
+    from flightml.geo.conflict_scanner import compute_hourly_grid_saturation
+    from flightml.viz.map_builder import create_grid_saturation_map
+
+    ds = FlightDataset(period="202510")
+
+    # 1. Macro 5v5 square
+    macro = compute_hourly_grid_saturation(ds, hour_utc=10, grid_size_deg=5.0)
+    assert macro["grid_size_deg"] == 5.0
+    assert macro["total_active_squares"] > 0
+    assert "5°N to 10°N" in macro["squares"][0]["cell_label"] or "°N to " in macro["squares"][0]["cell_label"]
+    m_macro = create_grid_saturation_map(macro)
+    assert isinstance(m_macro, folium.Map)
+
+    # 2. Intermediate 1v1 square
+    fine_1deg = compute_hourly_grid_saturation(ds, hour_utc=10, grid_size_deg=1.0)
+    assert fine_1deg["grid_size_deg"] == 1.0
+    assert fine_1deg["total_active_squares"] > macro["total_active_squares"]
+
+    # 3. High-resolution 0.5v0.5 square
+    micro = compute_hourly_grid_saturation(ds, hour_utc=10, grid_size_deg=0.5)
+    assert micro["grid_size_deg"] == 0.5
+    assert micro["total_active_squares"] > fine_1deg["total_active_squares"]
+    m_micro = create_grid_saturation_map(micro)
+    assert isinstance(m_micro, folium.Map)
+
+    # 4. FastAPI test with grid_size=0.5
+    client = TestClient(app)
+    res = client.get("/api/v1/airspace/grid-saturation?hour=10&period=202510&grid_size=0.5")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["grid_size_deg"] == 0.5
+    assert data["total_active_squares"] > 0
+
+

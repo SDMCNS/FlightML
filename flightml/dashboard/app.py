@@ -137,8 +137,8 @@ def get_metar_client() -> MetarClient:
 
 
 @st.cache_data(show_spinner=False)
-def _cached_grid_saturation(period: str, hour_utc: int):
-    return compute_hourly_grid_saturation(get_dataset(period), hour_utc=hour_utc)
+def _cached_grid_saturation(period: str, hour_utc: int, grid_size_deg: float = 5.0):
+    return compute_hourly_grid_saturation(get_dataset(period), hour_utc=hour_utc, grid_size_deg=grid_size_deg)
 
 
 @st.cache_data(show_spinner=False)
@@ -1495,12 +1495,13 @@ with tab_cat_system:
         c4.metric("Avg Arrival Delay", f"{stats['avg_arr_delay_min']} min")
 
         st.divider()
-        st.subheader("🗺️ 5° × 5° European Airspace Hourly Saturation & Complexity Map (Period Average by Hour of Day)")
+        st.subheader("🗺️ European Airspace Hourly Saturation & Dynamic Complexity Map (Period Average by Hour of Day)")
         st.markdown(
             "Visualizes the **average hourly flight density, peak traffic load, vertical climb/descent transition intensity, "
-            "and Dynamic Complexity Score** across every $5^\\circ \\times 5^\\circ$ geographic square for any selected hour of the day (`00:00`–`23:00 UTC`)."
+            "and Dynamic Complexity Score** across geographic squares for any selected hour of the day (`00:00`–`23:00 UTC`). "
+            "Adjust the resolution slider to zoom in from macro $5^\\circ \\times 5^\\circ$ squares all the way down to fine $0.5^\\circ \\times 0.5^\\circ$ micro cells."
         )
-        col_gm1, col_gm2 = st.columns([2, 3])
+        col_gm1, col_gm2 = st.columns([1, 1])
         with col_gm1:
             map_hour_utc = st.slider(
                 "Select Hour of Day (UTC) — Averaged Across All Days in Period",
@@ -1510,13 +1511,23 @@ with tab_cat_system:
                 format="%02d:00 UTC",
                 key=f"grid_map_hour_{selected_period}",
             )
-        grid_sat_data = _cached_grid_saturation(selected_period, map_hour_utc)
         with col_gm2:
-            gm_c1, gm_c2, gm_c3, gm_c4 = st.columns(4)
-            gm_c1.metric("Active 5°×5° Squares", f"{grid_sat_data['total_active_squares']}")
-            gm_c2.metric("Critical Saturation", f"{grid_sat_data['critical_squares_count']} squares")
-            gm_c3.metric("High Density", f"{grid_sat_data['high_density_squares_count']} squares")
-            gm_c4.metric("Peak Square Avg/Hr", f"{grid_sat_data['max_avg_flights_per_hour']:.1f} flts/hr")
+            grid_size_sel = st.select_slider(
+                "🗺️ Grid Square Resolution (Square Size):",
+                options=[5.0, 4.0, 3.0, 2.5, 2.0, 1.5, 1.0, 0.5],
+                value=5.0,
+                format_func=lambda x: f"{x:g}° × {x:g}°" + (" (Macro 5v5)" if x == 5.0 else (" (Micro 0.5v0.5)" if x == 0.5 else "")),
+                help="Select cell dimensions from 5v5 macro squares down to 0.5v0.5 fine micro cells.",
+                key=f"grid_size_slider_{selected_period}",
+            )
+
+        grid_sat_data = _cached_grid_saturation(selected_period, map_hour_utc, grid_size_deg=grid_size_sel)
+
+        gm_c1, gm_c2, gm_c3, gm_c4 = st.columns(4)
+        gm_c1.metric(f"Active {grid_size_sel:g}°×{grid_size_sel:g}° Squares", f"{grid_sat_data['total_active_squares']:,}")
+        gm_c2.metric("Critical Saturation", f"{grid_sat_data['critical_squares_count']} squares")
+        gm_c3.metric("High Density", f"{grid_sat_data['high_density_squares_count']} squares")
+        gm_c4.metric("Peak Square Avg/Hr", f"{grid_sat_data['max_avg_flights_per_hour']:.1f} flts/hr")
 
         grid_map = create_grid_saturation_map(grid_sat_data)
         st_folium(
@@ -1524,10 +1535,10 @@ with tab_cat_system:
             width=1200,
             height=540,
             returned_objects=[],
-            key=f"folium_grid_sat_{selected_period}_{map_hour_utc}",
+            key=f"folium_grid_sat_{selected_period}_{map_hour_utc}_{grid_size_sel:g}",
         )
 
-        with st.expander(f"📊 View 5° × 5° Square Saturation Table for {map_hour_utc:02d}:00–{map_hour_utc:02d}:59 UTC", expanded=False):
+        with st.expander(f"📊 View {grid_size_sel:g}° × {grid_size_sel:g}° Square Saturation Table for {map_hour_utc:02d}:00–{map_hour_utc:02d}:59 UTC", expanded=False):
             if grid_sat_data.get("squares"):
                 sq_df = pd.DataFrame(grid_sat_data["squares"])[
                     [
@@ -1542,7 +1553,7 @@ with tab_cat_system:
                     ]
                 ].rename(
                     columns={
-                        "cell_label": "5°×5° Square",
+                        "cell_label": f"{grid_size_sel:g}°×{grid_size_sel:g}° Square",
                         "saturation_status": "Status",
                         "avg_flights_per_hour": "Avg Flights / Hr",
                         "peak_flights_per_hour": "Peak Flights / Hr",

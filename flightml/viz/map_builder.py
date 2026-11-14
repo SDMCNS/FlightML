@@ -290,6 +290,7 @@ def create_grid_saturation_map(
     cells = grid_data.get("cells") or []
     hr = int(grid_data.get("hour_utc", 10))
     period = str(grid_data.get("period", ""))
+    grid_size = float(grid_data.get("grid_size_deg", 5.0))
 
     status_colors = {
         "CRITICAL_SATURATION": ("#c0392b", 0.48),
@@ -298,11 +299,13 @@ def create_grid_saturation_map(
         "LOW_DENSITY": ("#2ecc71", 0.22),
     }
 
+    line_weight = 1 if grid_size <= 0.5 else (1.4 if grid_size <= 1.0 else 2)
+
     for c in cells:
         lat0 = float(c["cell_lat"])
         lon0 = float(c["cell_lon"])
-        lat1 = lat0 + 5.0
-        lon1 = lon0 + 5.0
+        lat1 = lat0 + grid_size
+        lon1 = lon0 + grid_size
         status = str(c.get("saturation_status", "LOW_DENSITY"))
         color, fill_op = status_colors.get(status, ("#2ecc71", 0.22))
         avg_f = float(c.get("avg_flights_per_hour", 0.0))
@@ -310,11 +313,11 @@ def create_grid_saturation_map(
         vert_pct = float(c.get("vertical_transition_pct", 0.0))
         comp_score = float(c.get("dynamic_complexity_score", 0.0))
         avg_fl = float(c.get("avg_flight_level", 320.0))
-        sector_lbl = str(c.get("grid_sector", f"{lat0:.0f}°N, {lon0:.0f}°E"))
+        sector_lbl = str(c.get("grid_sector", f"{lat0:.1f}°N, {lon0:.1f}°E"))
 
         popup_html = f"""
         <div style="font-family: sans-serif; min-width: 220px; font-size: 12.5px;">
-            <h4 style="margin: 0 0 6px 0; color: {color};">5°×5° Cell: {sector_lbl}</h4>
+            <h4 style="margin: 0 0 6px 0; color: {color};">{grid_size:g}°×{grid_size:g}° Cell: {sector_lbl}</h4>
             <b>Hour Window:</b> {hr:02d}:00 – {hr:02d}:59 UTC<br>
             <b>Avg Flights / Hr:</b> {avg_f:.1f} flts/hr (Peak: {peak_f}/hr)<br>
             <b>Dynamic Complexity Index:</b> {comp_score:.1f}<br>
@@ -327,26 +330,27 @@ def create_grid_saturation_map(
         folium.Rectangle(
             bounds=[[lat0, lon0], [lat1, lon1]],
             color=color,
-            weight=2,
+            weight=line_weight,
             fill=True,
             fill_color=color,
             fill_opacity=fill_op,
             tooltip=(
-                f"{sector_lbl} | Avg: {avg_f:.1f} flts/hr (Peak: {peak_f}) | "
+                f"{grid_size:g}°×{grid_size:g}° {sector_lbl} | Avg: {avg_f:.1f} flts/hr (Peak: {peak_f}) | "
                 f"Climb/Desc: {vert_pct:.1f}% | Complexity: {comp_score:.1f}"
             ),
             popup=folium.Popup(popup_html, max_width=280),
         ).add_to(m)
 
-        # Render inline badge inside medium/high density squares
-        if avg_f >= 15.0:
+        # Render inline badge inside medium/high density squares when cell is sufficiently large
+        show_badge = (grid_size >= 2.0 and avg_f >= 15.0) or (grid_size >= 1.0 and avg_f >= 30.0)
+        if show_badge:
             folium.Marker(
-                location=[lat0 + 2.5, lon0 + 2.5],
+                location=[lat0 + grid_size * 0.5, lon0 + grid_size * 0.5],
                 icon=folium.DivIcon(
                     html=(
-                        f'<div style="font-family: sans-serif; font-size: 11px; font-weight: bold; '
-                        f'color: #ffffff; background: rgba(44,62,80,0.78); padding: 2px 5px; '
-                        f'border-radius: 4px; text-align: center; white-space: nowrap; '
+                        f'<div style="font-family: sans-serif; font-size: 10.5px; font-weight: bold; '
+                        f'color: #ffffff; background: rgba(44,62,80,0.78); padding: 1px 4px; '
+                        f'border-radius: 3px; text-align: center; white-space: nowrap; '
                         f'transform: translate(-50%, -50%);">{avg_f:.0f}/hr</div>'
                     )
                 ),
@@ -401,7 +405,7 @@ def create_grid_saturation_map(
                 background-color: white; border: 2px solid #bdc3c7; border-radius: 8px;
                 z-index: 9999; font-size: 12px; font-family: sans-serif;
                 padding: 10px; box-shadow: 2px 2px 6px rgba(0,0,0,0.2);">
-        <b style="font-size: 13.5px; color: #2c3e50;">🗺️ 5°×5° Hourly Airspace Saturation ({hr:02d}:00 UTC, {period})</b><br>
+        <b style="font-size: 13.5px; color: #2c3e50;">🗺️ {grid_size:g}°×{grid_size:g}° Hourly Airspace Saturation ({hr:02d}:00 UTC, {period})</b><br>
         <span style="color: #c0392b;">■ Critical Saturation</span> |
         <span style="color: #e67e22;">■ High Density</span> |
         <span style="color: #f1c40f;">■ Moderate</span> |
