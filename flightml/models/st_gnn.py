@@ -173,11 +173,18 @@ class SpatioTemporalDelayEngine:
                 d4 = float(base_inf[2] * ripple_factor * 0.8)
                 d6 = float(base_inf[3] * ripple_factor * 0.3)
 
-            d_vec = [round(max(0.0, d), 1) for d in [d1, d2, d4, d6]]
+            d0 = round(injected_delay_min if i == orig_idx else 0.0, 1)
+            d_vec = [
+                d0,
+                round(max(0.0, d1), 1),
+                round(max(0.0, d2), 1),
+                round(max(0.0, d4), 1),
+                round(max(0.0, d6), 1),
+            ]
             delay_matrix[n_id] = d_vec
-            total_delay_hours += sum(d_vec) / 60.0
+            total_delay_hours += sum(d_vec[1:]) / 60.0
 
-            vuln = float(np.mean(d_vec) / max(injected_delay_min, 1.0) * 100.0)
+            vuln = float(np.mean(d_vec[1:]) / max(injected_delay_min, 1.0) * 100.0)
             if vuln >= 35.0 or i == orig_idx:
                 risk = "CRITICAL_SHOCK_ABSORBER"
             elif vuln >= 15.0:
@@ -190,11 +197,11 @@ class SpatioTemporalDelayEngine:
                     node_id=n_id,
                     node_type=n_type,
                     nominal_hourly_capacity=cap,
-                    initial_delay_min=round(injected_delay_min if i == orig_idx else 0.0, 1),
-                    predicted_delay_1h_min=d_vec[0],
-                    predicted_delay_2h_min=d_vec[1],
-                    predicted_delay_4h_min=d_vec[2],
-                    predicted_delay_6h_min=d_vec[3],
+                    initial_delay_min=d0,
+                    predicted_delay_1h_min=d_vec[1],
+                    predicted_delay_2h_min=d_vec[2],
+                    predicted_delay_4h_min=d_vec[3],
+                    predicted_delay_6h_min=d_vec[4],
                     vulnerability_index=round(vuln, 1),
                     risk_level=risk,
                 )
@@ -205,7 +212,7 @@ class SpatioTemporalDelayEngine:
         return STGNNPropagationResult(
             shock_origin_node=origin_clean,
             injected_shock_delay_min=injected_delay_min,
-            lookahead_hours=[1, 2, 4, 6],
+            lookahead_hours=[0, 1, 2, 4, 6],
             total_network_reactionary_delay_hours=round(total_delay_hours, 1),
             top_vulnerable_nodes=node_states,
             node_delay_matrix=delay_matrix,

@@ -3493,15 +3493,17 @@ with tab_cat_ai_lab:
             st.subheader("📈 Multi-Horizon Delay Escalation Curve (1h, 2h, 4h, 6h Lookaheads)")
             st.caption("Tracks how initial disruption at the shock origin hub dissipates locally while propagating downstream to connected European hubs.")
 
-            # Build line chart for top 5 affected nodes
+            # Build line chart for top 6 affected nodes
             curve_records = []
+            time_labels = [f"t={h}h" for h in prop_res.lookahead_hours]
             for node_state in prop_res.top_vulnerable_nodes[:6]:
-                delays = prop_res.node_delay_matrix.get(node_state.node_id, [0.0, 0.0, 0.0, 0.0, 0.0])
-                for h_idx, h_lbl in enumerate(["t=0h", "t=1h", "t=2h", "t=4h", "t=6h"]):
+                delays = prop_res.node_delay_matrix.get(node_state.node_id, [0.0] * len(time_labels))
+                for h_idx, h_lbl in enumerate(time_labels):
+                    val = delays[h_idx] if h_idx < len(delays) else 0.0
                     curve_records.append({
                         "Time Horizon": h_lbl,
                         "Node": node_state.node_id,
-                        "Predicted Delay (min)": delays[h_idx],
+                        "Predicted Delay (min)": val,
                     })
 
             if curve_records:

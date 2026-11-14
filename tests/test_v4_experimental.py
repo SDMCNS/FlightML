@@ -117,11 +117,11 @@ def test_st_gnn_delay_propagation(dataset: FlightDataset):
     assert isinstance(res, STGNNPropagationResult)
     assert res.shock_origin_node == "EGLL"
     assert res.injected_shock_delay_min == 60.0
-    assert res.lookahead_hours == [1, 2, 4, 6]
+    assert res.lookahead_hours == [0, 1, 2, 4, 6]
     assert res.total_network_reactionary_delay_hours > 0.0
     assert len(res.top_vulnerable_nodes) > 0
     assert "EGLL" in res.node_delay_matrix
-    assert len(res.node_delay_matrix["EGLL"]) == 4
+    assert len(res.node_delay_matrix["EGLL"]) == 5
 
     # Check top vulnerable node
     top_node = res.top_vulnerable_nodes[0]
