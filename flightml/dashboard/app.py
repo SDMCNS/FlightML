@@ -3609,31 +3609,61 @@ with tab_cat_ai_lab:
             "Combines spatial diffusion message passing with temporal dilated causal convolutions across multi-hour forward lookaheads."
         )
 
-        col_g1, col_g2 = st.columns(2)
+        col_g1, col_g2, col_g3, col_g4 = st.columns([1.3, 1.1, 0.8, 0.8])
         with col_g1:
             gnn_shock_node = st.selectbox(
                 "Shock Origin Node (Airport Hub or En-Route Sector)",
-                options=["EGLL", "LFPG", "EHAM", "EDDF", "LEMD", "LIRF", "EDDM", "LEBL", "EDUUUIR", "LFFFFIR", "EGTTFIR"],
+                options=["EGLL", "LFPG", "EHAM", "EDDF", "LEMD", "LIRF", "EDDM", "LEBL", "EBBR", "EIDW", "EDUUUIR", "LFFFFIR", "EGTTFIR", "LSASFIR", "EDMMFIR"],
                 key=f"gnn_shock_{selected_period}",
             )
         with col_g2:
+            start_date_bound, end_date_bound = get_dataset_date_bounds(ds)
+            default_gnn_date = pd.to_datetime(start_date_bound).date()
+            try:
+                row_op = ds.query(
+                    "SELECT CAST(COALESCE(actual_off_block_time, filed_off_block_time) AS DATE) AS d "
+                    "FROM flights GROUP BY 1 HAVING COUNT(*) > 500 ORDER BY 1 LIMIT 1"
+                )
+                if not row_op.empty:
+                    default_gnn_date = pd.to_datetime(str(row_op.iloc[0]["d"])).date()
+            except Exception:
+                pass
+            gnn_shock_date = st.date_input(
+                "Shock Introduction Date",
+                value=default_gnn_date,
+                min_value=pd.to_datetime(start_date_bound).date(),
+                max_value=pd.to_datetime(end_date_bound).date(),
+                key=f"gnn_date_{selected_period}",
+            )
+        with col_g3:
+            gnn_shock_hour = st.slider(
+                "Shock Time (UTC Hour)",
+                0, 23, 10,
+                key=f"gnn_hour_{selected_period}",
+            )
+        with col_g4:
             gnn_injected_delay = st.slider(
-                "Injected Delay Shock (Minutes)",
+                "Injected Delay (Min)",
                 15, 180, 60, step=15,
                 key=f"gnn_delay_{selected_period}",
             )
 
         if st.button("Simulate Spatio-Temporal Delay Contagion", key=f"btn_st_gnn_{selected_period}"):
-            with st.spinner(f"Propagating {gnn_injected_delay} min delay shock from {gnn_shock_node} across European network..."):
+            with st.spinner(f"Propagating {gnn_injected_delay} min delay shock from {gnn_shock_node} on {gnn_shock_date} at {gnn_shock_hour:02d}:00 UTC across European flight schedule..."):
                 st_engine = SpatioTemporalDelayEngine(ds, period=selected_period)
-                prop_res = st_engine.simulate_delay_propagation(gnn_shock_node, float(gnn_injected_delay))
+                prop_res = st_engine.simulate_delay_propagation(
+                    shock_origin=gnn_shock_node,
+                    injected_delay_min=float(gnn_injected_delay),
+                    shock_date=str(gnn_shock_date),
+                    shock_time_hour=int(gnn_shock_hour),
+                )
 
             gm1, gm2, gm3, gm4 = st.columns(4)
-            gm1.metric("Shock Origin", prop_res.shock_origin_node)
+            gm1.metric("Shock Origin & Time", f"{prop_res.shock_origin_node} @ {gnn_shock_hour:02d}:00 UTC", str(gnn_shock_date))
             gm2.metric("Injected Shock", f"{prop_res.injected_shock_delay_min:.0f} min")
-            gm3.metric("Total Downstream Reactionary Delay", f"{prop_res.total_network_reactionary_delay_hours:,.1f} delay hours")
+            gm3.metric("Downstream Reactionary Delay", f"{prop_res.total_network_reactionary_delay_hours:,.1f} delay hours")
             peak_node = prop_res.top_vulnerable_nodes[0].node_id if prop_res.top_vulnerable_nodes else "N/A"
-            gm4.metric("Most Vulnerable Downstream Node", peak_node)
+            gm4.metric("Most Vulnerable Downstream Node", peak_node, f"{len(prop_res.sample_impacted_flights)} direct flights")
 
             st.subheader("📈 Multi-Horizon Delay Escalation Curve (1h, 2h, 4h, 6h Lookaheads)")
             st.caption("Tracks how initial disruption at the shock origin hub dissipates locally while propagating downstream to connected European hubs.")
@@ -3662,19 +3692,80 @@ with tab_cat_ai_lab:
                     {
                         "Node ID": n.node_id,
                         "Node Type": n.node_type,
-                        "Capacity": f"{n.nominal_hourly_capacity} mvts/hr",
+                        "Nominal Capacity": f"{n.nominal_hourly_capacity} mvts/hr",
+                        "Scheduled Movements": f"{n.scheduled_movements} flights",
+                        "Baseline Delay": f"{n.baseline_delay_min:+.1f} min",
                         "t=0h Initial": f"{n.initial_delay_min:.1f} min",
                         "t=1h Delay": f"{n.predicted_delay_1h_min:.1f} min",
                         "t=2h Delay": f"{n.predicted_delay_2h_min:.1f} min",
                         "t=4h Delay": f"{n.predicted_delay_4h_min:.1f} min",
                         "t=6h Delay": f"{n.predicted_delay_6h_min:.1f} min",
-                        "Vulnerability Index": f"{n.vulnerability_index:.3f}",
+                        "Reactionary Added": f"{n.reactionary_delay_hours:,.1f} delay hrs",
+                        "Vulnerability Index": f"{n.vulnerability_index:.1f}",
                         "Contagion Risk Level": n.risk_level,
                     }
                     for n in prop_res.top_vulnerable_nodes
                 ]),
                 use_container_width=True,
             )
+
+            if prop_res.sample_impacted_flights:
+                st.subheader(f"✈️ Direct Downstream Flights Departing {prop_res.shock_origin_node} Disrupted by Shock")
+                st.caption("Real historical flights scheduled from the shock origin in this operational window that absorb delay at departure and carry it downstream.")
+                impacted_df = pd.DataFrame([
+                    {
+                        "Flight ID": f["ectrl_id"],
+                        "Operator": f["operator"],
+                        "Route": f["route"],
+                        "Aircraft": f["ac_type"],
+                        "Airframe Tail": f["ac_reg"],
+                        "Scheduled Off-Block": f["off_block_time"],
+                        "Baseline Delay": f"{f['baseline_delay_min']:+.0f} min",
+                        "Induced Shock Delay": f"+{f['induced_delay_min']:.0f} min",
+                        "Predicted Total Delay": f"{f['predicted_total_delay_min']:.0f} min",
+                        "Downstream Arrival Hub": f["downstream_node"],
+                    }
+                    for f in prop_res.sample_impacted_flights
+                ])
+                st.dataframe(impacted_df, use_container_width=True)
+
+            if prop_res.sample_turnaround_rotations:
+                st.subheader("🔄 Downstream Airframe Rotations & Knock-On Reactionary Delays")
+                st.caption("Identifies the physical aircraft tails (ac_reg) landing at downstream hubs that transmit rotational delay to their next scheduled departure.")
+                turns_df = pd.DataFrame([
+                    {
+                        "Leg 1 Flight ID": tr["leg1_id"],
+                        "Inbound Flight": tr["leg1_route"],
+                        "Downstream Arrival Time": tr["leg1_arr"],
+                        "Aircraft Tail": tr["ac_reg"],
+                        "Leg 2 Flight ID": tr["leg2_id"],
+                        "Next Outbound Rotation": tr["leg2_route"],
+                        "Next Scheduled Departure": tr["leg2_dep"],
+                        "Propagated Reactionary Delay": f"+{tr['reactionary_delay_min']:.0f} min",
+                    }
+                    for tr in prop_res.sample_turnaround_rotations
+                ])
+                st.dataframe(turns_df, use_container_width=True)
+
+            with st.expander("ℹ️ How the ST-GNN Delay Contagion Physics & Spatio-Temporal Graph WaveNet Work", expanded=False):
+                st.markdown(
+                    """
+                    ### Spatio-Temporal Network Delay Propagation Mechanics
+                    In dense European airspace, delays do not stay confined to their point of origin:
+
+                    1. **Dynamic Schedule-Aware Adjacency $\\mathcal{W}(t)$**:
+                       - Instead of a static geographic topology, the model builds an empirical flight connectivity matrix from the **real historical schedule** operating on the selected date and hour.
+                       - Hubs with high scheduled traffic from the shock origin (e.g. Heathrow $\\to$ Amsterdam Schiphol, Frankfurt, Paris) receive high dynamic message-passing weights.
+                    2. **Multi-Hop Spatio-Temporal Graph WaveNet Architecture**:
+                       - Combines **spatial diffusion graph convolutions** ($K$-hop neighborhood information diffusion) with **dilated causal temporal 1D convolutions**.
+                       - Allows the neural network to capture both immediate spatial neighbors ($t=1\\text{h}$) and multi-hop network echo waves ($t=2\\text{h}, 4\\text{h}, 6\\text{h}$).
+                    3. **Rotational Reactionary Delay Contagion**:
+                       - Airframe utilization in Europe is intense: narrowbody aircraft execute 4–6 flight legs per day with tight 35–45 minute gate turnaround buffers.
+                       - When an inbound aircraft arrives with delay exceeding the turnaround buffer, the reactionary delay is transferred directly to the subsequent outbound rotation (`ac_reg` tail continuity).
+                    4. **Vulnerability Index & Shock Absorber Classification**:
+                       - Hubs are ranked by their vulnerability index $\\mathcal{V}_i$, distinguishing **Critical Shock Absorbers** (hubs absorbing high reactionary delay while buffering downstream neighbors) from **Nominal Absorbers**.
+                    """
+                )
 
     # ----------------- SUB-TAB 4: 4D Trajectory & FIR Closure Simulator -----------------
     with ai_sub4:

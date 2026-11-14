@@ -127,10 +127,26 @@ def test_st_gnn_delay_propagation(dataset: FlightDataset):
     top_node = res.top_vulnerable_nodes[0]
     assert top_node.vulnerability_index >= 0.0
     assert top_node.risk_level in ("CRITICAL_SHOCK_ABSORBER", "ELEVATED_RIPPLE_RISK", "NOMINAL_ABSORPTION")
+    assert res.shock_datetime != ""
+    assert res.total_flights_impacted >= 0
+    assert isinstance(res.sample_impacted_flights, list)
+    assert isinstance(res.sample_turnaround_rotations, list)
 
     d = res.to_dict()
     assert d["shock_origin_node"] == "EGLL"
     assert len(d["top_vulnerable_nodes"]) == len(res.top_vulnerable_nodes)
+
+    # Test with explicit shock date and time
+    valid_date = res.shock_datetime.split()[0]
+    res_custom = engine.simulate_delay_propagation(
+        shock_origin="EGLL",
+        injected_delay_min=60.0,
+        shock_date=valid_date,
+        shock_time_hour=10,
+    )
+    assert f"{valid_date} 10:00 UTC" in res_custom.shock_datetime
+    assert len(res_custom.sample_impacted_flights) > 0
+    assert len(res_custom.sample_turnaround_rotations) >= 0
 
 
 def test_airspace_closure_simulator(dataset: FlightDataset):
