@@ -59,7 +59,7 @@ Monthly Eurocontrol archives contain hundreds of thousands of flights and tens o
 | **KPI04 (`KEP`)** | **Horizontal En-Route Efficiency (Filed)** | $\text{KEP (\%)} = \left(\frac{L_{\text{filed, >40nm}} - D_{\text{GCD, >40nm}}}{D_{\text{GCD, >40nm}}}\right) \times 100$ outside the 40 nm origin/destination cylinders. |
 | **KPI05 (`KEA`)** | **Horizontal En-Route Efficiency (Actual)** | $\text{KEA (\%)} = \left(\frac{L_{\text{actual, >40nm}} - D_{\text{GCD, >40nm}}}{D_{\text{GCD, >40nm}}}\right) \times 100$. Tactical attribution is $\Delta_{\text{ATC}} = \text{KEA} - \text{KEP}$. |
 | **KPI08 (`ASMA`)** | **Additional Terminal Airspace Time (40 nm)** | $\text{ASMA}_{\text{add}} = \max(0,\; T_{\text{40nm}\to\text{ALDT}} - T_{\text{unimpeded, p20}})$. |
-| **KPI17 (`CCO`)** | **Continuous Climb Operations** | Detects intermediate level-offs ($|\text{ROCD}| < 200\text{ ft/min}$ for $\ge 60\text{ s}$) below Top of Climb (`TOC`). |
+| **KPI17 (`CCO`)** | **Continuous Climb Operations** | Detects intermediate level-offs ($\lvert\text{ROCD}\rvert < 200\text{ ft/min}$ for $\ge 60\text{ s}$) below Top of Climb (`TOC`). |
 | **KPI19 (`CDO` & Level-Cap)** | **Continuous Descent & Cruise Level-Capping** | Detects descent level-offs below Top of Descent (`TOD`) and flags flights capped $\ge 20\text{ FL}$ ($2,000\text{ ft}$) below their filed requested flight level ($\text{FL}_{\text{req}}$). |
 
 ---
