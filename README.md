@@ -182,29 +182,41 @@ flightml airspace-conflicts --period 202510 --hour 10 --sep-nm 5.0
 
 ## 🖥️ Interactive Simulation Workbench (`flightml dashboard`)
 
-Launch the 10-tab Streamlit simulation workbench:
+Launch the streamlined, 4-tier simulation workbench:
 
 ```bash
 flightml dashboard
 ```
 
-Opens at **`http://localhost:8501`** with **10 interactive tabs**:
+Opens at **`http://localhost:8501`** organized into **4 primary operational categories** across 10 specialized views:
+
+### 1. Airspace & Trajectories
 1. 🌐 **Network Overview & Airspace Map**: Interactive **$5^\circ \times 5^\circ$ European Airspace Hourly Saturation & Complexity Map** (period average by hour of day `00:00`–`23:00 UTC`), FIR & AUA (`TMA`/`CTA`/`UTA`) saturation, `KPI02 ATOT` surface taxi delays, and VHF radio occupancy.
 2. 🗺️ **4D Trajectory & Holdings**: Single-flight 4D radar track vs. filed plan map, `KPI04 KEP` / `KPI05 KEA` / `KPI08 ASMA` / `KPI19` scorecard, `FRA` vs. ATS airway snapping, and FIR/AUA sector dwell tables.
 3. 📅 **Recurring Series & Diurnal Trends**: Longitudinal day-over-day route tracking and diurnal departure bank congestion curves.
-4. 📉 **Vertical Profile: CDO & CCO**: Descent `CDO` and Climb `CCO` level-off detection, vertical profile charts, and network-wide `KPI19` cruise level-capping corridors.
-5. 🩺 **Delay & Runway Diagnostics**: Multi-factor delay root-cause attribution and arrival runway braking action, density altitude, and stopping safety margins.
-6. 🌱 **Fuel, Carbon & Route Charges (`€`)**: OpenAP excess fuel burn, `TAXI_OUT` ICAO EDB v32B idle emissions ($\text{NO}_x, \text{CO}, \text{nvPM}$), Eurocontrol CRCO fees (`€`), upper-air contrail `ISSR` forcing, and Corridor CRCO Route-Charge vs. Fuel Burn trade-offs.
-7. 👯 **Twin-Flight Benchmark**: Side-by-side comparison and interactive **Dual-Trajectory Map** (`Green` vs. `Red`) with lateral divergence pinpointing.
-8. 🔮 **What-If & Stress Tests**:
+4. 👯 **Twin-Flight Benchmark**: Side-by-side comparison and interactive **Dual-Trajectory Map** (`Green` vs. `Red`) with lateral divergence pinpointing.
+
+### 2. Operations & Diagnostics
+5. 📉 **Vertical Profile: CDO & CCO**: Continuous Descent Operations (`CDO`) and Continuous Climb Operations (`CCO`) intermediate level-off detection, vertical profile charts, and network-wide cruise level-capping corridors.
+6. 🩺 **Delay & Runway Diagnostics**: Multi-factor delay root-cause attribution and arrival runway braking action, density altitude, and stopping safety margins.
+7. 🔮 **What-If & Stress Tests**:
    - **Scenario A**: Multi-Operator Turnaround Buffer Sensitivity (`+5m` to `+25m`)
    - **Scenario B**: Adverse Weather & Runway Crosswind Capacity Collapse
    - **Scenario C**: Multi-Operator Fleet Operational Shock Contagion Curves (`+15m` to `+90m`)
    - **Scenario D**: Network-Wide Prescriptive Hub Tail-Swap Recovery Optimizer (`Tail A ⇄ Tail B`, `€`)
    - **Scenario E**: 4D Co-Altitude Airspace Proximity & $5^\circ \times 5^\circ$ Complexity Map Scanner
    - **Scenario F**: Ration-by-Schedule Ground Delay Program (`GDP` / ATFM Slot) Optimizer (`€`)
-9. 📈 **Macro Evolution & AIRAC Diff**: Period-over-period traffic growth, `FRA` directness evolution, European weather-delay correlation, and AIRAC cycle airway/FIR diffing.
-10. 📖 **Methodology & KPI Reference**: Comprehensive in-app mathematical reference for every KPI, physics model, and optimization algorithm.
+
+### 3. Economics, Fuel & Climate
+8. 🌱 **Fuel, Carbon & Route Charges (`€`)**:
+   - **3-Way Cruise Altitude Optimization**: Ideal airframe/engine aerodynamic flight level vs. filed requested vs. actual radar flown, with dispatch planning vs. tactical ATC penalty attribution.
+   - **Upper-Air Winds & ESAD**: Upper airspace wind vector integration, Equivalent Still Air Distance (`ESAD`), and wind routing efficiency verdicts with local-first caching.
+   - **Eurocontrol CRCO Route Charges & DOC**: FIR-by-FIR navigation service units (`SU`), unit rates, direct flight operating cost (`Fuel € + CRCO Navigation €`), and historical spot vs. modern into-plane price comparisons.
+   - **OpenAP Multi-Dimensional Emissions & LTO**: En-route fuel burn, terminal holding burn, and `TAXI_OUT` ICAO Engine Emissions Databank (EDB v32B) idle pollutants ($\text{NO}_x, \text{CO}, \text{nvPM}$).
+
+### 4. Strategic Analytics & Reference
+9. 📈 **Macro Evolution & AIRAC Diff**: Period-over-period traffic growth, `FRA` directness evolution, European weather-delay correlation (IFR & wind), and AIRAC cycle airway/FIR diffing.
+10. 📖 **Methodology, KPI & PBN Reference**: Full mathematical reference for all 21 ICAO/Eurocontrol KPIs, plus dedicated **PBN / RNAV vs. RNP Specifications & Operational Requirements** navigation guide.
 
 ---
 
