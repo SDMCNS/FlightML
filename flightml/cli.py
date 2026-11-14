@@ -27,6 +27,7 @@ from flightml.sim.gdp_optimizer import optimize_ground_delay_program
 from flightml.viz.map_builder import create_trajectory_map
 from flightml.eval.macro_comparison import compare_aviation_periods
 from flightml.eval.longitudinal import LongitudinalEngine
+from flightml.models.airspace_forecaster import AirspaceForecaster
 from flightml.eval.cdo_analyzer import (
     analyze_cdo_descent,
     analyze_cco_climb,
@@ -947,6 +948,78 @@ def compare_yoy_cmd(
                 f"{float(r['newgen_share_targ_pct']):.1f}% ({float(r['newgen_share_delta_pct']):+.1f}%)",
             )
         console.print(route_tab)
+
+
+@app.command("forecast-airspace")
+def forecast_airspace_cmd(
+    year: int = typer.Option(2026, "--year", "-y", help="Forecast horizon year (e.g. 2026, 2027)"),
+    season: str = typer.Option("summer", "--season", "-s", help="Season archetype ('summer', 'winter', 'autumn')"),
+    growth: float = typer.Option(3.5, "--growth", "-g", help="Projected traffic growth scenario (%)"),
+    grid: float = typer.Option(1.0, "--grid", help="Variable spatial grid resolution in degrees (0.5 to 5.0)"),
+) -> None:
+    """Predict European airspace saturation, sector bottlenecks, and capacity breaches for upcoming seasons."""
+    forecaster = AirspaceForecaster()
+    with console.status(f"[cyan]Projecting {season.capitalize()} {year} European airspace saturation (+{growth:.1f}% growth)..."):
+        rep = forecaster.generate_comprehensive_forecast(
+            forecast_year=year,
+            season=season,
+            growth_scenario_pct=growth,
+            grid_size_deg=grid,
+        )
+
+    console.print(f"\n[bold green]{rep.forecast_label}[/bold green]")
+    console.print(
+        f"Baseline Pair: [cyan]{rep.baseline_period}[/cyan] ➔ [cyan]{rep.target_period}[/cyan] | "
+        f"Assumed Annual Growth: [bold yellow]+{rep.scenario_growth_rate_pct:.1f}%[/bold yellow] | "
+        f"Network ATFM Risk Index: [bold red]{rep.network_atfm_risk_index:.1f} / 10.0[/bold red]\n"
+        f"Sectors Analyzed: {rep.total_sectors_analyzed} | "
+        f"Nominal: [green]{rep.nominal_sectors_count}[/green] | "
+        f"Elevated: [yellow]{rep.elevated_sectors_count}[/yellow] | "
+        f"Severe Congestion: [magenta]{rep.severe_sectors_count}[/magenta] | "
+        f"Capacity Breaches: [bold red]{rep.breached_sectors_count}[/bold red]\n"
+    )
+
+    if rep.top_capacity_breaches:
+        b_tab = Table(title=f"Projected Critical Airspace Sector Capacity Breaches ({rep.forecast_horizon_year})", header_style="bold magenta")
+        b_tab.add_column("Sector / FIR ID", style="cyan")
+        b_tab.add_column("Nominal Cap", justify="right", style="white")
+        b_tab.add_column("Hist Peak", justify="right", style="white")
+        b_tab.add_column("Proj Peak", justify="right", style="bold yellow")
+        b_tab.add_column("Utilization (%)", justify="right", style="bold red")
+        b_tab.add_column("Breach Level", justify="center")
+        b_tab.add_column("Est. Daily ATFM Delay", justify="right", style="red")
+
+        for b in rep.top_capacity_breaches[:10]:
+            lvl_color = "bold red" if b.breach_level == "BREACH" else "magenta" if b.breach_level == "SEVERE" else "yellow"
+            b_tab.add_row(
+                str(b.sector_id),
+                f"{b.nominal_capacity_hourly}/hr",
+                f"{b.historical_peak_hourly_target}/hr",
+                f"{b.projected_peak_hourly}/hr",
+                f"{b.projected_saturation_pct:.1f}%",
+                f"[{lvl_color}]{b.breach_level}[/{lvl_color}]",
+                f"{b.estimated_daily_atfm_delay_min:,.0f} min",
+            )
+        console.print(b_tab)
+
+    if rep.top_grid_hotspots:
+        g_tab = Table(title=f"Projected Critical Spatial Density Hotspots ({grid:.1f}° × {grid:.1f}° Resolution)", header_style="bold magenta")
+        g_tab.add_column("Coordinates (Lat, Lon)", style="cyan")
+        g_tab.add_column("Hist Flights", justify="right", style="white")
+        g_tab.add_column("Proj Flights", justify="right", style="bold yellow")
+        g_tab.add_column("Historical Trend", justify="right", style="white")
+        g_tab.add_column("Dynamic Complexity", justify="right", style="magenta")
+
+        for g in rep.top_grid_hotspots[:8]:
+            trend_str = f"+{g.historical_growth_pct:.1f}%" if g.historical_growth_pct >= 0 else f"{g.historical_growth_pct:.1f}%"
+            g_tab.add_row(
+                f"{g.cell_lat:.1f}°, {g.cell_lon:.1f}°",
+                f"{g.flights_target:,}",
+                f"{g.projected_flights:,.0f}",
+                trend_str,
+                f"{g.complexity_score:.1f}",
+            )
+        console.print(g_tab)
 
 
 @app.command("cdo-descent")
