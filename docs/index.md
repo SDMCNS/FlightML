@@ -23,6 +23,7 @@ Welcome to the **FlightML** documentation. FlightML is a high-performance Python
 - [**CLI Reference Manual**](cli_reference.md): Detailed reference guide for all 45+ `flightml` terminal commands and synthetic output tables.
 - [**REST API Reference**](rest_api.md): Complete catalog of FastAPI endpoints, query parameters, response schemas (`€ EUR`), and Swagger docs.
 - [**Architecture & Methodology**](architecture.md): Deep dive into DuckDB columnar execution, ICAO GANP & Eurocontrol PRU formulas, OpenAP & ICAO EDB v32B physics, Eurocontrol CRCO charges (`€`), and operations research models.
+- [**Model Context Protocol (MCP) Server Guide**](mcp_server.md): Exposing FlightML as an AI tool to local LLMs (LM Studio, Claude Desktop, Cursor).
 - [**FlightML v4 Strategic Plan**](v4_plan.md): Roadmap for Neural Airspace Intelligence, Spatio-Temporal GNNs, Generative Diffusion, Multi-Agent RL, and Multimodal Copilot.
 
 ---

@@ -2568,5 +2568,17 @@ def serve_cmd(
     uvicorn.run("flightml.api.app:app", host=host, port=port, reload=False)
 
 
+@app.command("mcp")
+def mcp_cmd(
+    transport: str = typer.Option("stdio", "--transport", "-t", help="MCP transport mechanism (stdio, sse, streamable-http)"),
+    port: int = typer.Option(8000, "--port", "-p", help="Port for SSE transport"),
+) -> None:
+    """Launch the FlightML Model Context Protocol (MCP) server for local LLMs (LM Studio, Claude Desktop, Cursor)."""
+    from flightml.mcp.server import create_mcp_server
+    server = create_mcp_server()
+    console.print(f"[bold green]Starting FlightML MCP Server[/bold green] (transport={transport})...")
+    server.run(transport=transport)
+
+
 if __name__ == "__main__":
     app()

@@ -30,6 +30,7 @@ Detailed manuals and developer guides are located in the [**`docs/`**](docs/inde
 - 💻 [**CLI Reference Manual**](docs/cli_reference.md): Exhaustive guide for all 45+ `flightml` terminal commands and synthetic sample outputs.
 - 🌐 [**REST API Reference**](docs/rest_api.md): Complete FastAPI endpoints catalog, request/response schemas, and Swagger docs.
 - 🏛️ [**Architecture & Methodology**](docs/architecture.md): DuckDB columnar execution, ICAO GANP & Eurocontrol PRU formulas, OpenAP & ICAO EDB v32B physics, Eurocontrol CRCO charges (`€`), and operations research models.
+- 🤖 [**Model Context Protocol (MCP) Server Guide**](docs/mcp_server.md): Exposing FlightML as an AI tool to local LLMs (LM Studio, Claude Desktop, Cursor) via MCP.
 
 ---
 
