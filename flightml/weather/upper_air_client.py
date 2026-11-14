@@ -83,6 +83,7 @@ class UpperAirClient:
     def __init__(self, use_live_api: bool = True, cache_db: Path | None = None) -> None:
         self.use_live_api = use_live_api
         self.cache_db = cache_db or CACHE_DB_PATH
+        self._mem_cache: dict[str, dict[str, Any]] = {}
         self._init_cache()
 
     def _init_cache(self) -> None:
@@ -105,6 +106,136 @@ class UpperAirClient:
         levels = [300, 250, 200, 150]
         return min(levels, key=lambda lvl: abs(lvl - p_hpa))
 
+    def prefetch_trajectory_upper_air(self, trajectory_df: pd.DataFrame) -> None:
+        """
+        Prefetch upper-air meteorological states for 4D waypoints along a flight trajectory
+        using local SQLite cache first, then issuing a single batched HTTP request for any
+        uncached coordinate points to the Open-Meteo European Reanalysis & Forecast API.
+        """
+        if not self.use_live_api or trajectory_df.empty:
+            return
+
+        # 1. Collect cruise midpoints
+        cruise_midpoints: list[tuple[float, float, float, str]] = []
+        for i in range(len(trajectory_df) - 1):
+            r1 = trajectory_df.iloc[i]
+            r2 = trajectory_df.iloc[i + 1]
+            fl = float((r1.get("flight_level", 0.0) + r2.get("flight_level", 0.0)) / 2.0)
+            if fl < 200.0:
+                continue
+            lat = (float(r1.get("latitude", 0.0)) + float(r2.get("latitude", 0.0))) / 2.0
+            lon = (float(r1.get("longitude", 0.0)) + float(r2.get("longitude", 0.0))) / 2.0
+            t_val = r1.get("time_over")
+            if not t_val or pd.isna(t_val):
+                continue
+            cruise_midpoints.append((lat, lon, fl, str(t_val)))
+
+        if not cruise_midpoints:
+            return
+
+        # 2. Sample 6 to 8 representative synoptic checkpoints along the route
+        if len(cruise_midpoints) > 8:
+            step = len(cruise_midpoints) / 7.0
+            sampled = [cruise_midpoints[int(idx * step)] for idx in range(7)]
+            if cruise_midpoints[-1] not in sampled:
+                sampled.append(cruise_midpoints[-1])
+        else:
+            sampled = cruise_midpoints
+
+        needed_by_group: dict[tuple[str, int], list[tuple[float, float, str]]] = {}
+        for lat, lon, fl, t_str in sampled:
+            try:
+                dt = pd.to_datetime(t_str)
+                d_str = dt.strftime("%Y-%m-%d")
+            except Exception:
+                continue
+
+            lvl = self._nearest_era5_pressure_level(fl_to_pressure_hpa(fl))
+            lat_grid = round(lat, 1)
+            lon_grid = round(lon, 1)
+            cache_key = f"{lat_grid}:{lon_grid}:{d_str}:{lvl}"
+
+            if cache_key in self._mem_cache:
+                continue
+
+            group_key = (d_str, lvl)
+            if group_key not in needed_by_group:
+                needed_by_group[group_key] = []
+            if not any(k == cache_key for _, _, k in needed_by_group[group_key]):
+                needed_by_group[group_key].append((lat_grid, lon_grid, cache_key))
+
+        if not needed_by_group:
+            return
+
+        # 3. Check local SQLite cache in bulk
+        all_candidate_keys = [k for group in needed_by_group.values() for _, _, k in group]
+        try:
+            with sqlite3.connect(self.cache_db) as conn:
+                for i in range(0, len(all_candidate_keys), 100):
+                    chunk = all_candidate_keys[i : i + 100]
+                    placeholders = ",".join("?" for _ in chunk)
+                    for r in conn.execute(
+                        f"SELECT cache_key, payload_json FROM era5_upper_air_cache WHERE cache_key IN ({placeholders})",
+                        chunk,
+                    ).fetchall():
+                        self._mem_cache[r[0]] = json.loads(r[1])
+        except Exception:
+            pass
+
+        # 4. Batch-fetch only uncached points in a single request (up to 10 points per request)
+        for (d_str, lvl), pts in needed_by_group.items():
+            uncached = [p for p in pts if p[2] not in self._mem_cache]
+            if not uncached:
+                continue
+
+            dt_sample = pd.to_datetime(d_str)
+            for start_idx in range(0, len(uncached), 10):
+                chunk = uncached[start_idx : start_idx + 10]
+                chunk_lats = [c[0] for c in chunk]
+                chunk_lons = [c[1] for c in chunk]
+                try:
+                    if dt_sample.year >= 2021:
+                        resp = requests.get(
+                            self.OPEN_METEO_PRESSURE_URL,
+                            params={
+                                "latitude": chunk_lats,
+                                "longitude": chunk_lons,
+                                "start_date": d_str,
+                                "end_date": d_str,
+                                "hourly": f"temperature_{lvl}hPa,relative_humidity_{lvl}hPa,wind_speed_{lvl}hPa,wind_direction_{lvl}hPa",
+                                "wind_speed_unit": "kn",
+                            },
+                            timeout=5,
+                        )
+                    else:
+                        resp = requests.get(
+                            self.OPEN_METEO_ARCHIVE_URL,
+                            params={
+                                "latitude": chunk_lats,
+                                "longitude": chunk_lons,
+                                "start_date": d_str,
+                                "end_date": d_str,
+                                "hourly": "temperature_2m,relative_humidity_2m,cloud_cover_high,wind_speed_100m,wind_direction_100m",
+                                "wind_speed_unit": "kn",
+                            },
+                            timeout=5,
+                        )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        items = data if isinstance(data, list) else [data]
+                        with sqlite3.connect(self.cache_db) as conn:
+                            for idx_pt, item in enumerate(items):
+                                if idx_pt < len(chunk):
+                                    k_cache = chunk[idx_pt][2]
+                                    h_payload = item.get("hourly", {})
+                                    self._mem_cache[k_cache] = h_payload
+                                    conn.execute(
+                                        "INSERT OR REPLACE INTO era5_upper_air_cache (cache_key, payload_json) VALUES (?, ?)",
+                                        (k_cache, json.dumps(h_payload)),
+                                    )
+                except Exception:
+                    pass
+
     def get_upper_air_state(
         self,
         lat: float,
@@ -114,6 +245,7 @@ class UpperAirClient:
     ) -> UpperAirPointState:
         """
         Evaluate upper-air wind vector, temperature, and RHi at `(lat, lon, flight_level, timestamp)`.
+        Local-first: checks memory cache -> SQLite cache -> nearest synoptic checkpoint -> deterministic Rossby model.
         """
         p_hpa = fl_to_pressure_hpa(flight_level)
 
@@ -126,54 +258,29 @@ class UpperAirClient:
                 lon_grid = round(lon, 1)
                 cache_key = f"{lat_grid}:{lon_grid}:{d_str}:{lvl}"
 
-                hourly_data: dict[str, Any] | None = None
-                with sqlite3.connect(self.cache_db) as conn:
-                    row = conn.execute(
-                        "SELECT payload_json FROM era5_upper_air_cache WHERE cache_key = ?",
-                        (cache_key,),
-                    ).fetchone()
-                    if row:
-                        hourly_data = json.loads(row[0])
-
+                hourly_data: dict[str, Any] | None = self._mem_cache.get(cache_key)
                 if hourly_data is None:
-                    if dt.year >= 2021:
-                        hourly_vars = (
-                            f"temperature_{lvl}hPa,relative_humidity_{lvl}hPa,"
-                            f"wind_speed_{lvl}hPa,wind_direction_{lvl}hPa"
-                        )
-                        resp = requests.get(
-                            self.OPEN_METEO_PRESSURE_URL,
-                            params={
-                                "latitude": lat_grid,
-                                "longitude": lon_grid,
-                                "start_date": d_str,
-                                "end_date": d_str,
-                                "hourly": hourly_vars,
-                                "wind_speed_unit": "kn",
-                            },
-                            timeout=5,
-                        )
-                    else:
-                        # Pre-2021 ERA5 Archive API (surface + 100m wind + high cloud cover > 6km)
-                        resp = requests.get(
-                            self.OPEN_METEO_ARCHIVE_URL,
-                            params={
-                                "latitude": lat_grid,
-                                "longitude": lon_grid,
-                                "start_date": d_str,
-                                "end_date": d_str,
-                                "hourly": "temperature_2m,relative_humidity_2m,cloud_cover_high,wind_speed_100m,wind_direction_100m",
-                                "wind_speed_unit": "kn",
-                            },
-                            timeout=5,
-                        )
-                    if resp.status_code == 200:
-                        hourly_data = resp.json().get("hourly", {})
-                        with sqlite3.connect(self.cache_db) as conn:
-                            conn.execute(
-                                "INSERT OR REPLACE INTO era5_upper_air_cache (cache_key, payload_json) VALUES (?, ?)",
-                                (cache_key, json.dumps(hourly_data)),
-                            )
+                    with sqlite3.connect(self.cache_db) as conn:
+                        row = conn.execute(
+                            "SELECT payload_json FROM era5_upper_air_cache WHERE cache_key = ?",
+                            (cache_key,),
+                        ).fetchone()
+                        if row:
+                            hourly_data = json.loads(row[0])
+                            self._mem_cache[cache_key] = hourly_data
+
+                # If exact key not cached, find nearest cached synoptic checkpoint on same date and level
+                if hourly_data is None:
+                    for k, val in self._mem_cache.items():
+                        parts = k.split(":")
+                        if len(parts) == 4 and parts[2] == d_str and parts[3] == str(lvl):
+                            try:
+                                c_lat, c_lon = float(parts[0]), float(parts[1])
+                                if abs(c_lat - lat_grid) <= 2.5 and abs(c_lon - lon_grid) <= 3.5:
+                                    hourly_data = val
+                                    break
+                            except Exception:
+                                pass
 
                 if hourly_data:
                     t_arr = hourly_data.get(f"temperature_{lvl}hPa") or []

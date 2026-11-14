@@ -37,6 +37,12 @@ def test_upper_air_and_contrail_climate():
     assert rep.cruise_distance_nm > 0.0
     assert rep.avg_groundspeed_kts > 200.0
     assert rep.total_climate_co2e_multiplier >= 1.0
+    assert rep.ground_distance_nm > 0.0
+    assert rep.esad_nm > 0.0
+    assert isinstance(rep.wind_distance_benefit_nm, float)
+    assert isinstance(rep.wind_fuel_impact_kg, float)
+    assert isinstance(rep.wind_fuel_impact_eur, float)
+    assert rep.wind_efficiency_verdict != ""
 
 
 def test_tail_swap_optimizer_and_hetero_gnn():

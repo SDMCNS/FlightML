@@ -18,6 +18,7 @@ from typing import Any
 import pandas as pd
 
 from flightml.data.dataset import FlightDataset
+from flightml.eval.jet_fuel_prices import get_weekly_fuel_price
 from flightml.geo.geodesy import haversine_nm, initial_bearing_deg
 from flightml.weather.upper_air_client import UpperAirClient
 
@@ -51,6 +52,12 @@ class UpperAirImpactReport:
     avg_tailwind_component_kts: float  # Positive = net tailwind, Negative = net headwind
     wind_time_savings_min: float
     wind_routing_verdict: str
+    ground_distance_nm: float
+    esad_nm: float  # Equivalent Still Air Distance (air mass miles flown)
+    wind_distance_benefit_nm: float  # ground_distance_nm - esad_nm (>0: air miles saved by tailwind)
+    wind_fuel_impact_kg: float  # Fuel saved (>0) or penalty (<0) vs still air
+    wind_fuel_impact_eur: float  # Fuel value in € EUR
+    wind_efficiency_verdict: str  # Actionable dispatch/efficiency classification
     persistent_contrail_distance_nm: float
     persistent_contrail_pct: float
     persistent_contrail_duration_min: float
@@ -94,7 +101,8 @@ def analyze_flight_wind_and_contrails(
         return None
 
     actual_df = actual_df.sort_values("seq_num").reset_index(drop=True)
-    client = upper_air_client or UpperAirClient(use_live_api=False)
+    client = upper_air_client or UpperAirClient(use_live_api=True)
+    client.prefetch_trajectory_upper_air(actual_df)
 
     adep = str(flight.get("adep") or "")
     ades = str(flight.get("ades") or "")
@@ -105,6 +113,7 @@ def analyze_flight_wind_and_contrails(
     weighted_gs = 0.0
     weighted_tas = 0.0
     weighted_tw = 0.0
+    total_esad_nm = 0.0
     contrail_dist_nm = 0.0
     contrail_dur_min = 0.0
     issr_segments: list[ContrailSegment] = []
@@ -138,6 +147,9 @@ def analyze_flight_wind_and_contrails(
         rel_angle = math.radians(wind_toward_deg - track_deg)
         tailwind_kts = ua.wind_speed_kts * math.cos(rel_angle)
         tas_kts = max(350.0, min(540.0, gs_kts - tailwind_kts))
+
+        seg_esad_nm = seg_nm * (tas_kts / max(100.0, gs_kts))
+        total_esad_nm += seg_esad_nm
 
         cruise_dist_nm += seg_nm
         weighted_gs += gs_kts * seg_nm
@@ -178,6 +190,7 @@ def analyze_flight_wind_and_contrails(
 
     if cruise_dist_nm <= 1.0:
         cruise_dist_nm = max(50.0, float(flight.get("actual_distance_nm") or 300.0))
+        total_esad_nm = cruise_dist_nm
         avg_gs = 445.0
         avg_tas = 440.0
         avg_tw = 5.0
@@ -199,10 +212,36 @@ def analyze_flight_wind_and_contrails(
 
     contrail_pct = (contrail_dist_nm / max(1.0, cruise_dist_nm)) * 100.0
 
-    # Estimate direct CO2 and Contrail Cirrus GWP100 CO2e (~18 kg CO2e per nm of persistent contrail)
+    # Fuel and cost impact of wind vs still-air baseline
     ac_perf = dataset.get_aircraft_performance(ac_type)
     wake = str(ac_perf.get("wake_category") or "M") if ac_perf else "M"
     ff_kg_nm = 14.5 if wake == "H" else 24.0 if wake == "J" else 3.2 if wake == "L" else 5.6
+    nominal_fuel_flow_kg_hr = ff_kg_nm * avg_tas
+    wind_fuel_impact_kg = (wind_saved_min / 60.0) * nominal_fuel_flow_kg_hr
+
+    fuel_price = get_weekly_fuel_price(flight.get("off_block_date") or flight.get("entry_time") or dataset.period)
+    eur_per_kg = fuel_price.price_eur_per_kg if fuel_price else 0.78
+    wind_fuel_impact_eur = wind_fuel_impact_kg * eur_per_kg
+
+    wind_benefit_dist_nm = cruise_dist_nm - total_esad_nm
+    gcd_nm = float(flight.get("gcd_nm") or 0.0)
+    actual_tot_nm = float(flight.get("actual_distance_nm") or cruise_dist_nm)
+    detour_pct = ((actual_tot_nm - gcd_nm) / max(1.0, gcd_nm)) * 100.0 if gcd_nm > 0 else 0.0
+
+    if avg_tw >= 25.0 and detour_pct >= 3.0:
+        wind_eff_verdict = "SMART_WIND_RIDING_DETOUR (Flown ground path is longer, but jetstream tailwinds yielded a lower equivalent air distance and reduced fuel burn)"
+    elif avg_tw >= 15.0:
+        wind_eff_verdict = "FAVORABLE_TAILWIND_ASSIST (Net tailwinds reduced effective air distance and shortened air time)"
+    elif avg_tw <= -25.0 and detour_pct <= 2.0:
+        wind_eff_verdict = "DIRECT_HEADWIND_PENALTY (Flown along direct Great Circle track, but fought a severe jetstream headwind core)"
+    elif avg_tw <= -15.0:
+        wind_eff_verdict = "ADVERSE_HEADWIND_RESISTANCE (Upper-air headwinds expanded air distance and increased cruise fuel consumption)"
+    elif detour_pct >= 5.0 and abs(avg_tw) < 15.0:
+        wind_eff_verdict = "STRUCTURAL_ATC_DETOUR (Flown route added distance without wind assistance; driven by airway geometry, RAD, or sector closures)"
+    else:
+        wind_eff_verdict = "NEUTRAL_WIND_PROFILE (Minimal net wind assistance or resistance along the trajectory)"
+
+    # Estimate direct CO2 and Contrail Cirrus GWP100 CO2e (~18 kg CO2e per nm of persistent contrail)
     direct_co2_tons = (cruise_dist_nm * ff_kg_nm * 3.16) / 1000.0
     contrail_co2e_tons = (contrail_dist_nm * 18.5) / 1000.0
     multiplier = (direct_co2_tons + contrail_co2e_tons) / max(0.1, direct_co2_tons)
@@ -220,6 +259,12 @@ def analyze_flight_wind_and_contrails(
         avg_tailwind_component_kts=round(avg_tw, 1),
         wind_time_savings_min=round(wind_saved_min, 1),
         wind_routing_verdict=wind_verdict,
+        ground_distance_nm=round(cruise_dist_nm, 1),
+        esad_nm=round(total_esad_nm, 1),
+        wind_distance_benefit_nm=round(wind_benefit_dist_nm, 1),
+        wind_fuel_impact_kg=round(wind_fuel_impact_kg, 1),
+        wind_fuel_impact_eur=round(wind_fuel_impact_eur, 2),
+        wind_efficiency_verdict=wind_eff_verdict,
         persistent_contrail_distance_nm=round(contrail_dist_nm, 1),
         persistent_contrail_pct=round(contrail_pct, 1),
         persistent_contrail_duration_min=round(contrail_dur_min, 1),

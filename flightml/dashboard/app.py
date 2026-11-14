@@ -980,18 +980,82 @@ with tab_cat_single:
             contrail_rep = analyze_flight_wind_and_contrails(ds, int(active_flight_id))
             if contrail_rep:
                 st.divider()
-                st.subheader("🌬️ Upper-Air Winds & Persistent Contrail (ISSR) Climate Impact")
+                st.subheader("🌬️ Upper-Air Winds, Equivalent Still Air Distance (ESAD) & Contrail Climate")
+
+                # Wind Routing & Dispatch Efficiency Verdict
+                v_text = contrail_rep.wind_efficiency_verdict
+                if "SMART_WIND_RIDING" in v_text or "FAVORABLE" in v_text:
+                    st.success(f"💨 **Wind Routing Verdict:** {v_text}")
+                elif "HEADWIND" in v_text:
+                    st.warning(f"💨 **Wind Routing Verdict:** {v_text}")
+                elif "STRUCTURAL" in v_text:
+                    st.info(f"💨 **Wind Routing Verdict:** {v_text}")
+                else:
+                    st.caption(f"💨 **Wind Routing Verdict:** {v_text}")
+
+                # Metric Row 1: Upper-Air Wind & Aerodynamic Air Distance (ESAD)
                 ct1, ct2, ct3, ct4 = st.columns(4)
                 ct1.metric("Avg GS vs TAS", f"{contrail_rep.avg_groundspeed_kts:.0f} kts GS", f"TAS: {contrail_rep.avg_true_airspeed_kts:.0f} kts")
                 ct2.metric("Net Upper-Air Wind", f"{contrail_rep.avg_tailwind_component_kts:+.1f} kts", f"{contrail_rep.wind_time_savings_min:+.1f}m wind time")
-                ct3.metric("Persistent Contrail (ISSR)", f"{contrail_rep.persistent_contrail_distance_nm:.1f} nm", f"{contrail_rep.persistent_contrail_pct:.1f}% of cruise")
+                dist_note = f"Ground: {contrail_rep.ground_distance_nm:,.0f} nm"
+                ct3.metric(
+                    "Air Distance (ESAD)",
+                    f"{contrail_rep.esad_nm:,.0f} nm",
+                    f"{contrail_rep.wind_distance_benefit_nm:+.0f} nm air savings vs {dist_note}",
+                )
+                fuel_lbl = "Saved" if contrail_rep.wind_fuel_impact_kg >= 0 else "Penalty"
                 ct4.metric(
+                    f"Wind Fuel {fuel_lbl}",
+                    f"{contrail_rep.wind_fuel_impact_kg:+,.0f} kg Jet-A",
+                    f"€{contrail_rep.wind_fuel_impact_eur:+,.2f} EUR vs still air",
+                )
+
+                # Metric Row 2: Persistent Contrail Cirrus & Climate Multiplier
+                cc1, cc2, cc3, cc4 = st.columns(4)
+                cc1.metric("Persistent Contrail (ISSR)", f"{contrail_rep.persistent_contrail_distance_nm:.1f} nm", f"{contrail_rep.persistent_contrail_pct:.1f}% of cruise")
+                cc2.metric("Direct Engine CO₂", f"{contrail_rep.direct_co2_tons:.2f} t CO₂")
+                cc3.metric("Contrail Cirrus Forcing", f"+{contrail_rep.contrail_co2e_tons:.2f} t CO₂e")
+                cc4.metric(
                     "Total Climate Multiplier",
                     f"{contrail_rep.total_climate_co2e_multiplier:.2f}x CO₂e",
-                    f"+{contrail_rep.contrail_co2e_tons:.2f}t contrail CO₂e",
+                    f"{contrail_rep.issr_segments_count} ISSR segments",
                 )
+
                 if contrail_rep.issr_segments:
                     st.dataframe(pd.DataFrame([s.__dict__ for s in contrail_rep.issr_segments]), use_container_width=True)
+
+                with st.expander("📖 Why Flown Distance Does Not Equal Fuel Efficiency: Air Distance (ESAD) & Jet Stream Mechanics", expanded=False):
+                    st.markdown(
+                        """
+                        #### 1. The Paradox of Geometric Directness (KEA vs. ESAD)
+                        Traditional air navigation performance indicators (such as Eurocontrol PRU **KEA** and **KEP**) measure flight efficiency
+                        purely as the geometric ratio between actual flown ground distance and the Great Circle distance:
+                        $$\\text{KEA (\\%)} = \\left(\\frac{D_{\\text{ground, actual}} - D_{\\text{GCD}}}{D_{\\text{GCD}}}\\right) \\times 100$$
+
+                        However, at commercial jet cruising altitudes (FL300–FL410), high-altitude **Jet Stream winds commonly exceed 80 to 160+ knots**:
+                        - **The Smart Detour**: An airline dispatch team may deliberately file a $+150\\text{ nm}$ ground detour to ride a $+110\\text{ kt}$ jetstream tailwind.
+                          While its geometric KEA indicates a +5% inefficiency, the flight reaches its destination 40 minutes faster and burns **2,000 kg less fuel**
+                          than if it had flown a straight Great Circle route.
+                        - **The Straight-Line Penalty**: An aircraft flying a straight Great Circle path directly into a severe $-120\\text{ kt}$ headwind core
+                          achieves "perfect 0.0% directness" geometrically, but experiences severe air-mass drag, prolonged air time, and massive excess fuel burn.
+
+                        #### 2. Equivalent Still Air Distance (ESAD)
+                        To measure whether a flight was truly aerodynamically and environmentally efficient, FlightML evaluates **Equivalent Still Air Distance (ESAD)** —
+                        the physical distance the aircraft engines had to push the airframe through the moving air mass:
+                        $$\\text{ESAD} = \\int \\text{TAS}(t) \\, dt = \\sum_{i} D_{\\text{ground},i} \\times \\left(\\frac{\\text{TAS}_i}{\\text{GS}_i}\\right)$$
+                        - **Air Distance Benefit ($\\Delta D_{\\text{air}}$)**:
+                          $$\\Delta D_{\\text{air}} = D_{\\text{ground}} - \\text{ESAD}$$
+                          - When $\\Delta D_{\\text{air}} > 0$: Favorable tailwinds "shortened" the effective atmosphere, saving engine air miles and fuel.
+                          - When $\\Delta D_{\\text{air}} < 0$: Adverse headwinds "stretched" the effective atmosphere, forcing the engines to work harder.
+
+                        ---
+
+                        > **📌 Data Architecture & Implementation Qualifier**:
+                        > *Upper-air atmospheric winds (horizontal $U$ and $V$ wind vectors, ambient temperature, and relative humidity across cruise isobaric pressure levels 300, 250, 200, and 150 hPa)
+                        > are retrieved **on-demand per flight** from the **Open-Meteo European Reanalysis & Forecast API** and cached in a local-first SQLite datastore (`flightml/data/weather_cache/upper_air_era5.sqlite`).
+                        > This local-first, on-demand caching approach is implemented as a lightweight, performant operational solution in place of downloading multi-terabyte bulk ECMWF Copernicus Climate Data Store (CDS) ERA5 global reanalysis grids.*
+                        """
+                    )
 
         st.divider()
         with st.expander("💶 Corridor Route-Charge Avoidance vs. Extra Fuel Burn Trade-Off Scanner", expanded=False):
@@ -2137,9 +2201,25 @@ with tab_cat_maps:
           - **Carbon Monoxide ($\\text{CO}$)** and **Unburned Hydrocarbons ($\\text{HC}$)** (which peak at low idle combustion temperatures)
           - **Non-Volatile Particulate Matter ($\\text{nvPM}$ soot mass)** in milligrams
 
-        #### 3. Upper-Air Winds & Persistent Contrail (ISSR) Climate Forcing
-        - Compares 4D segment groundspeed ($\\text{GS}$) against aircraft True Airspeed ($\\text{TAS}$) to isolate the net **headwind/tailwind vector** along the flight path and cross-references live/cached **Open-Meteo ERA5 Upper-Air Pressure Levels (`300/250/200/150 hPa`)**.
-        - **Schmidt-Appleman Criterion & Ice-Supersaturated Regions (`ISSR`)**: When a flight cruises between `FL280` and `FL430` in ambient temperatures $T < -40^\\circ\\text{C}$ ($233\\text{ K}$) and high relative humidity over ice ($\\text{RH}_{\\text{ice}} \\ge 100\\%$), exhaust water vapor nucleates into persistent contrail-cirrus clouds that trap outgoing longwave radiation, multiplying total radiative climate forcing (`CO₂e`).
+        #### 3. Upper-Air Winds, Equivalent Still Air Distance (ESAD) & Contrail Climate Forcing
+        - **Ground Distance vs. Air Distance (ESAD)**:
+          Traditional flight efficiency metrics (like Eurocontrol PRU **KEA** and **KEP**) evaluate flights purely geometrically against the Great Circle distance.
+          However, high-altitude **Jet Stream winds (80–160+ kts)** mean that ground distance does not equal fuel burn:
+          - A flight taking a $+150\\text{ nm}$ ground detour to ride a $+110\\text{ kt}$ jetstream tailwind may show $+5\\%$ geometric detour inefficiency,
+            yet arrive 40 minutes faster and burn **2,000 kg less fuel** than a direct flight.
+          - Conversely, a flight flying straight into a $-120\\text{ kt}$ headwind core achieves "perfect directness" geometrically, but experiences severe fuel waste.
+        - **Equivalent Still Air Distance (ESAD) Formula**:
+          $$\\text{ESAD} = \\int \\text{TAS}(t) \\, dt = \\sum_{i} D_{\\text{ground},i} \\times \\left(\\frac{\\text{TAS}_i}{\\text{GS}_i}\\right)$$
+          - **Air Distance Benefit ($\\Delta D_{\\text{air}}$)**: $\\Delta D_{\\text{air}} = D_{\\text{ground}} - \\text{ESAD}$.
+            Positive values denote air miles saved by tailwinds; negative values denote air miles added by headwind resistance.
+        - **Schmidt-Appleman Criterion & Ice-Supersaturated Regions (`ISSR`)**:
+          When a flight cruises between `FL280` and `FL430` in ambient temperatures $T < -40^\\circ\\text{C}$ ($233\\text{ K}$) and high relative humidity over ice ($\\text{RH}_{\\text{ice}} \\ge 100\\%$),
+          exhaust water vapor nucleates into persistent contrail-cirrus clouds that trap outgoing longwave radiation, multiplying total radiative climate forcing (`CO₂e`).
+
+        > **📌 Implementation Note & Data Architecture Qualifier**:
+        > *Upper-air atmospheric winds (horizontal $U$ and $V$ wind vectors, ambient temperature, and relative humidity across cruise pressure levels 300, 250, 200, and 150 hPa)
+        > are sampled on-demand per flight using the **Open-Meteo European Reanalysis & Forecast API** and cached in a local SQLite datastore (`data/weather_cache/upper_air_era5.sqlite`).
+        > This local-first, on-demand caching approach is implemented as an operational, low-overhead solution in place of downloading multi-terabyte bulk ECMWF Copernicus Climate Data Store (CDS) ERA5 global reanalysis grids.*
         """
             )
 
