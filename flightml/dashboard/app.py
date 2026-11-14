@@ -1975,9 +1975,10 @@ with tab_cat_maps:
             "and operations research algorithms powering every metric in the FlightML Workbench."
         )
 
-        ref_sub1, ref_sub2, ref_sub3, ref_sub4, ref_sub5 = st.tabs(
+        ref_sub1, ref_sub_pbn, ref_sub2, ref_sub3, ref_sub4, ref_sub5 = st.tabs(
             [
                 "📏 ICAO GANP & PRU KPIs",
+                "📡 RNAV & RNP Requirements (PBN)",
                 "🗺️ Airspace Saturation & 4D Conflicts",
                 "🌱 Fuel, LTO Emissions & Contrails",
                 "💶 Eurocontrol CRCO & Cost Economics",
@@ -1999,6 +2000,95 @@ with tab_cat_maps:
         | **KPI19 (CDO & Level-Cap)** | **Continuous Descent Operations & Cruise Level-Capping** | **CDO** measures uninterrupted idle-thrust descent from Top of Descent (`TOD`) to landing without throttle-up level segments. **Cruise Level-Capping** compares the filed requested Flight Level ($\\text{FL}_{\\text{req}}$) against the maximum actual achieved cruise level ($\\text{FL}_{\\text{max,act}}$); a deficit $\\ge 20\\text{ FL}$ ($2,000\\text{ ft}$) increases cruise fuel burn by ~1.25% per $1,000\\text{ ft}$. |
         | **FRA vs. ATS** | **Free Route Airspace Directness Index** | Matches actual trajectory legs against **86,280 global 5-letter waypoints (`fix.dat`)**, **17,090 VHF navaids (`nav.dat`)**, and published ATS airways. Segments where consecutive waypoints lie on the same published airway are classified as **Structured ATS Airway**; off-airway point-to-point segments are classified as **Free Route Airspace (`FRA / DCT`)**. |
         | **RNP / RNAV & RLOS** | **Anticipated PBN Navigation Capability (ICAO Doc 9613)** | Evaluates terrestrial `DME`, `VOR`, `ILS/LOC`, and `NDB` stations within the VHF/UHF **Radio Line-of-Sight (`RLOS`)** horizon $D_{\\text{RLOS}} (\\text{nm}) = 1.23 \\times (\\sqrt{h_{\\text{ac, ft}}} + \\sqrt{h_{\\text{nav, ft}}})$ at each 4D waypoint: **`0.1 nm`** (`xLS / RNP AR APCH 0.1` with ILS/LOC lock), **`0.3 nm`** (`RNP APCH 0.3`), **`1.0 nm`** (`RNAV 1 / RNP 1` with $\\ge 2$–$3$ DMEs in RLOS), **`2.0 nm`** (`RNAV 2` dual-DME), **`5.0 nm`** (`RNAV 5 / B-RNAV` single VOR/DME), and **`10.0 nm`** (`RNP 4 / RNP 10` Oceanic/Remote beyond-RLOS relying on GNSS + IRS). |
+        """
+            )
+
+        with ref_sub_pbn:
+            st.subheader("Performance-Based Navigation (PBN): RNAV vs. RNP Meanings, Physics & Regulatory Requirements")
+            st.markdown(
+                """
+        #### 1. Fundamental Distinction: RNAV (Area Navigation) vs. RNP (Required Navigation Performance)
+        Under **ICAO Doc 9613 (Performance-Based Navigation Manual)**, global air navigation transitioned from **sensor-specific flying** (hopping between ground radio beacons like VORs and NDBs) to **performance-based navigation specifications** defined by accuracy, integrity, continuity, and functionality.
+
+        The core difference between **RNAV** and **RNP** comes down to **On-Board Performance Monitoring and Alerting (OBPMA)**:
+
+        - **RNAV (Area Navigation)**:
+          - A method of navigation that permits aircraft operation on any desired flight path within the coverage of station-referenced navigation aids, self-contained aids, or a combination.
+          - **Critical Limitation**: RNAV systems **do NOT require on-board performance monitoring and alerting**. If navigation accuracy degrades beyond the specified limit (e.g. due to sensor loss or inertial drift), the system does **not** guarantee an automated warning to the flight crew.
+          - Because of this lack of autonomous containment alerting, air traffic controllers must maintain wider radar separation buffers around RNAV routes.
+
+        - **RNP (Required Navigation Performance)**:
+          - An area navigation specification that **mandates on-board performance monitoring and alerting (OBPMA)**.
+          - The onboard avionics (FMS, GNSS receivers, and inertial reference units) continuously calculate the estimated position uncertainty. If the probability that the **Total System Error (TSE)** exceeds the containment boundary is greater than $10^{-5}$, an immediate visual and aural alert is raised to the pilots (e.g., `"UNABLE RNP"`).
+          - Because containment is guaranteed with high statistical integrity, air traffic authorities can safely reduce route separation (e.g., parallel routes spaced 7 nm apart instead of 50 nm) and design curved, obstacle-hugging **Radius-to-Fix (`RF`)** legs through mountainous terrain.
+
+        ---
+
+        #### 2. Total System Error (TSE) Physics & Containment Boundaries
+        The lateral deviation between the true aircraft position and the desired path is governed by the **Total System Error (TSE)**:
+
+        $$\\text{TSE} = \\sqrt{\\text{NSE}^2 + \\text{FTE}^2 + \\text{PDE}^2}$$
+
+        Where:
+        - **Navigation System Error (NSE)**: The difference between the true aircraft position and the position calculated by the onboard sensors (GNSS satellite clock/ephemeris errors, atmospheric delays, DME multi-lateration geometry, or IRS drift).
+        - **Flight Technical Error (FTE)**: The accuracy with which the autopilot or pilot follows the flight director commands to keep the aircraft on the intended centerline (typically $\\le 0.2\\text{ nm}$ with autopilot engaged).
+        - **Path Definition Error (PDE)**: The difference between the intended flight track and the path defined by the Flight Management Computer (FMC) navigation database (waypoint latitude/longitude rounding, leg transitions).
+
+        **95% Accuracy vs. Containment Area**:
+        - For an $\\text{RNP } X$ specification (e.g. $\\text{RNP 1}$ or $\\text{RNP 0.3}$), the aircraft must remain within $\\pm X\\text{ nautical miles}$ of the cleared track for **at least 95% of total flight time**.
+        - The **RNP Containment Area** extends laterally to **$2 \\times X\\text{ nm}$** (twice the nominal accuracy). The avionics must guarantee with an integrity probability of **$99.999\\%$ ($1 - 10^{-5}$)** that the aircraft does not cross this containment limit without raising an alert.
+
+        ---
+
+        #### 3. Complete ICAO PBN Specification Hierarchy & Infrastructure Requirements
+        The table below details every operational PBN specification, its required 95% lateral accuracy, mandatory sensor suites, and operational airspace applications:
+
+        | PBN Specification | Flight Phase | 95% Lateral Accuracy | On-Board Alerting (OBPMA) | Eligible Sensors | Operational Purpose & Mandatory Equipment |
+        | :--- | :--- | :--- | :--- | :--- | :--- |
+        | **`RNAV 10` (RNP 10)** | Oceanic / Remote | $\\pm 10.0\\text{ nm}$ | No | Dual INS/IRS or GNSS | Oceanic crossings (e.g. North Atlantic Tracks). Permits 50 nm lateral separation without ground radar. Requires dual long-range navigation systems with time-limited inertial drift certification. |
+        | **`RNAV 5` (B-RNAV)** | En-Route Continental | $\\pm 5.0\\text{ nm}$ | No | DME/DME, VOR/DME, GNSS, or IRS | **Mandatory in European airspace (ECAC)** above FL95 since 1998. Allows direct routing outside fixed ATS airways. Primary sensor in Europe is multi-DME triangulation or single VOR/DME. |
+        | **`RNAV 2`** | En-Route Continental | $\\pm 2.0\\text{ nm}$ | No | GNSS or DME/DME/IRU | Modern high-altitude en-route domestic corridors (e.g., US FAA Q-routes). Requires high-density DME coverage or GNSS. |
+        | **`RNAV 1` (P-RNAV)** | Terminal (SID / STAR) | $\\pm 1.0\\text{ nm}$ | No | GNSS or DME/DME/IRU | European Precision RNAV (`P-RNAV`) for departure SIDs and arrival STARs below FL150. Eliminates vectoring noise; requires dual DME coverage within line of sight. |
+        | **`RNP 4`** | Oceanic / Remote | $\\pm 4.0\\text{ nm}$ | **Yes** | GNSS | Oceanic airspace with 30 nm lateral / 30 nm longitudinal separation. Requires ADS-C and CPDLC datalink communications. |
+        | **`RNP 2`** | Continental En-Route / Remote | $\\pm 2.0\\text{ nm}$ | **Yes** | GNSS | En-route airspace with sparse terrestrial navigation aids (e.g., Australian outback, Canadian north). |
+        | **`RNP 1`** | Terminal (SID / STAR) | $\\pm 1.0\\text{ nm}$ | **Yes** | GNSS or DME/DME/IRU | Advanced terminal arrivals connecting to initial approach fixes. Supports RF (Radius-to-Fix) curved legs to deconflict closely spaced airport arrival flows. |
+        | **`RNP APCH` (RNP 0.3)** | Initial, Intermediate & Final Approach | $\\pm 0.3\\text{ nm}$ (Final) / $\\pm 1.0\\text{ nm}$ (Initial) | **Yes** | GNSS with RAIM / SBAS (EGNOS, WAAS) | Standard instrument approach down to LNAV, LNAV/VNAV, LP, or LPV minima. Replaces ground ILS glideslope with Barometric VNAV or Satellite-Based Augmentation. |
+        | **`RNP AR APCH`** | Confined Approach & Missed Approach | $\\pm 0.1\\text{ nm}$ to $\\pm 0.3\\text{ nm}$ | **Yes (High Integrity)** | Dual GNSS + Dual FMC + Inertial Reference | **Authorization Required (AR)** for terrain-critical airports (e.g. Innsbruck LOWI, Queenstown NZQN). Mandatory Radius-to-Fix (RF) curved legs, dual autopilot coupling, and specialized flight crew simulator training. |
+
+        ---
+
+        #### 4. Terrestrial Navaid Infrastructure & Radio Line-of-Sight (RLOS) Physics
+        When aircraft navigate without GNSS or experience satellite signal interference, onboard Flight Management Systems rely on terrestrial VHF/UHF stations (**DME**, **VOR**, **ILS/LOC**, and **NDB**):
+
+        1. **Radio Line-of-Sight Horizon Formula**:
+           VHF and UHF radio signals propagate in direct straight lines and are blocked by the curvature of the Earth and terrain. The maximum theoretical line-of-sight distance $D_{\\text{RLOS}}$ between an aircraft at altitude $h_{\\text{ac}}$ (feet MSL) and a ground station at elevation $h_{\\text{nav}}$ (feet MSL) is:
+
+           $$D_{\\text{RLOS}} (\\text{nm}) = 1.23 \\times \\left(\\sqrt{h_{\\text{aircraft, ft}}} + \\sqrt{h_{\\text{navaid, ft}}}\\right)$$
+
+           - At cruising altitude (**FL360**), an aircraft enjoys an RLOS horizon of **$\\sim 235\\text{ nm}$**, bringing dozens of European DME stations into view simultaneously.
+           - During terminal approach (**3,000 ft AGL**), the RLOS horizon shrinks to **$\\sim 70\\text{ nm}$**, significantly restricting available ground stations.
+
+        2. **DME/DME Multi-Lateration Geometry**:
+           - To calculate an RNAV position fix from DME stations without GNSS, the FMC requires **at least two independent DME stations** in line of sight.
+           - **Subtended Angle Constraint**: The intersecting radials from the two stations must cross at an angle between **$30^\\circ$ and $150^\\circ$**. Angles sharper than $30^\\circ$ or flatter than $150^\\circ$ produce severe Geometric Dilution of Precision (GDOP), causing position calculation errors.
+           - Optimal positioning uses **DME/DME/DME (triple-DME)** multi-lateration with continuous Kalman filtering.
+
+        3. **Why Terrestrial Navaids Cannot Support RNP Approaches**:
+           - Terrestrial DME and VOR stations cannot support RNP approaches ($0.3\\text{ nm}$ or $0.1\\text{ nm}$) because ground stations lack real-time autonomous integrity broadcast to the aircraft, and multipath reflections in terminal valleys corrupt DME ranging accuracy. Therefore, **RNP APCH and RNP AR APCH strictly require GNSS with RAIM (Receiver Autonomous Integrity Monitoring) or SBAS (EGNOS/WAAS)**.
+
+        ---
+
+        #### 5. How FlightML Calculates Anticipated Navigation in the Front End
+        In the **Single Aircraft / Flight View** (Category 1 $\\rightarrow$ *Terrestrial Navaids & PBN Navigation*), FlightML models 4D trajectory points against **17,090 global VHF navaids (`nav.dat`)**:
+        - Computes active terrestrial stations within the radio line-of-sight horizon at each trajectory altitude.
+        - Calculates the geometry and density of available DME/VOR stations.
+        - Color-codes the vertical flight profile beneath the route map into:
+          - 🟣 **`0.1 nm (xLS / RNP AR APCH)`**: Terminal runway alignment with ILS/LOC beam lock.
+          - 🔵 **`0.3 nm (RNP APCH)`**: Final approach segment with SBAS/GNSS integrity.
+          - 🟢 **`1.0 nm (RNAV 1 / RNP 1)`**: Terminal arrival/departure with $\\ge 2$–$3$ DMEs in line of sight and healthy geometry.
+          - 🟡 **`2.0 nm (RNAV 2)`**: En-route domestic with dual-DME coverage.
+          - 🟠 **`5.0 nm (RNAV 5 / B-RNAV)`**: En-route coverage with single VOR/DME.
+          - ⚪ **`10.0 nm (RNP 10 / Oceanic)`**: Remote or oceanic airspace beyond terrestrial line of sight.
         """
             )
 

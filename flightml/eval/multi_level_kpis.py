@@ -225,3 +225,4 @@ def query_multi_level_kpis(
         total_estimated_cost_eur=tot_cost,
         records=recs,
     )
+

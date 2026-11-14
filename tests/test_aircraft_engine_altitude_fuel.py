@@ -162,3 +162,4 @@ def test_api_fuel_with_engine_override():
     assert data3["ac_type"] == "B763"
     assert len(data3["engine_options"]) >= 1
     assert data3["optimal_cruise_fl"] > 0
+

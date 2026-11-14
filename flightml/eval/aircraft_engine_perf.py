@@ -428,3 +428,4 @@ def compute_cruise_altitude_efficiency(
         potential_fuel_savings_pct=potential_savings_pct,
         fuel_price_eur_per_kg=fuel_price_per_kg,
     )
+
