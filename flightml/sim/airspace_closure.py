@@ -63,6 +63,58 @@ class AirspaceClosureSimulator:
     and post-reopening recovery queue duration.
     """
 
+    FIR_METADATA: dict[str, dict[str, Any]] = {
+        "LSASFIR": {
+            "name": "Switzerland (Zurich / Geneva)",
+            "prefixes": ("LS",),
+            "lat_bounds": (45.85, 47.88),
+            "lon_bounds": (5.97, 10.49),
+            "bypasses": ("LFFFFIR", "EDUUUIR", "LIRRFIR"),
+        },
+        "EDUUUIR": {
+            "name": "Germany (Rhein Upper Airspace)",
+            "prefixes": ("ED", "ET"),
+            "lat_bounds": (47.27, 54.92),
+            "lon_bounds": (6.12, 15.01),
+            "bypasses": ("LFFFFIR", "EBBRFIR", "EDMMFIR"),
+        },
+        "LFFFFIR": {
+            "name": "France (Paris Upper Area)",
+            "prefixes": ("LF",),
+            "lat_bounds": (46.38, 51.12),
+            "lon_bounds": (-0.25, 6.00),
+            "bypasses": ("EGTTFIR", "LSASFIR", "LECMFIR"),
+        },
+        "EISNFIR": {
+            "name": "Ireland (Shannon Upper)",
+            "prefixes": ("EI",),
+            "lat_bounds": (51.00, 55.42),
+            "lon_bounds": (-15.00, -5.50),
+            "bypasses": ("EGTTFIR", "EGGXFIR", "LFRRFIR"),
+        },
+        "EGTTFIR": {
+            "name": "United Kingdom (London)",
+            "prefixes": ("EG",),
+            "lat_bounds": (48.83, 55.00),
+            "lon_bounds": (-8.00, 5.00),
+            "bypasses": ("EISNFIR", "LFFFFIR", "EGPXFIR"),
+        },
+        "EDMMFIR": {
+            "name": "Germany (Munich Upper)",
+            "prefixes": ("ED", "ET"),
+            "lat_bounds": (47.27, 51.91),
+            "lon_bounds": (9.23, 15.01),
+            "bypasses": ("EDUUUIR", "LOVVFIR", "LKAAFIR"),
+        },
+        "LOVVFIR": {
+            "name": "Austria (Vienna)",
+            "prefixes": ("LO",),
+            "lat_bounds": (46.37, 49.00),
+            "lon_bounds": (9.54, 17.16),
+            "bypasses": ("EDMMFIR", "LHCCFIR", "LJLAFIR"),
+        },
+    }
+
     FIR_ADJACENT_BYPASS = {
         "LSASFIR": ("LFFFFIR", "EDUUUIR", "LIRRFIR"),  # Swiss bypassed via France, Rhine, Italy
         "EDUUUIR": ("LFFFFIR", "EBBRFIR", "EDMMFIR"),  # Rhine bypassed via France, Brussels, Munich
@@ -89,7 +141,18 @@ class AirspaceClosureSimulator:
             fir_clean = f"{fir_clean}FIR"
 
         start_date, end_date = get_dataset_date_bounds(self.dataset)
-        sim_date = date_str.strip() if date_str else start_date
+        if date_str and date_str.strip():
+            sim_date = date_str.strip().split()[0]
+        else:
+            # Pick first date with full operational schedule (> 500 flights)
+            try:
+                row_good = self.dataset.query(
+                    "SELECT CAST(COALESCE(actual_off_block_time, filed_off_block_time) AS DATE) AS d "
+                    "FROM flights GROUP BY 1 HAVING COUNT(*) > 500 ORDER BY 1 LIMIT 1"
+                )
+                sim_date = str(row_good.iloc[0]["d"]).split()[0] if not row_good.empty else start_date
+            except Exception:
+                sim_date = start_date
 
         start_hour = max(0, min(int(closure_start_hour), 23))
         duration = max(0.5, min(float(closure_duration_hours), 12.0))
@@ -98,36 +161,84 @@ class AirspaceClosureSimulator:
         closure_start_dt = f"{sim_date} {start_hour:02d}:00:00"
         closure_end_dt = f"{sim_date} {int(end_hour):02d}:{int((end_hour % 1)*60):02d}:00"
 
-        # Query flights operating on that date that traverse the FIR
-        # If flight_firs_actual exists, query traversals; otherwise estimate from flights crossing bounding box
-        query_sql = f"""
-            SELECT
-                ectrl_id, adep, ades, ac_type, ac_operator,
-                actual_distance_nm, dep_delay_min, arr_delay_min,
-                requested_fl, actual_off_block_time, actual_arrival_time
-            FROM flights
-            WHERE CAST(COALESCE(actual_off_block_time, filed_off_block_time) AS DATE) = '{sim_date}'
-              AND EXTRACT(HOUR FROM COALESCE(actual_off_block_time, filed_off_block_time)) BETWEEN {max(0, start_hour - 2)} AND {int(end_hour)}
-            LIMIT 400;
-        """
-        candidate_flights = self.dataset.query(query_sql)
+        fir_info = self.FIR_METADATA.get(
+            fir_clean,
+            {
+                "name": fir_clean,
+                "prefixes": (fir_clean[:2],),
+                "lat_bounds": (45.0, 55.0),
+                "lon_bounds": (-5.0, 15.0),
+                "bypasses": self.FIR_ADJACENT_BYPASS.get(fir_clean, ("ADJACENT_FIR_1", "ADJACENT_FIR_2")),
+            },
+        )
+        prefixes = fir_info["prefixes"]
+        min_lat, max_lat = fir_info["lat_bounds"]
+        min_lon, max_lon = fir_info["lon_bounds"]
+        pref_cond = " OR ".join([f"f.adep LIKE '{p}%' OR f.ades LIKE '{p}%'" for p in prefixes])
+
+        # Step 1: Query 4D trajectory table for flights crossing FIR boundaries during closure hours
+        candidate_flights = pd.DataFrame()
+        try:
+            traj_sql = f"""
+                SELECT DISTINCT
+                    f.ectrl_id, f.adep, f.ades, f.ac_type, f.ac_operator,
+                    f.actual_distance_nm, f.dep_delay_min, f.arr_delay_min,
+                    f.requested_fl, f.actual_off_block_time, f.actual_arrival_time,
+                    CASE WHEN ({pref_cond}) THEN 1 ELSE 0 END AS is_internal
+                FROM trajectory_actual t
+                JOIN flights f ON t.ectrl_id = f.ectrl_id
+                WHERE CAST(f.actual_off_block_time AS DATE) = '{sim_date}'
+                  AND t.time_over BETWEEN '{sim_date} {start_hour:02d}:00:00' AND '{sim_date} {int(end_hour):02d}:{int((end_hour % 1)*60):02d}:00'
+                  AND t.latitude BETWEEN {min_lat} AND {max_lat}
+                  AND t.longitude BETWEEN {min_lon} AND {max_lon}
+                ORDER BY f.actual_off_block_time ASC;
+            """
+            candidate_flights = self.dataset.query(traj_sql)
+        except Exception:
+            candidate_flights = pd.DataFrame()
+
+        # Step 2: Fallback to spatial route corridor projection if trajectory table has insufficient records
+        if candidate_flights.empty or len(candidate_flights) < 10:
+            corridor_sql = f"""
+                SELECT
+                    f.ectrl_id, f.adep, f.ades, f.ac_type, f.ac_operator,
+                    f.actual_distance_nm, f.dep_delay_min, f.arr_delay_min,
+                    f.requested_fl, f.actual_off_block_time, f.actual_arrival_time,
+                    CASE WHEN ({pref_cond}) THEN 1 ELSE 0 END AS is_internal
+                FROM flights f
+                WHERE CAST(COALESCE(f.actual_off_block_time, f.filed_off_block_time) AS DATE) = '{sim_date}'
+                  AND EXTRACT(HOUR FROM COALESCE(f.actual_off_block_time, f.filed_off_block_time)) BETWEEN {max(0, start_hour - 1)} AND {int(end_hour)}
+                  AND (
+                      ({pref_cond})
+                      OR (
+                          ((f.adep_lat < {min_lat} AND f.ades_lat > {max_lat}) OR (f.adep_lat > {max_lat} AND f.ades_lat < {min_lat}))
+                          AND ((f.adep_lon BETWEEN {min_lon - 3.5} AND {max_lon + 3.5}) OR (f.ades_lon BETWEEN {min_lon - 3.5} AND {max_lon + 3.5}))
+                      )
+                  )
+                ORDER BY COALESCE(f.actual_off_block_time, f.filed_off_block_time) ASC;
+            """
+            try:
+                candidate_flights = self.dataset.query(corridor_sql)
+            except Exception:
+                pass
+
+        # Step 3: Absolute fallback across full period if date is empty
         if candidate_flights.empty:
-            # Fallback across full period if specific date is sparse
-            candidate_flights = self.dataset.query(f"""
+            candidate_flights = self.dataset.query("""
                 SELECT
                     ectrl_id, adep, ades, ac_type, ac_operator,
                     actual_distance_nm, dep_delay_min, arr_delay_min,
-                    requested_fl, actual_off_block_time, actual_arrival_time
+                    requested_fl, actual_off_block_time, actual_arrival_time,
+                    0 AS is_internal
                 FROM flights
                 LIMIT 250;
             """)
 
-        # Filter flights that realistically intersect the closed FIR
-        impacted_count = max(int(len(candidate_flights) * (duration / 8.0) * 0.45), 18)
-        selected_candidates = candidate_flights.head(impacted_count)
+        selected_candidates = candidate_flights
+        impacted_count = len(selected_candidates)
 
         rerouted_list: list[ReroutedFlightDetail] = []
-        bypass_firs = self.FIR_ADJACENT_BYPASS.get(fir_clean, ("ADJACENT_FIR_1", "ADJACENT_FIR_2"))
+        bypass_firs = fir_info["bypasses"]
 
         total_extra_dist = 0.0
         total_extra_fuel_kg = 0.0
@@ -137,23 +248,21 @@ class AirspaceClosureSimulator:
 
         for idx, (_, row) in enumerate(selected_candidates.iterrows()):
             orig_dist = float(row.get("actual_distance_nm") or 650.0)
-            is_internal_hub = (fir_clean == "LSASFIR" and ("LS" in str(row["adep"]) or "LS" in str(row["ades"]))) or \
-                              (fir_clean == "LFFFFIR" and ("LF" in str(row["adep"]) or "LF" in str(row["ades"]))) or \
-                              (fir_clean == "EDUUUIR" and ("ED" in str(row["adep"]) or "ED" in str(row["ades"])))
+            is_internal_hub = bool(row.get("is_internal", 0) == 1)
 
-            if is_internal_hub or idx % 4 == 0:
+            if is_internal_hub or (idx % 6 == 0 and ground_held_count < int(impacted_count * 0.45)):
                 # Internal destination or tight connection -> Ground Delay Program Hold
-                assigned_hold = 35.0 + (idx % 5) * 18.0 + duration * 12.0
+                assigned_hold = 35.0 + (idx % 7) * 14.0 + duration * 18.0 + (orig_dist * 0.03)
                 total_ground_delay_min += assigned_hold
                 ground_held_count += 1
-                if assigned_hold >= 160.0 or (assigned_hold >= 110.0 and idx % 7 == 0):
+                if assigned_hold >= 135.0 or (assigned_hold >= 105.0 and idx % 11 == 0):
                     cancellation_count += 1
             else:
                 # Overflight -> Lateral detour around FIR boundary
-                detour_pct = 0.06 + (idx % 6) * 0.025  # 6% to 18% dogleg
+                detour_pct = 0.06 + (idx % 6) * 0.018  # 6% to 16.8% dogleg
                 extra_nm = round(orig_dist * detour_pct, 1)
                 extra_time_min = round(extra_nm / 7.5, 1)  # ~450 kts groundspeed
-                extra_fuel = round(extra_nm * 4.8, 1)  # ~4.8 kg Jet-A / nm
+                extra_fuel = round(extra_nm * 4.6, 1)  # ~4.6 kg Jet-A / nm
                 extra_co2 = round(extra_fuel * 3.16, 1)
                 extra_cost = round(extra_fuel * 0.85 + (extra_time_min / 60.0) * 850.0, 2)
 
@@ -184,27 +293,31 @@ class AirspaceClosureSimulator:
         # Economic loss: extra fuel cost + crew time + passenger delay compensation (€105/min standard)
         delay_cost_eur = total_ground_delay_min * 105.0
         fuel_cost_eur = total_extra_fuel_kg * 0.85
-        cancellation_penalties_eur = cancellation_count * 18500.0  # Approx EU261 + rebooking cost per cancelled narrowbody
+        cancellation_penalties_eur = cancellation_count * 18500.0  # Approx EU261 + rebooking cost per cancelled flight
         total_economic_loss_eur = delay_cost_eur + fuel_cost_eur + cancellation_penalties_eur
 
         # Post-reopening non-linear recovery queue:
         # Backlog clearing rate = (backlog flights) / (nominal capacity * surge recovery factor)
-        backlog_flights = ground_held_count + int(rerouted_count * 0.3)
+        backlog_flights = ground_held_count + int(rerouted_count * 0.25)
         nominal_hourly_throughput = 75
-        effective_surge_throughput = nominal_hourly_throughput * 1.15
-        recovery_hours = round(max(1.2, (backlog_flights / max(effective_surge_throughput - nominal_hourly_throughput, 15.0))), 1)
+        recovery_hours = round(max(1.2, min(5.5, 1.0 + (backlog_flights / 90.0))), 1)
 
-        rebound_end_hour = end_hour + recovery_hours
+        rebound_end_hour = (end_hour + recovery_hours) % 24.0
         rebound_str = f"{sim_date} {int(rebound_end_hour):02d}:{int((rebound_end_hour % 1)*60):02d}:00"
 
         # Generate post-reopening hourly clearance trajectory
         curve = []
         for step in range(int(math.ceil(recovery_hours)) + 2):
             hr_offset = step
+            clock_hour = int(end_hour + step) % 24
             progress = min(1.0, hr_offset / max(recovery_hours, 1.0))
             active_backlog = max(0, int(backlog_flights * (1.0 - math.pow(progress, 1.3))))
             throughput_pct = round(min(100.0, 60.0 + progress * 40.0), 1)
+            surge_cap = int(nominal_hourly_throughput * (1.0 + 0.15 * (1.0 - progress)))
             curve.append({
+                "time_utc": f"{clock_hour:02d}:00 UTC",
+                "backlog_flights": active_backlog,
+                "sector_surge_capacity": surge_cap,
                 "Hours_Post_Reopening": hr_offset,
                 "Remaining_Backlog_Flights": active_backlog,
                 "Airspace_Throughput_Pct": throughput_pct,

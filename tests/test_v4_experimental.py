@@ -151,6 +151,14 @@ def test_airspace_closure_simulator(dataset: FlightDataset):
     assert res.total_airline_economic_loss_eur > 0.0
     assert res.post_reopening_recovery_hours > 0.0
     assert len(res.recovery_curve) > 0
+    c0 = res.recovery_curve[0]
+    assert "time_utc" in c0
+    assert "backlog_flights" in c0
+    assert "sector_surge_capacity" in c0
+    assert "Hours_Post_Reopening" in c0
+    assert "Remaining_Backlog_Flights" in c0
+    assert "Airspace_Throughput_Pct" in c0
+    assert "Status" in c0
     assert len(res.sample_rerouted_flights) > 0
 
     rf0 = res.sample_rerouted_flights[0]
@@ -161,6 +169,16 @@ def test_airspace_closure_simulator(dataset: FlightDataset):
     d = res.to_dict()
     assert d["target_fir"] == "LSASFIR"
     assert len(d["sample_rerouted_flights"]) == len(res.sample_rerouted_flights)
+
+    # Test with explicit date_str
+    res_date = sim.simulate_fir_closure(
+        target_fir="LSASFIR",
+        closure_start_hour=10,
+        closure_duration_hours=3.0,
+        date_str=res.closure_date,
+    )
+    assert res_date.closure_date == res.closure_date
+    assert res_date.total_flights_impacted > 0
 
 
 def test_marl_atfm_simulator(dataset: FlightDataset):

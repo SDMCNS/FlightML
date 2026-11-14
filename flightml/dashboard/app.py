@@ -3685,7 +3685,7 @@ with tab_cat_ai_lab:
             "cancellations, and post-reopening non-linear recovery queue dynamics."
         )
 
-        col_c1, col_c2, col_c3 = st.columns([1.5, 1, 1])
+        col_c1, col_c2, col_c3, col_c4 = st.columns([1.4, 1.1, 0.8, 0.8])
         with col_c1:
             fir_target_choice = st.selectbox(
                 "Closed Flight Information Region (FIR)",
@@ -3702,17 +3702,38 @@ with tab_cat_ai_lab:
             )
             fir_code = fir_target_choice.split()[0]
         with col_c2:
-            fir_start_hr = st.slider("Closure Start Time (UTC Hour)", 0, 23, 10, key=f"fir_start_hr_{selected_period}")
+            start_date_bound, end_date_bound = get_dataset_date_bounds(ds)
+            # Find default operational day (with > 500 flights if start_date is sparse)
+            default_sim_date = pd.to_datetime(start_date_bound).date()
+            try:
+                row_op = ds.query(
+                    "SELECT CAST(COALESCE(actual_off_block_time, filed_off_block_time) AS DATE) AS d "
+                    "FROM flights GROUP BY 1 HAVING COUNT(*) > 500 ORDER BY 1 LIMIT 1"
+                )
+                if not row_op.empty:
+                    default_sim_date = pd.to_datetime(str(row_op.iloc[0]["d"])).date()
+            except Exception:
+                pass
+            fir_date_choice = st.date_input(
+                "Closure Date",
+                value=default_sim_date,
+                min_value=pd.to_datetime(start_date_bound).date(),
+                max_value=pd.to_datetime(end_date_bound).date(),
+                key=f"fir_date_{selected_period}",
+            )
         with col_c3:
+            fir_start_hr = st.slider("Closure Start Time (UTC Hour)", 0, 23, 10, key=f"fir_start_hr_{selected_period}")
+        with col_c4:
             fir_duration = st.slider("Closure Duration (Hours)", 1.0, 8.0, 3.0, step=0.5, key=f"fir_dur_{selected_period}")
 
         if st.button("Run FIR Closure Counterfactual Simulation", key=f"btn_fir_sim_{selected_period}"):
-            with st.spinner(f"Simulating counterfactual closure of {fir_code} from {fir_start_hr:02d}:00 UTC (+{fir_duration}h)..."):
+            with st.spinner(f"Simulating counterfactual closure of {fir_code} on {fir_date_choice} from {fir_start_hr:02d}:00 UTC (+{fir_duration}h)..."):
                 fir_sim = AirspaceClosureSimulator(ds, period=selected_period)
                 c_res = fir_sim.simulate_fir_closure(
                     target_fir=fir_code,
                     closure_start_hour=fir_start_hr,
                     closure_duration_hours=fir_duration,
+                    date_str=str(fir_date_choice),
                 )
 
             cm1, cm2, cm3, cm4 = st.columns(4)
@@ -3752,6 +3773,30 @@ with tab_cat_ai_lab:
                 st.caption("Models non-linear queue drainage once the FIR reopens: surge acceptance rate vs. backlog decay until nominal stability.")
                 rec_df = pd.DataFrame(c_res.recovery_curve).set_index("time_utc")
                 st.line_chart(rec_df[["backlog_flights", "sector_surge_capacity"]])
+
+            with st.expander("ℹ️ Operational Flow Management Logic & Physics Behind FIR Closure Disruption", expanded=False):
+                st.markdown(
+                    """
+                    ### How ATFM and Airline Dispatch Respond to a Closed FIR
+                    When an entire Flight Information Region (such as Switzerland `LSASFIR`) shuts down unexpectedly (e.g. radar outage, power glitch, industrial action, or weather), traffic is managed under strict Eurocontrol Network Manager procedures:
+
+                    1. **ATFM Ground Delay Programs (Internal Traffic `LS*`)**:
+                       - Flights scheduled to land at or depart from airports within the closed FIR (e.g. Zurich `LSZH`, Geneva `LSGG`, Basel `LFSB`) **cannot** be rerouted around the FIR because their flight plan terminates or originates inside it.
+                       - To prevent severe airborne holding stacks, fuel starvation, and safety hazards, Eurocontrol issues mandatory **Ground Delay Program (GDP)** slots. Aircraft are held at their departure gates across Europe (or at Swiss gates) absorbing delay on the ground with engines off.
+                    2. **Cancellation Risk (Duty Period & Curfew Breaches)**:
+                       - Flights receiving extreme ground delays (>135 minutes) risk breaching flight crew maximum duty limits under **EASA Subpart-FTL** (Flight Time Limitations) or missing destination airport night noise curfews. Airlines voluntarily cancel or consolidate these flights.
+                    3. **Lateral En-Route Rerouting (Overflights)**:
+                       - Transiting flights that neither take off nor land in Switzerland (e.g., London to Rome, Frankfurt to Madrid, Amsterdam to Nice) cannot enter `LSASFIR`.
+                       - Eurocontrol Network Manager and airline flight dispatch re-clear them onto adjacent bypass corridors:
+                         - **Western Corridor via France (`LFFFFIR` - Paris/Marseille)**
+                         - **Northern/Eastern Corridor via Germany (`EDUUUIR` - Rhine Upper Area)**
+                         - **Southern Corridor via Italy (`LIRRFIR` - Milan)**
+                       - These detours add 40 to 110+ nautical miles (+5% to +17%), burning hundreds of kilograms of extra Jet-A fuel and tons of excess $\\text{CO}_2$.
+                    4. **Post-Reopening Recovery Dynamics (Non-Linear Queue Drainage)**:
+                       - When the FIR reopens at the end of the closure window, the airspace cannot instantly accept the accumulated backlog of delayed flights plus normal scheduled traffic without immediate sector overload.
+                       - En-route sectors operate at a temporary **Surge Capacity** (typically ~115% of nominal throughput). The accumulated backlog decays non-linearly over a **recovery duration of 2 to 4 hours** until nominal equilibrium is restored.
+                    """
+                )
 
     # ----------------- SUB-TAB 5: Multi-Agent RL ATFM Slot Gaming -----------------
     with ai_sub5:
