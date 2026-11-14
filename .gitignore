@@ -48,6 +48,8 @@ venv/
 *.duckdb
 *.duckdb.wal
 *.sqlite
+*.grib
+*.grib2
 *.db
 
 # Ignore all other CSV files except approved open aeronautical catalogs, OpenAP & EIA benchmarks
