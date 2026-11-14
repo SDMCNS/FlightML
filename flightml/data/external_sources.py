@@ -514,7 +514,7 @@ def compile_all_external_sources(parquet_dir: Path | None = None, force: bool = 
         "parquet": str(fixes_pq),
         "rows": len(df_fixes),
         "description": "Global 5-letter RNAV waypoints & intersection fixes (FixXP700)",
-        "supports_sprints": "Sprint 2 (KEP/KEA), Sprint 3 (FRA & Airway Snapping)",
+        "capabilities": "Trajectory Directness (KEP/KEA), Free Route Airspace (FRA Snapping)",
     }
 
     # 2. Global Radio Navaids & ILS (`nav.dat`)
@@ -530,7 +530,7 @@ def compile_all_external_sources(parquet_dir: Path | None = None, force: bool = 
         "parquet": str(nav_pq),
         "rows": len(df_nav),
         "description": "Global NDB, VOR, ILS Localizer, Glideslope, Marker & DME stations (NavXP810)",
-        "supports_sprints": "Sprint 3 (FRA Navaid Snapping), Sprint 5 (ILS/Runway Safety)",
+        "capabilities": "FRA Navaid Snapping, ILS Runway Alignment & Safety",
     }
 
     # 3. OpenAP Aircraft Performance, MTOW & Drag Polars
@@ -548,7 +548,7 @@ def compile_all_external_sources(parquet_dir: Path | None = None, force: bool = 
         "parquet": str(ac_pq),
         "rows": len(df_ac),
         "description": "Aircraft MTOW, CRCO weight factors, wake category, drag polars & fuel polynomials",
-        "supports_sprints": "Sprint 2 (CCO/CDO), Sprint 4 (CRCO Charges), Sprint 5 (Runway Braking)",
+        "capabilities": "Climb/Descent Profiles (CCO/CDO), CRCO Navigation Fees, Runway Braking",
     }
 
     # 4. OpenAP WRAP Kinematic Envelopes
@@ -564,7 +564,7 @@ def compile_all_external_sources(parquet_dir: Path | None = None, force: bool = 
         "parquet": str(wrap_pq),
         "rows": len(df_wrap),
         "description": "Kinematic flight-phase speed, climb/descent rate & altitude envelopes (WRAP)",
-        "supports_sprints": "Sprint 2 (CCO/CDO/Level-Capping), Sprint 5 (Takeoff/Landing Distance)",
+        "capabilities": "CCO/CDO Level-Capping Detection, Takeoff & Landing Distances",
     }
 
     # 5. OpenAP Engines CSV
@@ -580,7 +580,7 @@ def compile_all_external_sources(parquet_dir: Path | None = None, force: bool = 
         "parquet": str(eng_pq),
         "rows": len(df_eng),
         "description": "OpenAP turbofan thrust, bypass ratio, cruise SFC & LTO fuel flows",
-        "supports_sprints": "Sprint 1 (Taxi Fuel), Sprint 2 (Climb/Cruise Fuel)",
+        "capabilities": "Taxi-Out Idle Burn, Climb & Cruise Fuel Optimization",
     }
 
     # 6. ICAO EDB v32B Gaseous & nvPM Soot Emissions
@@ -600,14 +600,14 @@ def compile_all_external_sources(parquet_dir: Path | None = None, force: bool = 
         "parquet": str(gas_pq),
         "rows": len(df_gas),
         "description": "ICAO EDB v32B NOx, CO, HC & Smoke Number across T/O, Climb, Approach, Idle",
-        "supports_sprints": "Sprint 1 (TAXI_OUT Emissions), Sprint 2 (LTO Environmental KPIs)",
+        "capabilities": "TAXI_OUT Queue Emissions, LTO Environmental KPIs",
     }
     summary["icao_edb_nvpm"] = {
         "source": "flightml/data/edb-emissions-databank_v32B__web_.xlsx [nvPM]",
         "parquet": str(nvpm_pq),
         "rows": len(df_nvpm),
         "description": "ICAO EDB v32B non-volatile Particulate Matter (soot mass & particle number)",
-        "supports_sprints": "Sprint 1 (Airport Air Quality), Sprint 6 (Contrail Ice Nucleation)",
+        "capabilities": "Airport Air Quality, Contrail Ice Nucleation",
     }
 
     # 7. Eurocontrol CRCO En-Route Unit Rates
@@ -625,7 +625,7 @@ def compile_all_external_sources(parquet_dir: Path | None = None, force: bool = 
         "parquet": str(crco_pq),
         "rows": len(df_crco),
         "description": "Eurocontrol CRCO national charging zone unit rates (EUR) & FX rates",
-        "supports_sprints": "Sprint 4 (CRCO Route Charge vs. Fuel Burn Optimizer)",
+        "capabilities": "CRCO Route Charge vs. Fuel Burn Optimization",
     }
 
     return summary

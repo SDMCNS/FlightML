@@ -66,6 +66,53 @@ pip install -e ".[dev]"
 
 ---
 
+## 📥 Data Ingestion & Initial Setup
+
+FlightML operates on high-speed, column-partitioned Apache Parquet files backed by DuckDB. Before running analyses, initialize external navigation references and ingest your historical traffic periods:
+
+### Step 1: Compile Aeronautical References (`flightml external-data`)
+
+Compiles bundled open aeronautical references (OpenAP aircraft drag polars, turbofan engine performance envelopes, ICAO Engine Emissions Databank v32B, global 5-letter RNAV waypoints, radio navaids, and Eurocontrol CRCO FIR charging rates) into DuckDB Parquet tables:
+
+```bash
+flightml external-data
+```
+
+### Step 2: Ingest Traffic Archives (`flightml ingest-archive`)
+
+Ingest raw monthly Eurocontrol traffic archive zip files in a single automated step:
+
+```bash
+flightml ingest-archive data/202510.zip
+```
+
+The ingestion engine automatically:
+1. Extracts the archive into local staging.
+2. Identifies and parses flight plans, radar trajectories, FIR boundary crossings, and airport pairs.
+3. Converts raw CSV tables into partitioned, compressed Apache Parquet under `flightml/data/parquet/periods/{period_id}`.
+
+*(Alternative: If raw CSV files are already placed in `flightml/data/`, run `flightml convert --include-trajectories`.)*
+
+### Step 3: Verify Ingested Periods (`flightml list-periods`)
+
+```bash
+flightml list-periods
+```
+
+```text
+      Available Aviation Data Periods      
+┌───────────┬─────────────────────────────┐
+│ Period ID │ Status                      │
+├───────────┼─────────────────────────────┤
+│ 201611    │ Ready (Parquet Partitioned) │
+│ 202510    │ Ready (Parquet Partitioned) │
+└───────────┴─────────────────────────────┘
+```
+
+Once ingested, all CLI commands, API endpoints, and dashboard tabs operate with high-speed columnar performance.
+
+---
+
 ## 🖥️ Synthetic CLI Output Examples
 
 Below are representative terminal outputs illustrating FlightML's Rich tables using **synthetic sample data** (all costs in **Euros `€`**).

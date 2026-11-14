@@ -1189,14 +1189,14 @@ def external_data_cmd(
     table.add_column("DuckDB View", style="bold cyan")
     table.add_column("Rows", justify="right", style="green")
     table.add_column("Source Path", style="white")
-    table.add_column("Supports v2.0 Sprints", style="yellow")
+    table.add_column("Capabilities & KPI Support", style="yellow")
 
     for view_name, meta in summary.items():
         table.add_row(
             view_name,
             f"{meta['rows']:,}",
             meta["source"],
-            meta["supports_sprints"],
+            meta.get("capabilities", meta.get("supports_sprints", "")),
         )
     console.print(table)
 
