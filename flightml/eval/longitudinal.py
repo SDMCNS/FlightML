@@ -169,8 +169,22 @@ class AnnualSeasonalDecomposition:
     top_surging_airports: list[dict[str, Any]]
     top_surging_firs: list[dict[str, Any]]
 
+    @property
+    def delay_surge_ratio(self) -> float:
+        return self.delay_demand_elasticity
+
+    @property
+    def top_summer_surge_airports(self) -> list[dict[str, Any]]:
+        return self.top_surging_airports
+
+    @property
+    def top_summer_surge_firs(self) -> list[dict[str, Any]]:
+        return self.top_surging_firs
+
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d["delay_surge_ratio"] = self.delay_surge_ratio
+        return d
 
 
 class LongitudinalEngine:

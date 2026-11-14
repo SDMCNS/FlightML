@@ -81,6 +81,26 @@ class HarmonizedPolicySimulation:
     estimated_annual_airline_cost_saved_eur: float
     airspace_traffic_shifts: list[dict[str, Any]]
 
+    @property
+    def estimated_annual_avoidance_flights_eliminated(self) -> int:
+        return self.eliminated_detour_flights
+
+    @property
+    def annualized_avoidance_flights_eliminated(self) -> int:
+        return self.eliminated_detour_flights
+
+    @property
+    def annualized_fuel_saved_tonnes(self) -> float:
+        return self.estimated_annual_fuel_saved_tonnes
+
+    @property
+    def annualized_co2_mitigated_tonnes(self) -> float:
+        return self.estimated_annual_co2_saved_tonnes
+
+    @property
+    def annualized_airline_savings_eur(self) -> float:
+        return self.estimated_annual_airline_cost_saved_eur
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 

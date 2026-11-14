@@ -66,6 +66,38 @@ class DelaySuperSpreaderFlight:
     downstream_economic_cost_eur: float
     infected_airports: list[str]
 
+    @property
+    def total_downstream_delay_min(self) -> float:
+        return self.downstream_delay_hours * 60.0
+
+    @property
+    def reactionary_delay_cost_eur(self) -> float:
+        return self.downstream_economic_cost_eur
+
+    @property
+    def root_ectrl_id(self) -> int:
+        return self.ectrl_id
+
+    @property
+    def aircraft_reg(self) -> str:
+        return self.ac_reg
+
+    @property
+    def initial_dep_delay_min(self) -> float:
+        return self.primary_delay_min
+
+    @property
+    def infected_downstream_legs_count(self) -> int:
+        return self.infected_downstream_legs
+
+    @property
+    def cumulative_downstream_delay_min(self) -> float:
+        return self.downstream_delay_hours * 60.0
+
+    @property
+    def reactionary_delay_hours(self) -> float:
+        return self.downstream_delay_hours
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
