@@ -249,48 +249,54 @@ flightml delay-offenders --period 202510 --type routes --top 3
 
 ## 🖥️ Interactive Simulation Workbench (`flightml dashboard`)
 
-Launch the streamlined, 5-category simulation workbench:
+Launch the simulation workbench:
 
 ```bash
 flightml dashboard
 ```
 
-Opens at **`http://localhost:8501`** organized into **5 primary operational categories** across 11 specialized views:
+Opens at **`http://localhost:8501`** organized into **7 primary operational categories**:
 
-### 1. Airspace & Trajectories
-1. 🌐 **Network Overview & Airspace Map**: Interactive **$5^\circ \times 5^\circ$ European Airspace Hourly Saturation & Complexity Map** (period average by hour of day `00:00`–`23:00 UTC`), FIR & AUA (`TMA`/`CTA`/`UTA`) saturation, `KPI02 ATOT` surface taxi delays, and VHF radio occupancy.
-2. 🗺️ **4D Trajectory & Holdings**: Single-flight 4D radar track vs. filed plan map, `KPI04 KEP` / `KPI05 KEA` / `KPI08 ASMA` / `KPI19` scorecard, `FRA` vs. ATS airway snapping, and FIR/AUA sector dwell tables.
-3. 📅 **Recurring Series & Diurnal Trends**: Longitudinal day-over-day route tracking and diurnal departure bank congestion curves.
-4. 👯 **Twin-Flight Benchmark**: Side-by-side comparison and interactive **Dual-Trajectory Map** (`Green` vs. `Red`) with lateral divergence pinpointing.
+### 1. ✈️ Single Aircraft / Flight Views
+- 🗺️ **4D Trajectory & Holdings**: Single-flight 4D radar track vs. filed plan map, `KPI04 KEP` / `KPI05 KEA` / `KPI08 ASMA` / `KPI19` scorecard, `FRA` vs. ATS airway snapping, and FIR/AUA sector dwell tables.
+- 📉 **Vertical Profile: CDO & CCO**: Continuous Descent Operations (`CDO`) and Continuous Climb Operations (`CCO`) intermediate level-off detection, vertical profile charts, and network-wide cruise level-capping corridors.
+- 🩺 **Delay & Diagnostics**: Multi-factor delay root-cause attribution and arrival runway braking action, density altitude, and stopping safety margins.
+- 🌱 **Fuel & Emissions**: 3-way cruise altitude optimization, upper-air winds (`ESAD`), and ICAO Engine Emissions Databank (EDB v32B) LTO pollutants ($\text{NO}_x, \text{CO}, \text{nvPM}$).
 
-### 2. Operations & Diagnostics
-5. 📉 **Vertical Profile: CDO & CCO**: Continuous Descent Operations (`CDO`) and Continuous Climb Operations (`CCO`) intermediate level-off detection, vertical profile charts, and network-wide cruise level-capping corridors.
-6. 🩺 **Delay & Runway Diagnostics**: Multi-factor delay root-cause attribution and arrival runway braking action, density altitude, and stopping safety margins.
-7. 🔮 **What-If & Stress Tests**:
-   - **Scenario A**: Multi-Operator Turnaround Buffer Sensitivity (`+5m` to `+25m`)
-   - **Scenario B**: Adverse Weather & Runway Crosswind Capacity Collapse
-   - **Scenario C**: Multi-Operator Fleet Operational Shock Contagion Curves (`+15m` to `+90m`)
-   - **Scenario D**: Network-Wide Prescriptive Hub Tail-Swap Recovery Optimizer (`Tail A ⇄ Tail B`, `€`)
-   - **Scenario E**: 4D Co-Altitude Airspace Proximity & $5^\circ \times 5^\circ$ Complexity Map Scanner
-   - **Scenario F**: Ration-by-Schedule Ground Delay Program (`GDP` / ATFM Slot) Optimizer (`€`) with date selection
+### 2. 🌐 System-Level Summary & Analysis Views
+- 🌐 **Network Overview & Airspace Map**: Interactive **$5^\circ \times 5^\circ$ European Airspace Hourly Saturation & Complexity Map**, FIR & AUA saturation, `KPI02 ATOT` surface taxi delays, and VHF radio occupancy.
+- 🛣️ **Free Route Airspace (FRA) Adherence**: Free Route directness metrics and ATS airway snapping.
+- 📻 **VHF Frequency & ATC Workload**: Sector voice channel congestion and transmission occupancy models.
 
-### 3. Economics, Fuel & Climate
-8. 🌱 **Fuel, Carbon & Route Charges (`€`)**:
-   - **3-Way Cruise Altitude Optimization**: Ideal airframe/engine aerodynamic flight level vs. filed requested vs. actual radar flown, with dispatch planning vs. tactical ATC penalty attribution.
-   - **Upper-Air Winds & ESAD**: Upper airspace wind vector integration, Equivalent Still Air Distance (`ESAD`), and wind routing efficiency verdicts with local-first caching.
-   - **Eurocontrol CRCO Route Charges & DOC**: FIR-by-FIR navigation service units (`SU`), unit rates, direct flight operating cost (`Fuel € + CRCO Navigation €`), and historical spot vs. modern into-plane price comparisons.
-   - **OpenAP Multi-Dimensional Emissions & LTO**: En-route fuel burn, terminal holding burn, and `TAXI_OUT` ICAO Engine Emissions Databank (EDB v32B) idle pollutants ($\text{NO}_x, \text{CO}, \text{nvPM}$).
+### 3. 📈 Longitudinal & Predictive Trends
+- 📅 **Multi-Period Timeline & Fleet Evolution**: Cross-sectional KPIs across ingested monthly archives with contemporary YoY cohort filtering vs historical baselines.
+- 📈 **Year-over-Year (YoY) & Seasonality**: Pairwise matched seasonal benchmarking across matching periods (e.g. Winter vs Winter, Summer vs Summer) and 3-season elasticity curves.
+- 🔮 **Predictive Airspace Saturation Forecaster**: Forward-looking sector capacity breach predictor and dynamic spatial density hotspot mapping.
+- 📉 **Airline Economics & Delay Contagion**: DOC cost breakdown, route charge avoidance detour detection, Single European Sky (SES) rate harmonization, airframe super-spreader flights, and period-wide repeat offender routes & operators.
 
-### 4. Longitudinal & Predictive Trends
-9. 📈 **Longitudinal & Predictive Trends**:
-   - **Multi-Period Timeline & Fleet Evolution**: Cross-sectional KPIs across ingested monthly archives with contemporary YoY cohort filtering vs historical baselines.
-   - **Year-over-Year (YoY) & Seasonality**: Pairwise matched seasonal benchmarking across matching periods (e.g. Winter vs Winter, Summer vs Summer) and 3-season elasticity curves.
-   - **Predictive Airspace Saturation Forecaster**: Forward-looking sector capacity breach predictor and dynamic spatial density hotspot mapping.
-   - **Airline Economics & Delay Contagion**: DOC cost breakdown, route charge avoidance detour detection, Single European Sky (SES) rate harmonization, airframe super-spreader flights, and period-wide repeat offender routes & operators.
+### 4. 🔮 What-If Scenario Views
+- **Scenario A**: Multi-Operator Turnaround Buffer Sensitivity (`+5m` to `+25m`)
+- **Scenario B**: Adverse Weather & Runway Crosswind Capacity Collapse
+- **Scenario C**: Multi-Operator Fleet Operational Shock Contagion Curves (`+15m` to `+90m`)
+- **Scenario D**: Network-Wide Prescriptive Hub Tail-Swap Recovery Optimizer (`Tail A ⇄ Tail B`, `€`)
+- **Scenario E**: 4D Co-Altitude Airspace Proximity & $5^\circ \times 5^\circ$ Complexity Map Scanner
+- **Scenario F**: Ration-by-Schedule Ground Delay Program (`GDP` / ATFM Slot) Optimizer (`€`) with date selection
 
-### 5. Strategic Analytics & Reference
-10. 📊 **Macro Evolution & AIRAC Diff**: Period-over-period traffic growth, `FRA` directness evolution, European weather-delay correlation (IFR & wind), and AIRAC cycle airway/FIR diffing.
-11. 📖 **Methodology, KPI & PBN Reference**: Full mathematical reference for all 21 ICAO/Eurocontrol KPIs, plus dedicated **PBN / RNAV vs. RNP Specifications & Operational Requirements** navigation guide.
+### 5. 🗺️ Information & Map Views
+- 🗺️ **World Navaids & Aerodromes Explorer**: Global interactive map of 86,280 waypoints and 17,090 VHF navaids.
+- 📖 **Methodology, KPI & PBN Reference**: Full mathematical reference for all 21 ICAO/Eurocontrol KPIs, plus dedicated **PBN / RNAV vs. RNP Specifications & Operational Requirements** navigation guide.
+
+### 6. 💶 General Economic Views (€)
+- 👯 **Twin-Flight Efficiency Benchmark**: Side-by-side comparison and interactive **Dual-Trajectory Map** (`Green` vs. `Red`) with lateral divergence pinpointing.
+- 📅 **Recurring Series & Diurnal Trends**: Longitudinal day-over-day route tracking and diurnal departure bank congestion curves.
+
+### 7. 🧪 Experimental AI & Machine Learning Lab
+- 🧬 **Flight2Vec Latent Embeddings**: 128D contrastive trajectory foundation representations on unit hypersphere $\mathbb{S}^{127}$, sparse activation spectra, latent operational twin retrieval, and 2D PCA manifold projection.
+- ⚖️ **PINN Aircraft Mass & Contrail Surrogate**: Inverts confidential Takeoff Gross Weight (TGW) and payload directly from kinematic climb telemetry via $T - D - mg\sin\gamma = ma$; ultra-fast ($<15\,\mu\text{s}$) thermodynamic Schmidt-Appleman and ISSR contrail radiative forcing neural surrogate.
+- 🌐 **ST-GNN Delay Contagion Network**: Spatio-Temporal Graph WaveNet modeling multi-hop delay ripple contagion across European airport hubs and en-route sectors over 1h, 2h, 4h, and 6h forward horizons.
+- 🌪️ **4D Trajectory & FIR Closure Simulator**: What-if simulation modeling temporary closure of a Flight Information Region (e.g. `LSASFIR`, `EDUUUIR`) from Time A to Time B; calculates 4D reroutes, extra distance, extra fuel/$\text{CO}_2$, ground delays, cancellations, and post-reopening recovery queue duration.
+- 🎮 **Multi-Agent RL ATFM Slot Gaming**: Game-theoretic simulation of heterogeneous airline agents (Legacy, LCC, Hybrid, Cargo) competing under ATFM slot cuts, optimizing slot swaps, en-route speedups, and cancellations toward a Nash equilibrium.
+- 🤖 **Multimodal Aeronautical Copilot Architecture (Epic 6 - Specification)**: Comprehensive design integrating Eurocontrol RAD, national AIPs, NOTAMs, and METAR/TAF (implementation deferred pending raw text ingestion pipelines).
 
 ---
 
@@ -314,7 +320,7 @@ flightml serve --port 8000
 pytest tests -v
 ```
 
-All 102 unit and integration tests pass cleanly.
+All 108 unit and integration tests pass cleanly.
 
 ---
 

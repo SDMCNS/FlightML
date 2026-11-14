@@ -135,3 +135,48 @@ where $D_{i,\text{km}}$ is the great-circle entry-to-exit distance in charging z
   Calculates the avoidance incentive ratio (€ saved per extra nautical mile flown) to model airline decisions to dogleg around expensive national FIRs.
 - **Delay Contagion Graph & Repeat Offender Scanner**:
   Reconstructs tail-specific flight rotations $(L_1 \to \Delta_{\text{turn}} \to L_2 \to \dots \to L_n)$ in DuckDB windowed queries. Identifies single-date super-spreader root flights and period-wide chronic repeat offender routes and operators that systematically export delays across the European network (€105/min standard delay cost).
+
+---
+
+## 🧪 Deep Learning, Neural Surrogates & Multi-Agent Simulation (v4 AI Lab)
+
+FlightML features an experimental machine learning and operations research suite designed to solve high-dimensional aviation problems beyond conventional empirical lookups:
+
+### 1. Flight2Vec Trajectory Foundation Embeddings
+- **Architecture**: A self-supervised projection neural network mapping 16 kinematic and operational features (actual distance, departure/arrival delays, requested and cruise flight levels, climb energy, airframe and operator hashes, diurnal departure hour, route charge avoidance indicator, heavy wake class, and tactical reroute flags) into a dense 128-dimensional unit hypersphere $\mathbb{S}^{127}$.
+- **Metric Space**: Cosine similarity $\cos\theta = \mathbf{z}_1 \cdot \mathbf{z}_2$ represents operational similarity, preserving distance, vertical energy profile, and delay dynamics.
+- **Operational Twin Finder**: Scans hundreds of candidate flights in sub-second time to identify exact twin flights across different operators and city pairs.
+- **Manifold Projection**: Dimensionality reduction via Principal Component Analysis (PCA) maps the 128D latent space to 2D for exploratory cohort visualization.
+
+### 2. Physics-Informed Neural Network (PINN) for Aircraft Mass Inversion
+- **Aerodynamic Conservation Constraint**: Inverts unknown Takeoff Gross Weight (TGW) and commercial payload directly from initial climb radar points (below FL220) by embedding the longitudinal equation of motion:
+  $$T(M, h) - D(C_L, C_D, m) - mg \sin \gamma = m \frac{dV}{dt}$$
+- **Output Metrics**: Inferred Takeoff Gross Weight (kg), Operating Empty Weight (OEW), commercial payload (kg), Passenger Load Factor (PLF %), climb rate (fpm), acceleration ($\text{m/s}^2$), and physics residual error.
+
+### 3. Microsecond Contrail Neural Surrogate Engine
+- **Thermodynamic Basis**: Enforces the Schmidt-Appleman criterion ($T \le -39.5^\circ\text{C}$) and Ice Super-Saturated Region (ISSR) condition ($\text{RH}_{\text{ice}} \ge 100\%$).
+- **Sub-Millisecond Inference**: Evaluates non-linear optical depth $\tau$ and instantaneous radiative forcing ($\text{mW/m}^2$) in $<15\,\mu\text{s}$ per waypoint, facilitating dynamic en-route re-clearing.
+
+### 4. Spatio-Temporal Graph WaveNet (ST-GNN) Delay Contagion
+- **Network Graph**: Models European airspace as a directed weighted graph $\mathcal{G} = (\mathcal{V}, \mathcal{E}, W)$ with nodes representing major hubs (EGLL, LFPG, EHAM, EDDF, LEMD, LIRF, etc.) and high-density FIR sectors (EDUUUIR, LFFFFIR, EGTTFIR, LSASFIR).
+- **Graph Diffusion**: Combines spatial graph convolution $A \cdot X$ with temporal gated causal projections to forecast delay shockwave propagation over multi-horizon lookaheads ($t = 1\text{h}, 2\text{h}, 4\text{h}, 6\text{h}$).
+- **Vulnerability Metric**: Calculates node vulnerability indices and classifies network nodes into `CRITICAL_SHOCK_ABSORBER`, `ELEVATED_RIPPLE_RISK`, and `NOMINAL_ABSORPTION`.
+
+### 5. 4D Trajectory Counterfactual & FIR Closure Simulator
+- **Airspace Disruption Model**: Simulates the temporary closure of a Flight Information Region (e.g. `LSASFIR`, `EDUUUIR`, `LFFFFIR`) from Time A to Time B.
+- **Detour Diversion Corridors**: Automatically maps traffic into adjacent bypass FIRs, computing extra track miles, additional cruise fuel burn, $\text{CO}_2$ emissions, and airline direct costs (`€ EUR`).
+- **Post-Reopening Recovery Dynamics**: Solves non-linear queue drainage when the closed sector reopens, modeling backlog flight decay against surge sector throughput:
+  $$T_{\text{recovery}} = \frac{\text{Backlog Flights}}{\mu_{\text{surge}} - \mu_{\text{nominal}}}$$
+
+### 6. Multi-Agent Reinforcement Learning (MARL) ATFM Slot Gaming
+- **Decentralized Game Theory**: Models strategic competition between heterogeneous airline archetypes under ATFM arrival rate restrictions:
+  - *Network Legacy Carrier*: Prioritizes connecting passenger value, swaps slots to protect long-haul arrivals, and speeds up flights at higher fuel burn.
+  - *Low-Cost Carrier (LCC)*: Prioritizes fuel conservation and turnaround punctuality, cancels late flights to prevent aircraft sleeping out-of-base.
+  - *Hybrid European Carrier*: Balances slot swaps on corporate business routes with strategic flight cancellations.
+  - *Express Cargo Operator*: Defers flights to night curfew windows with zero passenger compensation exposure.
+- **Equilibrium Outcome**: Computes mixed-strategy Nash equilibrium payoffs, gross delays saved, EU261 fines avoided, and the cooperative vs. competitive efficiency gap.
+
+### 7. Multimodal Aeronautical Copilot Architecture (Epic 6 - Specification)
+- **Document Text Corpus**: Designed to ingest Eurocontrol Route Availability Document (RAD), national Aeronautical Information Publications (AIPs), active NOTAMs, and METAR/TAF weather briefings into a vector database with hybrid BM25 + dense neural retrieval.
+- **Implementation Status**: Architecturally documented in `docs/v4_plan.md`; implementation deferred pending authoritative raw document text pipelines.
+
