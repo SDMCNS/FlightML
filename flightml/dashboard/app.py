@@ -116,11 +116,12 @@ def _get_available_periods() -> list[str]:
 
 
 available_periods = _get_available_periods()
+default_idx = available_periods.index("202510") if "202510" in available_periods else len(available_periods) - 1
 selected_period = st.sidebar.selectbox(
     "Active Eurocontrol Period",
     options=available_periods,
-    index=0,
-    help="Switch between historical baseline (201611) and modern archives (202510)."
+    index=default_idx,
+    help="Select Eurocontrol archive period (e.g. 2024 vs 2025 seasonal benchmarks: Feb, Jun, Oct)."
 )
 
 
