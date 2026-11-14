@@ -32,15 +32,17 @@ Welcome to the **FlightML** documentation. FlightML is a high-performance Python
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │                                 FLIGHTML ECOSYSTEM                                     │
 ├──────────────────────────┬──────────────────────────┬──────────────────────────────────┤
-│    DATA INGESTION &      │   4D TRAJECTORY, KPI &   │   AIRSPACE MAPS, CRCO (€) &      │
+│    DATA INGESTION &      │   4D TRAJECTORY, KPI &   │   LONGITUDINAL, ECONOMICS &      │
 │    COLUMNAR ENGINE       │   CLIMATE PHYSICS        │   OPERATIONS RESEARCH            │
 ├──────────────────────────┼──────────────────────────┼──────────────────────────────────┤
-│ • DuckDB Columnar Store  │ • ICAO GANP & PRU KPIs   │ • 5°×5° Hourly Saturation Maps   │
-│ • Zero-Copy Parquet      │ • KPI02/04/05/08/17/19   │ • 4D Co-Altitude Conflict Scan   │
-│ • 119k Fixes & 26k Navs  │ • Multi-Tier KPI Suite   │ • Eurocontrol CRCO Route Fees €  │
-│ • OpenAP + ICAO EDB v32B │ • 3-Way Cruise FL Model  │ • Hub Tail-Swap Recovery (MIP)   │
-│ • Weekly Jet-A Prices €  │ • FRA vs. ATS Airways    │ • Ration-by-Schedule GDP Slots   │
-│ • IEM METAR + Upper Wind │ • Upper Winds & ESAD     │ • Fleet Shock Contagion Curves   │
+│ • DuckDB Columnar Store  │ • ICAO GANP & PRU KPIs   │ • Contemporary YoY Matching      │
+│ • Zero-Copy Parquet      │ • KPI02/04/05/08/17/19   │ • 3-Season Elasticity Curves     │
+│ • 119k Fixes & 26k Navs  │ • Multi-Tier KPI Suite   │ • Airspace Breach Forecaster     │
+│ • OpenAP + ICAO EDB v32B │ • 3-Way Cruise FL Model  │ • Airline DOC & FIR Detours €    │
+│ • Weekly Jet-A Prices €  │ • FRA vs. ATS Airways    │ • SES Flat-Rate Counterfactual   │
+│ • 7 Historical Archives  │ • Upper Winds & ESAD     │ • Delay Contagion & Super-Spread │
+│ • IEM METAR + Upper Wind │ • Contrail ISSR Radiance │ • Repeat Offender Routes & Ops   │
+│ • Thread-Safe Cursors    │ • Dynamic Complexity     │ • Hub Tail-Swaps & Date GDP Slots│
 └──────────────────────────┴──────────────────────────┴──────────────────────────────────┘
 ```
 
@@ -50,6 +52,8 @@ Welcome to the **FlightML** documentation. FlightML is a high-performance Python
 
 ```python
 import flightml as fml
+from flightml.eval.longitudinal import LongitudinalEngine
+from flightml.models.delay_contagion_graph import DelayContagionGraphEngine
 
 # 1. Connect to the ingested dataset
 ds = fml.FlightDataset(period="202510")
@@ -65,7 +69,14 @@ print(f"Optimal: FL{impact.optimal_cruise_fl:.0f} vs Actual: FL{impact.actual_cr
 crco = fml.compute_flight_crco_charges(ds, ectrl_id=900104215)
 print(f"CRCO Fee: €{crco.actual_crco_charge_eur:,.2f} | Total Direct Cost: €{crco.total_direct_route_cost_eur:,.2f}")
 
-# 4. Run network-wide prescriptive hub tail-swap recovery
-swaps = fml.optimize_hub_tail_swaps(ds, operator=None)
-print(f"Found {swaps.recommended_swaps_count} tail swaps saving €{swaps.estimated_cost_saved_eur:,.0f} EUR")
+# 4. Multi-period contemporary YoY benchmarking
+long_engine = LongitudinalEngine()
+yoy = long_engine.compare_yoy("202410", "202510")
+print(f"YoY Growth: {yoy.total_flights_growth_pct:+.2f}% | NewGen Fleet Penetration: {yoy.newgen_share_delta_pct:+.2f}%")
+
+# 5. Delay contagion graph & repeat offender detection
+contagion = DelayContagionGraphEngine(ds)
+top_offenders = contagion.scan_repeat_offender_routes(min_primary_delay_min=25.0, min_incidents=3, top_n=3)
+for r in top_offenders:
+    print(f"Repeat Offender {r.route}: {r.incident_count} days, {r.total_downstream_legs_infected} legs infected (€{r.total_reactionary_cost_eur:,.0f} EUR)")
 ```

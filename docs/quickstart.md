@@ -107,8 +107,13 @@ flightml/data/
 ├── fuel/
 │   └── weekly_jet_fuel_prices.csv        # Weekly Jet-A spot prices converted to Euros (€)
 └── parquet/periods/                      # Partitioned Parquet tables per traffic period
-    ├── 201611/                           # Baseline historical period (Nov 2016)
-    └── 202510/                           # Modern traffic period (Oct 2025)
+    ├── 201611/                           # Baseline historical anchor period (Nov 2016)
+    ├── 202402/                           # Winter Trough 2024 (Leap year)
+    ├── 202406/                           # Summer Peak 2024
+    ├── 202410/                           # Autumn Shoulder 2024
+    ├── 202502/                           # Winter Trough 2025
+    ├── 202506/                           # Summer Peak 2025
+    └── 202510/                           # Autumn Shoulder 2025
         ├── flights.parquet               # Flight headers, delays, aircraft type & operator
         ├── trajectory_actual.parquet     # 4D actual radar coordinates, groundspeed & FL
         ├── trajectory_planned.parquet    # 4D filed flight plan coordinates & requested FL
@@ -124,7 +129,7 @@ flightml/data/
 flightml dashboard
 ```
 
-Opens at **`http://localhost:8501`** organized into **4 primary operational categories** across 10 specialized views:
+Opens at **`http://localhost:8501`** organized into **5 primary operational categories** across 11 specialized views:
 
 ### 1. Airspace & Trajectories
 1. **🌐 Network Overview & Airspace Map**: Interactive **$5^\circ \times 5^\circ$ European Airspace Hourly Saturation & Complexity Map** (`00:00`–`23:00 UTC`), FIR & AUA (`TMA`/`CTA`/`UTA`) saturation, `KPI02 ATOT` surface taxi delays, and VHF radio occupancy.
@@ -135,7 +140,7 @@ Opens at **`http://localhost:8501`** organized into **4 primary operational cate
 ### 2. Operations & Diagnostics
 5. **📉 Vertical Profile: CDO & CCO**: Continuous Descent Operations (`CDO`) and Continuous Climb Operations (`CCO`) intermediate level-off detection, vertical profile charts, and network-wide cruise level-capping corridors.
 6. **🩺 Delay & Runway Diagnostics**: Multi-factor delay root-cause attribution and arrival runway braking action, density altitude, and stopping safety margins.
-7. **🔮 What-If & Stress Tests**: Turnaround buffer curves, runway crosswind collapse, fleet shock contagion, network-wide **Hub Tail-Swap Recovery (`Tail A ⇄ Tail B`)**, **4D Co-Altitude Conflict & Saturation Map**, and **Ration-by-Schedule GDP Optimizer (`€`)**.
+7. **🔮 What-If & Stress Tests**: Turnaround buffer curves, runway crosswind collapse, fleet shock contagion, network-wide **Hub Tail-Swap Recovery (`Tail A ⇄ Tail B`)**, **4D Co-Altitude Conflict & Saturation Map**, and **Ration-by-Schedule GDP Optimizer (`€`)** with interactive date selection.
 
 ### 3. Economics, Fuel & Climate
 8. **🌱 Fuel, Carbon & Route Charges (`€`)**:
@@ -144,9 +149,16 @@ Opens at **`http://localhost:8501`** organized into **4 primary operational cate
    - **Eurocontrol CRCO Route Charges & DOC**: FIR-by-FIR navigation service units (`SU`), unit rates, direct flight operating cost (`Fuel € + CRCO Navigation €`), and historical spot vs. modern into-plane price comparisons.
    - **OpenAP Multi-Dimensional Emissions & LTO**: En-route fuel burn, terminal holding burn, and `TAXI_OUT` ICAO Engine Emissions Databank (EDB v32B) idle pollutants ($\text{NO}_x, \text{CO}, \text{nvPM}$).
 
-### 4. Strategic Analytics & Reference
-9. **📈 Macro Evolution & AIRAC Diff**: Period-over-period traffic growth, `FRA` directness evolution, European weather-delay correlation, and AIRAC cycle diffing.
-10. **📖 Methodology, KPI & PBN Reference**: Full mathematical reference for all 21 ICAO/Eurocontrol KPIs, plus dedicated **PBN / RNAV vs. RNP Specifications & Operational Requirements** navigation guide.
+### 4. Longitudinal & Predictive Trends
+9. **📈 Longitudinal & Predictive Trends**:
+   - **Sub-tab 1: Multi-Period Timeline & Fleet Evolution**: Cross-sectional KPIs across all 7 archives with contemporary YoY cohort filtering (`2024-2025`) vs legacy baseline (`2016`).
+   - **Sub-tab 2: Year-over-Year (YoY) & Seasonality**: Pairwise matched seasonal benchmarking (`202402 ➔ 202502`, `202406 ➔ 202506`, `202410 ➔ 202510`) and 3-season elasticity curves.
+   - **Sub-tab 3: Predictive Airspace Saturation Forecaster**: Forward-looking sector capacity breach predictor and dynamic spatial density hotspot mapping.
+   - **Sub-tab 4: Airline Economics & Delay Contagion**: DOC cost breakdown, route charge avoidance detour detection, Single European Sky (SES) rate harmonization, airframe super-spreader flights, and period-wide repeat offender routes & operators.
+
+### 5. Strategic Analytics & Reference
+10. **📊 Macro Evolution & AIRAC Diff**: Period-over-period traffic growth, `FRA` directness evolution, European weather-delay correlation, and AIRAC cycle diffing.
+11. **📖 Methodology, KPI & PBN Reference**: Full mathematical reference for all 21 ICAO/Eurocontrol KPIs, plus dedicated **PBN / RNAV vs. RNP Specifications & Operational Requirements** navigation guide.
 
 ---
 

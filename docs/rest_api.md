@@ -139,3 +139,102 @@ flightml serve --host 127.0.0.1 --port 8000
 | `GET` | `/api/v1/twins/compare` | Benchmark most vs. least efficient twin flights on the same city pair and aircraft type. |
 | `GET` | `/api/v1/periods/compare` | Macro traffic growth, delay drift, and fleet modernization across archives. |
 | `GET` | `/api/v1/airac/diff` | Diff airway segments and FIR boundaries across contiguous AIRAC cycles. |
+
+---
+
+### 6. Longitudinal Trends, Airspace Forecasting, Behavioral Economics & Delay Contagion (`/api/v3`)
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/v3/longitudinal/timeline` | Multi-period historical metrics and fleet modernization trends across archives (`cohort=yoy|all`). |
+| `GET` | `/api/v3/longitudinal/compare` | Controlled Year-over-Year (YoY) delta benchmarking between matched seasonal archives. |
+| `GET` | `/api/v3/longitudinal/seasonality` | 3-season annual network decomposition (Winter Trough, Summer Peak, Autumn Shoulder) and elasticity. |
+| `GET`/`POST` | `/api/v3/predict/airspace` | Forward airspace sector capacity breach and variable-resolution spatial density hotspot forecasting. |
+| `GET` | `/api/v3/economics/flight-doc/{ectrl_id}` | Disaggregated Direct Operating Cost ($\text{DOC} = \text{Fuel } € + \text{Time/Crew } € + \text{CRCO Charges } €$). |
+| `GET` | `/api/v3/economics/avoidance-corridors` | Systematic network scanner for CRCO route charge avoidance detour corridors. |
+| `GET`/`POST` | `/api/v3/economics/simulate-harmonization` | Single European Sky (SES) unified European en-route flat-rate policy counterfactual simulation. |
+| `GET` | `/api/v3/delay/spreaders` | Airframe rotation delay super-spreader detection on a specific operating date. |
+| `GET` | `/api/v3/delay/repeat-offenders/routes` | Period-wide scan for chronic repeat offender city-pair routes triggering downstream delay spirals. |
+| `GET` | `/api/v3/delay/repeat-offenders/operators` | Period-wide carrier-level delay contagion metrics, infection multipliers, and reactionary costs (`€`). |
+| `GET`/`POST` | `/api/v3/sim/network-shock` | Systemic network disruption and delay propagation simulator for airport runway and FIR capacity cuts. |
+
+#### Synthetic Example: `GET /api/v3/longitudinal/compare?baseline=202410&target=202510`
+```json
+{
+  "period_baseline": "202410",
+  "period_target": "202510",
+  "season_label": "Autumn Shoulder",
+  "is_matched_season": true,
+  "year_gap": 1,
+  "total_flights_baseline": 891648,
+  "total_flights_target": 934141,
+  "total_flights_delta": 42493,
+  "total_flights_growth_pct": 4.77,
+  "daily_flights_baseline": 28762.8,
+  "daily_flights_target": 30133.6,
+  "daily_flights_growth_pct": 4.77,
+  "avg_arr_delay_baseline_min": 5.18,
+  "avg_arr_delay_target_min": 5.74,
+  "arr_delay_delta_min": 0.56,
+  "otp_15_baseline_pct": 83.9,
+  "otp_15_target_pct": 82.1,
+  "otp_15_delta_pct": -1.8,
+  "newgen_share_baseline_pct": 24.64,
+  "newgen_share_target_pct": 28.17,
+  "newgen_share_delta_pct": 3.53
+}
+```
+
+#### Synthetic Example: `GET /api/v3/economics/flight-doc/900104215?period=202510`
+```json
+{
+  "ectrl_id": 900104215,
+  "period": "202510",
+  "route": "EGLL ➔ LIRF",
+  "ac_type": "A320",
+  "ac_operator": "SYN",
+  "distance_nm": 780.4,
+  "flight_duration_min": 122.5,
+  "fuel_burn_kg": 4620.0,
+  "fuel_cost_eur": 2966.50,
+  "time_crew_cost_eur": 1732.50,
+  "crco_navigation_charges_eur": 1584.20,
+  "total_doc_eur": 6283.20,
+  "fuel_cost_share_pct": 47.2,
+  "time_cost_share_pct": 27.6,
+  "crco_cost_share_pct": 25.2,
+  "avoidance_incentive_ratio": 1.84
+}
+```
+
+#### Synthetic Example: `GET /api/v3/delay/repeat-offenders/routes?period=202510&top_n=2`
+```json
+{
+  "period": "202510",
+  "thresholds": {
+    "min_primary_delay_min": 25.0,
+    "min_propagated_delay_min": 10.0,
+    "min_incidents": 3
+  },
+  "repeat_offender_routes": [
+    {
+      "route": "EIDW ➔ EHAM",
+      "incident_count": 36,
+      "avg_primary_dep_delay_min": 48.6,
+      "total_downstream_legs_infected": 68,
+      "total_reactionary_delay_hours": 27.1,
+      "total_reactionary_cost_eur": 170625.0,
+      "top_operators": ["SYN", "EZY"]
+    },
+    {
+      "route": "EDDB ➔ LEPA",
+      "incident_count": 20,
+      "avg_primary_dep_delay_min": 57.5,
+      "total_downstream_legs_infected": 34,
+      "total_reactionary_delay_hours": 10.6,
+      "total_reactionary_cost_eur": 66780.0,
+      "top_operators": ["SYN"]
+    }
+  ]
+}
+```

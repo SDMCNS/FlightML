@@ -59,8 +59,12 @@ The platform operates across an indexed columnar Parquet corpus:
   - Implemented classical three-season network decomposition (Winter Trough, Summer Peak, Autumn Shoulder) via `LongitudinalEngine.decompose_seasonality(year)`.
   - Establishes seasonal scaling factors: measured the +40.9% daily flight surge between February and June 2024, +220.1% delay surge, and a 5.38x delay-to-demand elasticity.
   - Detects top surging leisure resort airports (e.g. Ibiza +351.7%, Antalya +340.8%, Menorca +277.3%) and surging Mediterranean FIRs (e.g. Athens FIR +285.2%).
-- [x] **Task 1.2: Matched Year-Over-Year (YoY) Differential Metrics**:
-  - Pairwise comparative pipelines: `202402` vs `202502`, `202406` vs `202506`, `202410` vs `202510` via `LongitudinalEngine.compare_yoy(baseline, target)`.
+- [x] **Task 1.2: Matched Year-Over-Year (YoY) Differential Metrics & Contemporary Cohorts**:
+  - Filtered contemporary multi-period archives (`202402`, `202406`, `202410`, `202502`, `202506`, `202510`) into strict continuous matching pairs via `get_yoy_capable_periods()` and `get_yoy_matching_pairs()`:
+    - `202402` ➔ `202502` (Winter Trough)
+    - `202406` ➔ `202506` (Summer Peak)
+    - `202410` ➔ `202510` (Autumn Shoulder)
+  - Isolates the `201611` archive as an independent 9-year historical baseline anchor rather than distorting 1-year CAGR growth trajectories.
   - Calculates key performance deltas:
     - Traffic volume growth rate (+4.77% in October 2024 ➔ 2025).
     - Mean arrival delay and on-time performance (OTP-15) deltas.
@@ -140,7 +144,12 @@ The platform operates across an indexed columnar Parquet corpus:
 - [x] **Task 5.3: Network Resilience & Disruption Simulator**:
   - Built `simulate_network_shock()` for airport runways and FIR airspace sectors.
   - Quantifies direct delayed flights, reactionary infected rotations, cumulative flight delay hours, passenger misconnections, and economic damage in € EUR.
-  - Production CLI commands `flightml delay-spreaders` and `flightml simulate-shock` added. Unit tests in `tests/test_delay_contagion_graph.py` (4/4 passing). Full test suite (84/84 passing).
+  - Production CLI commands `flightml delay-spreaders` and `flightml simulate-shock` added.
+- [x] **Task 5.4: Period-Wide Repeat Offender Route and Operator Contagion Detector**:
+  - Implemented high-performance DuckDB windowed rotation scans (`scan_repeat_offender_routes()` and `scan_repeat_offender_operators()`) operating in <0.20s across ~1,000,000 flights.
+  - Detects routes and airlines that repeatedly generate downstream reactionary delay spirals throughout a monthly period.
+  - Computes contagion incidents, downstream delay hours, infection multipliers, and network economic impact (€105/min standard).
+  - Production CLI command `flightml delay-offenders` (`--type routes` or `--type operators`) added. Unit tests in `tests/test_delay_contagion_graph.py` (6/6 passing). Full test suite (102/102 passing).
 
 ---
 
@@ -153,22 +162,25 @@ The platform operates across an indexed columnar Parquet corpus:
   - Sub-tab 2: `🔄 Year-over-Year (YoY) & Seasonality` with pairwise period delta benchmarking (daily volume, arrival delay, distance, CO₂, fleet penetration) and 3-season surge curves (Winter Feb vs Summer Jun vs Autumn Oct) identifying top leisure destination surges.
 - [x] **Task 6.2: Side-by-Side Period Comparison Tool & Policy Economics**:
   - Built pairwise YoY comparative analyzer identifying top expanding and contracting airline carriers and aircraft models.
-  - Sub-tab 4: `💶 Airline Economics & Delay Contagion` integrating Direct Operating Cost (DOC) breakdown, route charge avoidance detour detection, Single European Sky (SES) rate harmonization impact simulation, and airframe delay contagion super-spreader detection.
+  - Sub-tab 4: `💶 Airline Economics & Delay Contagion` integrating Direct Operating Cost (DOC) breakdown, route charge avoidance detour detection, Single European Sky (SES) rate harmonization impact simulation, airframe delay contagion super-spreader detection, and period-wide repeat offender route/operator analytics.
+  - Added interactive calendar date picker to Scenario F (Ground Delay Program / ATFM Slot Optimizer) bounded dynamically to the dataset's operational flight dates (`get_dataset_date_bounds()`).
 - [x] **Task 6.3: High-Resolution Grid Map & Bottleneck Forecasting Controls**:
   - Sub-tab 3: `🔮 Predictive Airspace Saturation Forecaster` with interactive sliders for forecast horizon year (2026-2028), season (summer/winter/autumn), compound growth rate (1.0%–8.0%), spatial grid resolution (0.5°, 1.0°, 2.0°, 5.0°), and sector capacity threshold.
   - Identifies forward sector capacity breaches and top congested spatial density hotspots.
 - [x] **Task 6.4: FastAPI v3 Endpoints**:
   - Implemented REST API endpoints in `flightml/api/app.py`:
     - `GET /api/v3/longitudinal/timeline`: Multi-period historical metrics & fleet shares.
-    - `GET /api/v3/longitudinal/compare`: Pairwise YoY delta benchmarking.
+    - `GET /api/v3/longitudinal/compare`: Pairwise YoY delta benchmarking with cohort controls.
     - `GET /api/v3/longitudinal/seasonality`: 3-season traffic & delay surge decomposition.
     - `POST /api/v3/predict/airspace`: Sector capacity breach and spatial saturation forecasting.
     - `GET /api/v3/economics/flight-doc/{ectrl_id}`: Flight DOC component breakdown (€ EUR).
     - `GET /api/v3/economics/avoidance-corridors`: Detection of route charge avoidance detours.
     - `POST /api/v3/economics/simulate-harmonization`: European flat rate counterfactual simulation.
     - `GET /api/v3/delay/spreaders`: Airframe rotation delay super-spreader detection.
+    - `GET /api/v3/delay/repeat-offenders/routes`: Chronic city-pair delay contagion repeat offenders.
+    - `GET /api/v3/delay/repeat-offenders/operators`: Carrier-level downstream reactionary delay multipliers.
     - `POST /api/v3/sim/network-shock`: Runway and sector network resilience shock simulator.
-  - Full automated test suite in `tests/test_api_v3.py` (8/8 passing).
+  - Full automated test suite in `tests/test_api_v3.py` (10/10 passing).
 
 ---
 

@@ -172,7 +172,108 @@ for s in swaps.swaps[:5]:
         f"{s.delayed_tail_reg} ⇄ {s.donor_tail_reg} | Saved {s.net_delay_saved_min:.0f} min (€{s.estimated_cost_saved_eur:,.0f} EUR)"
     )
 
-# 2. Ration-by-Schedule Ground Delay Program (GDP) slot optimization
-gdp = optimize_ground_delay_program(ds, airport_icao="EGLL", declared_aar_per_hour=36)
-print(f"Slotted Flights: {gdp.slotted_flights_count} | Net Fuel Cost Saved: €{gdp.net_fuel_cost_saved_eur:,.2f} EUR")
+# 2. Ration-by-Schedule Ground Delay Program (GDP) slot optimization (with date selection)
+gdp = optimize_ground_delay_program(
+    ds,
+    target_airport="EGLL",
+    program_date="2025-10-15",
+    start_hour=8,
+    end_hour=14,
+    degraded_capacity_rate_per_hr=36,
+)
+print(f"Regulated Flights: {gdp.total_flights_regulated:,} | Net Fuel Cost Saved: €{gdp.total_fuel_cost_saved_eur:,.2f} EUR")
+```
+
+---
+
+## 8. Longitudinal Intelligence, Forecasting, Behavioral Economics & Delay Contagion (`v3`)
+
+### 1. Multi-Period Longitudinal & Contemporary YoY Comparison
+```python
+from flightml.eval.longitudinal import LongitudinalEngine
+
+engine = LongitudinalEngine()
+
+# Multi-period timeline filtered to contemporary YoY cohort (2024-2025)
+timeline_df = engine.get_timeline_dataframe(cohort="yoy")
+print(timeline_df[["period_id", "season", "daily_flights", "avg_arr_delay_min", "newgen_share_pct"]])
+
+# 3-season decomposition (Winter Trough, Summer Peak, Autumn Shoulder)
+decomp = engine.decompose_seasonality(year=2024)
+print(f"Delay Surge Elasticity: {decomp.delay_demand_elasticity:.2f}x (Summer surge: +{decomp.summer_surge_pct:.1f}%)")
+
+# Controlled YoY comparison between matched seasons (Autumn 2024 vs Autumn 2025)
+yoy = engine.compare_yoy(baseline_period="202410", target_period="202510")
+print(f"YoY Growth: {yoy.daily_flights_growth_pct:+.2f}% | NewGen Fleet Penetration: {yoy.newgen_share_delta_pct:+.2f}%")
+```
+
+### 2. Predictive Airspace Saturation & Bottleneck Forecaster
+```python
+from flightml.models.airspace_forecaster import AirspaceForecaster
+
+forecaster = AirspaceForecaster()
+forecast = forecaster.generate_comprehensive_forecast(
+    forecast_year=2026,
+    season="summer",
+    growth_scenario_pct=3.5,
+    grid_size_deg=1.0,
+)
+print(f"Network Risk Index: {forecast.network_atfm_risk_index:.1f}/10.0")
+print(f"Capacity Breaches Projected: {forecast.breached_sectors_count} sectors")
+for b in forecast.top_capacity_breaches[:3]:
+    print(f"  Sector {b.sector_id}: {b.projected_peak_hourly}/hr vs nominal {b.nominal_capacity_hourly}/hr ({b.projected_saturation_pct:.1f}%)")
+```
+
+### 3. Airline Behavioral Economics & Direct Operating Cost (DOC)
+```python
+from flightml.eval.airline_economics import AirlineEconomicsEngine
+
+econ_engine = AirlineEconomicsEngine(ds)
+
+# 1. Evaluate Direct Operating Cost (DOC) component allocation for a flight
+doc = econ_engine.evaluate_flight_doc(ectrl_id=900104215, cost_of_time_eur_per_hour=850.0)
+print(f"Total DOC: €{doc.total_doc_eur:,.2f} EUR (Fuel: {doc.fuel_cost_share_pct:.1f}%, CRCO: {doc.crco_cost_share_pct:.1f}%)")
+print(f"Route Charge Avoidance Incentive: €{doc.avoidance_incentive_ratio:.2f}/NM")
+
+# 2. Scan network for FIR charge avoidance detour corridors
+detours = econ_engine.scan_network_route_charge_avoidance(min_corridor_flights=50, top_n=5)
+for d in detours:
+    print(f"Corridor {d.route}: {d.avoidance_share_pct:.1f}% detours saving €{d.mean_crco_savings_eur:.2f} fee (+{d.mean_extra_distance_nm:.1f} NM)")
+
+# 3. Simulate Single European Sky (SES) unified flat-rate policy
+ses = econ_engine.simulate_harmonized_eurocontrol_rate(harmonized_rate_eur=72.50)
+print(f"Harmonized Rate: €{ses.harmonized_unit_rate_eur:.2f}/SU | Eliminated Detours: {ses.eliminated_detour_flights:,} flights/yr")
+print(f"Annual Airline Savings: €{ses.estimated_annual_airline_cost_saved_eur:,.2f} EUR")
+```
+
+### 4. Delay Contagion Graph, Super-Spreaders & Period-Wide Repeat Offenders
+```python
+from flightml.models.delay_contagion_graph import DelayContagionGraphEngine
+
+contagion_engine = DelayContagionGraphEngine(ds)
+
+# 1. Detect single-date delay super-spreader flights
+spreaders = contagion_engine.identify_super_spreaders(date_str="2025-10-15", min_primary_delay_min=20.0, top_n=5)
+for s in spreaders:
+    print(f"Spreader {s.ectrl_id} ({s.ac_reg}): +{s.primary_delay_min:.0f}m delay infected {s.infected_downstream_legs} legs (€{s.downstream_economic_cost_eur:,.0f} EUR)")
+
+# 2. Scan full monthly period for chronic repeat offender routes
+offender_routes = contagion_engine.scan_repeat_offender_routes(min_primary_delay_min=25.0, min_incidents=3, top_n=5)
+for r in offender_routes:
+    print(f"Route {r.route}: {r.incident_count} contagion days, {r.total_downstream_legs_infected} legs infected (€{r.total_reactionary_cost_eur:,.0f} EUR)")
+
+# 3. Scan full monthly period for repeat offender airline operators
+offender_ops = contagion_engine.scan_repeat_offender_operators(min_primary_delay_min=25.0, top_n=5)
+for o in offender_ops:
+    print(f"Airline {o.operator}: {o.total_root_spreader_flights} spreader flights, {o.downstream_infection_multiplier:.2f}x multiplier (€{o.total_reactionary_cost_eur:,.0f} EUR)")
+
+# 4. Simulate network capacity shock
+shock = contagion_engine.simulate_network_shock(
+    disruption_target="EGLL",
+    target_type="AIRPORT",
+    duration_hours=2.0,
+    capacity_cut_pct=50.0,
+    date_str="2025-10-15",
+)
+print(f"Shock Result: {shock.total_impacted_flights:,} flights impacted | Cumulative Delay: {shock.total_delay_hours_incurred:.1f} hrs (€{shock.total_economic_delay_cost_eur:,.2f} EUR)")
 ```

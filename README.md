@@ -41,8 +41,9 @@ FlightML fuses multi-gigabyte 4D trajectories, global aeronautical navigation da
 - **📏 ICAO GANP & Eurocontrol PRU KPI Suite**: Complete implementation of **KPI02** (Additional Taxi-Out Time `ATOT`), **KPI04** (`KEP` Filed En-Route Extension), **KPI05** (`KEA` Actual En-Route Extension & Tactical ATC Attribution), **KPI08** (40 nm `ASMA` Terminal Transit Time), **KPI17** (Continuous Climb Operations `CCO`), and **KPI19** (Continuous Descent Operations `CDO` & Cruise Level-Capping).
 - **🛣️ Free Route Airspace (`FRA`) & VHF Comms Workload**: Snaps 4D trajectories against published ATS airways and 5-letter fixes to quantify `FRA / DCT` directness vs. fixed airway adherence, and models ATC controller-pilot VHF voice channel occupancy (`%`).
 - **🌱 OpenAP Fuel Burn, ICAO EDB v32B LTO Emissions & Contrail Physics**: Quantifies trajectory detour fuel waste, terminal holding penalties, ground taxi queue $\text{NO}_x / \text{CO} / \text{HC} / \text{nvPM}$ soot emissions, and **Schmidt-Appleman persistent contrail (`ISSR`)** radiative forcing (`CO₂e`).
-- **💶 Eurocontrol CRCO Route Charges & Weekly Jet-A Spot Pricing (`€ EUR`)**: Computes exact FIR-by-FIR Service Units (`SU`) and en-route navigation fees (`€`), weekly EIA/Platts Jet-A spot fuel costs in Euros (`€`), and Corridor Route-Charge Avoidance vs. Fuel Burn trade-offs.
-- **🔮 Prescriptive Operations Research & Stress Testing**: Includes **Network-Wide Hub Tail-Swap Recovery (`Tail A ⇄ Tail B`)**, **Ration-by-Schedule Ground Delay Program (`GDP` / ATFM Slot) Optimization**, **Turnaround Buffer Sensitivity**, **Runway Braking & Crosswind Collapse**, and **Multi-Operator Fleet Shock Contagion Curves**.
+- **💶 Eurocontrol CRCO Route Charges & Weekly Jet-A Spot Pricing (`€ EUR`)**: Computes exact FIR-by-FIR Service Units (`SU`) and en-route navigation fees (`€`), weekly EIA/Platts Jet-A spot fuel costs in Euros (`€`), Direct Operating Cost (DOC) allocation, and Corridor Route-Charge Avoidance vs. Fuel Burn trade-offs.
+- **🔮 Prescriptive Operations Research & Stress Testing**: Includes **Network-Wide Hub Tail-Swap Recovery (`Tail A ⇄ Tail B`)**, **Ration-by-Schedule Ground Delay Program (`GDP` / ATFM Slot) Optimization** with date bounds, **Turnaround Buffer Sensitivity**, and **Multi-Operator Fleet Shock Contagion Curves**.
+- **📈 Multi-Period Longitudinal Intelligence & Airspace Forecasting**: Contemporary Year-over-Year (YoY) cohort matching across 7 historical archives (`201611`, `202402`, `202406`, `202410`, `202502`, `202506`, `202510`), 3-season demand/delay elasticity curves, forward sector capacity breach prediction, and **Period-Wide Repeat Offender Route and Operator Delay Contagion Detection**.
 
 ---
 
@@ -225,17 +226,34 @@ flightml airspace-conflicts --period 202510 --hour 10 --sep-nm 5.0
 └──────────┴───────────────────────────┴───────────────────────────┴──────────┴──────────┴──────────────┘
 ```
 
+### 6. Delay Contagion & Repeat Offender Routes (`flightml delay-offenders`)
+
+```bash
+flightml delay-offenders --period 202510 --type routes --top 3
+```
+
+```text
+  City-Pair Routes Triggering Systemic Downstream Reactionary Delay Contagion (Synthetic Sample)
+┌───────────┬────────────────────┬───────────────────┬──────────────────────────┬───────────────────┬─────────────────────┐
+│ Route     │ Contagion Incident │ Avg Initial Delay │ Infected Downstream Legs │ Reactionary Delay │ Reactionary Cost €  │
+├───────────┼────────────────────┼───────────────────┼──────────────────────────┼───────────────────┼─────────────────────┤
+│ EIDW-EHAM │ 36 days            │ 48.6 min          │ 68 legs                  │ 27.1 hrs          │ €170,625 EUR        │
+│ EDDB-LEPA │ 20 days            │ 57.5 min          │ 34 legs                  │ 10.6 hrs          │  €66,780 EUR        │
+│ EGLL-EDDF │ 18 days            │ 42.1 min          │ 31 legs                  │  9.4 hrs          │  €59,220 EUR        │
+└───────────┴────────────────────┴───────────────────┴──────────────────────────┴───────────────────┴─────────────────────┘
+```
+
 ---
 
 ## 🖥️ Interactive Simulation Workbench (`flightml dashboard`)
 
-Launch the streamlined, 4-tier simulation workbench:
+Launch the streamlined, 5-category simulation workbench:
 
 ```bash
 flightml dashboard
 ```
 
-Opens at **`http://localhost:8501`** organized into **4 primary operational categories** across 10 specialized views:
+Opens at **`http://localhost:8501`** organized into **5 primary operational categories** across 11 specialized views:
 
 ### 1. Airspace & Trajectories
 1. 🌐 **Network Overview & Airspace Map**: Interactive **$5^\circ \times 5^\circ$ European Airspace Hourly Saturation & Complexity Map** (period average by hour of day `00:00`–`23:00 UTC`), FIR & AUA (`TMA`/`CTA`/`UTA`) saturation, `KPI02 ATOT` surface taxi delays, and VHF radio occupancy.
@@ -252,7 +270,7 @@ Opens at **`http://localhost:8501`** organized into **4 primary operational cate
    - **Scenario C**: Multi-Operator Fleet Operational Shock Contagion Curves (`+15m` to `+90m`)
    - **Scenario D**: Network-Wide Prescriptive Hub Tail-Swap Recovery Optimizer (`Tail A ⇄ Tail B`, `€`)
    - **Scenario E**: 4D Co-Altitude Airspace Proximity & $5^\circ \times 5^\circ$ Complexity Map Scanner
-   - **Scenario F**: Ration-by-Schedule Ground Delay Program (`GDP` / ATFM Slot) Optimizer (`€`)
+   - **Scenario F**: Ration-by-Schedule Ground Delay Program (`GDP` / ATFM Slot) Optimizer (`€`) with date selection
 
 ### 3. Economics, Fuel & Climate
 8. 🌱 **Fuel, Carbon & Route Charges (`€`)**:
@@ -261,9 +279,16 @@ Opens at **`http://localhost:8501`** organized into **4 primary operational cate
    - **Eurocontrol CRCO Route Charges & DOC**: FIR-by-FIR navigation service units (`SU`), unit rates, direct flight operating cost (`Fuel € + CRCO Navigation €`), and historical spot vs. modern into-plane price comparisons.
    - **OpenAP Multi-Dimensional Emissions & LTO**: En-route fuel burn, terminal holding burn, and `TAXI_OUT` ICAO Engine Emissions Databank (EDB v32B) idle pollutants ($\text{NO}_x, \text{CO}, \text{nvPM}$).
 
-### 4. Strategic Analytics & Reference
-9. 📈 **Macro Evolution & AIRAC Diff**: Period-over-period traffic growth, `FRA` directness evolution, European weather-delay correlation (IFR & wind), and AIRAC cycle airway/FIR diffing.
-10. 📖 **Methodology, KPI & PBN Reference**: Full mathematical reference for all 21 ICAO/Eurocontrol KPIs, plus dedicated **PBN / RNAV vs. RNP Specifications & Operational Requirements** navigation guide.
+### 4. Longitudinal & Predictive Trends
+9. 📈 **Longitudinal & Predictive Trends**:
+   - **Multi-Period Timeline & Fleet Evolution**: Cross-sectional KPIs across all 7 archives with contemporary YoY cohort filtering (`2024-2025`) vs legacy baseline (`2016`).
+   - **Year-over-Year (YoY) & Seasonality**: Pairwise matched seasonal benchmarking (`202402 ➔ 202502`, `202406 ➔ 202506`, `202410 ➔ 202510`) and 3-season elasticity curves.
+   - **Predictive Airspace Saturation Forecaster**: Forward-looking sector capacity breach predictor and dynamic spatial density hotspot mapping.
+   - **Airline Economics & Delay Contagion**: DOC cost breakdown, route charge avoidance detour detection, Single European Sky (SES) rate harmonization, airframe super-spreader flights, and period-wide repeat offender routes & operators.
+
+### 5. Strategic Analytics & Reference
+10. 📊 **Macro Evolution & AIRAC Diff**: Period-over-period traffic growth, `FRA` directness evolution, European weather-delay correlation (IFR & wind), and AIRAC cycle airway/FIR diffing.
+11. 📖 **Methodology, KPI & PBN Reference**: Full mathematical reference for all 21 ICAO/Eurocontrol KPIs, plus dedicated **PBN / RNAV vs. RNP Specifications & Operational Requirements** navigation guide.
 
 ---
 
@@ -273,7 +298,9 @@ Opens at **`http://localhost:8501`** organized into **4 primary operational cate
 flightml serve --port 8000
 ```
 
-- **Base URL**: `http://localhost:8000/api/v1`
+- **Base URLs**:
+  - Operational & Tactical API: `http://localhost:8000/api/v1`
+  - Longitudinal, Predictive & Contagion API: `http://localhost:8000/api/v3`
 - **Interactive Swagger UI**: `http://localhost:8000/docs`
 - **Redoc Documentation**: `http://localhost:8000/redoc`
 
@@ -285,7 +312,7 @@ flightml serve --port 8000
 pytest tests -v
 ```
 
-All 56 unit and integration tests pass cleanly.
+All 102 unit and integration tests pass cleanly.
 
 ---
 

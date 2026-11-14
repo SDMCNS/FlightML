@@ -124,7 +124,14 @@ where $D_{i,\text{km}}$ is the great-circle entry-to-exit distance in charging z
 
 ---
 
-## 🔮 Prescriptive Operations Research Models
+## 🔮 Prescriptive Operations Research & Behavioral Economics Models
 
 - **Network-Wide Hub Tail-Swap Optimizer**: Evaluates same-operator, same-aircraft-type turnaround pairs (`Delayed Tail A ⇄ Donor Tail B`) on the ground simultaneously at the same hub and recommends conflict-free swaps that minimize total reactionary delay minutes and Euro (`€88/min`) delay costs.
-- **Ration-by-Schedule Ground Delay Program (`GDP`) Optimizer**: Allocates arrival slots under an Airport Arrival Rate (`AAR`) cap to shift high-burn airborne terminal holding stacks onto the departure ground at 7% idle/gate burn.
+- **Ration-by-Schedule Ground Delay Program (`GDP`) Optimizer**: Allocates arrival slots under an Airport Arrival Rate (`AAR`) cap to shift high-burn airborne terminal holding stacks onto the departure ground at 7% idle/gate burn. Supports exact date windowing dynamically bounded to dataset dates (`get_dataset_date_bounds()`).
+- **Contemporary YoY Cohort Filtering**: Enforces strict seasonal pair matching (`202402 ➔ 202502`, `202406 ➔ 202506`, `202410 ➔ 202510`) to eliminate seasonal leisure distortions and isolates legacy 2016 archives as historical baseline anchors rather than blending them into 1-year CAGR growth trajectories.
+- **Airspace Sector Capacity Breach Forecaster**: Blends compound secular traffic growth scenarios with historical sector elasticity to project peak hourly flight counts, classifying sectors into `NOMINAL`, `ELEVATED`, `SEVERE`, and `BREACH` regimes.
+- **Airline Behavioral Economics & Total Direct Operating Cost (DOC)**:
+  $$\text{DOC} = C_{\text{fuel}} \cdot m_{\text{fuel}} + C_{\text{time}} \cdot t_{\text{flight}} + \sum_{k} \left( \frac{d_k}{100} \cdot \sqrt{\frac{\text{MTOW}}{50}} \cdot U_k \right)$$
+  Calculates the avoidance incentive ratio (€ saved per extra nautical mile flown) to model airline decisions to dogleg around expensive national FIRs.
+- **Delay Contagion Graph & Repeat Offender Scanner**:
+  Reconstructs tail-specific flight rotations $(L_1 \to \Delta_{\text{turn}} \to L_2 \to \dots \to L_n)$ in DuckDB windowed queries. Identifies single-date super-spreader root flights and period-wide chronic repeat offender routes and operators that systematically export delays across the European network (€105/min standard delay cost).

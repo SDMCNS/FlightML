@@ -247,7 +247,229 @@ flightml tail-swaps --period 202510
 ```
 
 ### `flightml gdp`
-Run Ration-by-Schedule (`RBS`) Ground Delay Program slot optimization (`€ EUR` fuel savings).
+Run Ration-by-Schedule (`RBS`) Ground Delay Program slot optimization (`€ EUR` fuel savings) with an optional custom regulated arrival date.
 ```bash
-flightml gdp --airport EGLL --aar 36 --period 202510
+flightml gdp --airport EGLL --aar 36 --date 2025-10-15 --period 202510
+```
+
+**Synthetic Output Table:**
+```text
+Ground Delay Program (GDP) Analysis: EGLL (Rate: 36 movements/hr)
+              GDP Optimization Impact (2025-10-15 08:00 to 2025-10-15 14:00)              
+┌──────────────────────────────────┬─────────────────────────────────────────────────────┐
+│ Metric                           │ Value                                               │
+├──────────────────────────────────┼─────────────────────────────────────────────────────┤
+│ Total Flights Regulated          │ 214                                                 │
+│ Ground Delay Assigned (at Origin)│ 2,420.0 min                                         │
+│ Airborne Holding Delay Prevented │ 2,420.0 min                                         │
+│ Total Jet-A Fuel Saved           │ 77,440.0 kg (77.4 metric tons)                      │
+│ Total CO₂ Emissions Prevented    │ 244,710.4 kg (244.7 metric tons)                    │
+│ Direct Fuel Cost Saved           │ €49,724.22 EUR                                      │
+└──────────────────────────────────┴─────────────────────────────────────────────────────┘
+```
+
+---
+
+## 8. Longitudinal Trends, Predictive Airspace, Airline Behavioral Economics & Delay Contagion (`v3`)
+
+### `flightml longitudinal-timeline`
+Display European airspace timeline & multi-period trends across all ingested archives (filtered by contemporary YoY cohort or historical baseline).
+```bash
+flightml longitudinal-timeline
+```
+
+**Synthetic Output Table:**
+```text
+                    European ATM Longitudinal Macro Evolution (Synthetic Sample)
+┌─────────┬──────────────────────┬──────┬───────────────┬───────────────┬───────────┬────────────┬──────────────┐
+│ Period  │ Season / Archetype   │ Days │ Total Flights │ Daily Flights │ Arr Delay │ OTP (≤15m) │ NewGen Share │
+├─────────┼──────────────────────┼──────┼───────────────┼───────────────┼───────────┼────────────┼──────────────┤
+│ 201611  │ Historical Baseline  │   30 │       697,326 │       23,244.2│  4.12 min │      85.4% │         1.5% │
+│ 202402  │ Winter Trough        │   29 │       641,952 │       22,136.3│  3.84 min │      87.2% │        21.8% │
+│ 202406  │ Summer Peak          │   30 │       935,934 │       31,197.8│ 12.31 min │      68.4% │        23.4% │
+│ 202410  │ Autumn Shoulder      │   31 │       891,648 │       28,762.8│  5.18 min │      83.9% │        24.6% │
+│ 202502  │ Winter Trough        │   28 │       656,458 │       23,444.9│  4.02 min │      86.5% │        25.7% │
+│ 202506  │ Summer Peak          │   30 │       957,457 │       31,915.2│ 13.85 min │      65.1% │        27.2% │
+│ 202510  │ Autumn Shoulder      │   31 │       934,141 │       30,133.6│  5.74 min │      82.1% │        28.2% │
+└─────────┴──────────────────────┴──────┴───────────────┴───────────────┴───────────┴────────────┴──────────────┘
+```
+
+### `flightml seasonality`
+Analyze 3-season annual network decomposition (Winter Trough, Summer Peak, Autumn Shoulder) and delay-to-demand elasticity.
+```bash
+flightml seasonality --year 2024
+```
+
+**Synthetic Output Table:**
+```text
+Top Surging Leisure Airports in Summer 2024 (vs Winter) (Synthetic Sample)
+┌──────────────┬────────────────┬────────────────┬───────────────┬──────────────────┐
+│ Airport ICAO │ Winter Flights │ Summer Flights │ Volume Delta  │ Summer Surge (%) │
+├──────────────┼────────────────┼────────────────┼───────────────┼──────────────────┤
+│ LEIB (Ibiza) │          1,840 │          8,312 │        +6,472 │          +351.7% │
+│ LTAI (Antalya│          2,450 │         10,800 │        +8,350 │          +340.8% │
+│ LEMH (Menorca│          1,120 │          4,225 │        +3,105 │          +277.2% │
+│ LGIR (Herakl.│          1,950 │          7,150 │        +5,200 │          +266.7% │
+│ LGKO (Kos)   │            890 │          3,120 │        +2,230 │          +250.6% │
+└──────────────┴────────────────┴────────────────┴───────────────┴──────────────────┘
+```
+
+### `flightml compare-yoy`
+Conduct controlled Year-over-Year (YoY) comparative analysis between matched seasonal archives (`202402 ➔ 202502`, `202406 ➔ 202506`, `202410 ➔ 202510`).
+```bash
+flightml compare-yoy --baseline 202410 --target 202510
+```
+
+**Synthetic Output Table:**
+```text
+           Macro Performance & Efficiency Comparison (YoY 202410 ➔ 202510)
+┌───────────────────────────┬───────────────────┬──────────────────┬──────────────────────┐
+│ Indicator                 │ 202410 (Baseline) │ 202510 (Target)  │ YoY Evolution        │
+├───────────────────────────┼───────────────────┼──────────────────┼──────────────────────┤
+│ Total Flights             │ 891,648           │ 934,141          │ +42,493 (+4.77%)     │
+│ Daily Flight Rate         │ 28,762.8          │ 30,133.6         │ +1,370.8 (+4.77%)    │
+│ Mean Arrival Delay        │ 5.18 min          │ 5.74 min         │ +0.56 min            │
+│ On-Time (OTP-15)          │ 83.9%             │ 82.1%            │ -1.8%                │
+│ New-Gen Fleet Penetration │ 24.64%            │ 28.17%           │ +3.53%               │
+└───────────────────────────┴───────────────────┴──────────────────┴──────────────────────┘
+```
+
+### `flightml forecast-airspace`
+Predict European airspace saturation, sector bottlenecks, and capacity breaches for future peak seasons.
+```bash
+flightml forecast-airspace --year 2026 --season summer --growth 3.5 --grid 1.0
+```
+
+**Synthetic Output Table:**
+```text
+         Projected Critical Airspace Sector Capacity Breaches (2026, Synthetic)
+┌──────────────────┬─────────────┬───────────┬───────────┬─────────────────┬──────────────┬───────────────────────┐
+│ Sector / FIR ID  │ Nominal Cap │ Hist Peak │ Proj Peak │ Utilization (%) │ Breach Level │ Est. Daily ATFM Delay │
+├──────────────────┼─────────────┼───────────┼───────────┼─────────────────┼──────────────┼───────────────────────┤
+│ EDUUUIR (Rhine)  │      140/hr │    138/hr │    152/hr │          108.6% │ BREACH       │             3,850 min │
+│ LFFFFIR (Paris)  │      130/hr │    126/hr │    141/hr │          108.5% │ BREACH       │             3,420 min │
+│ EGTTFIR (London) │      150/hr │    144/hr │    159/hr │          106.0% │ BREACH       │             3,110 min │
+│ EDMMFIR (Munich) │      110/hr │    105/hr │    116/hr │          105.5% │ BREACH       │             2,480 min │
+│ LIRRFIR (Rome)   │      100/hr │     98/hr │    107/hr │          107.0% │ SEVERE       │             1,950 min │
+└──────────────────┴─────────────┴───────────┴───────────┴─────────────────┴──────────────┴───────────────────────┘
+```
+
+### `flightml flight-doc <ectrl_id>`
+Evaluate Total Direct Operating Cost ($\text{DOC} = \text{Fuel } € + \text{Crew/Time } € + \text{CRCO Charges } €$) and route charge avoidance incentive ratio.
+```bash
+flightml flight-doc 900104215 --period 202510 --time-cost 850.0
+```
+
+**Synthetic Output Table:**
+```text
+                    Direct Operating Cost (€ EUR) Allocation (Synthetic Sample)
+┌───────────────────────────────────┬───────────────┬────────────────┬─────────────────────────────────────────┐
+│ Cost Component                    │  Cost (€ EUR) │  DOC Share (%) │ Economic Operational Driver             │
+├───────────────────────────────────┼───────────────┼────────────────┼─────────────────────────────────────────┤
+│ 1. Jet-A Fuel Burn Cost           │  €2,966.50    │          47.2% │ 4,620.0 kg Jet-A burned                 │
+│ 2. Flight Time & Crew Cost        │  €1,732.50    │          27.6% │ 2.04 flight hours @ €850/hr             │
+│ 3. Eurocontrol CRCO Route Charges │  €1,584.20    │          25.2% │ En-route navigation service charges     │
+│ Total Direct Operating Cost       │  €6,283.20    │         100.0% │ Avoidance Incentive Ratio: €1.84/NM     │
+└───────────────────────────────────┴───────────────┴────────────────┴─────────────────────────────────────────┘
+```
+
+### `flightml scan-avoidance`
+Scan European network city pairs for systematic FIR route charge avoidance detours.
+```bash
+flightml scan-avoidance --period 202510 --min-flights 50 --detour-nm 15.0 --top 5
+```
+
+**Synthetic Output Table:**
+```text
+                 Detected Route Charge Avoidance Corridors (Synthetic Sample)
+┌──────────┬──────────┬─────────┬───────────┬────────────┬───────────┬───────────┬─────────────┐
+│ Corridor │ Analyzed │ Detours │ Share (%) │ Extra Dist │ Fee Saved │ Extra CO₂ │ Avoided FIR │
+├──────────┼──────────┼─────────┼───────────┼────────────┼───────────┼───────────┼─────────────┤
+│ EGLL-LIRF│      480 │     142 │     29.6% │   +28.4 NM │   €148.20 │   +295 kg │ LSAS (Swiss)│
+│ EHAM-LEMD│      390 │      98 │     25.1% │   +22.1 NM │   €112.50 │   +228 kg │ LFFF (Paris)│
+│ EDDB-LEPA│      310 │      64 │     20.6% │   +19.8 NM │    €86.40 │   +192 kg │ LFRR (Brest)│
+│ EBBR-LEBL│      285 │      52 │     18.2% │   +18.2 NM │    €74.80 │   +174 kg │ LFFF (Paris)│
+│ EGKK-AGKK│      190 │      28 │     14.7% │   +16.5 NM │    €62.10 │   +158 kg │ EISN (Shan.)│
+└──────────┴──────────┴─────────┴───────────┴────────────┴───────────┴───────────┴─────────────┘
+```
+
+### `flightml simulate-harmonization`
+Simulate Single European Sky (SES) unified CRCO en-route navigation flat-rate policy impact.
+```bash
+flightml simulate-harmonization --period 202510 --rate 72.50
+```
+
+**Synthetic Output Table:**
+```text
+Single European Sky (SES) Harmonized Rate Policy Simulation (Synthetic Sample)
+Analyzed Period: 202510 | Harmonized Unit Rate: €72.50 / SU
+Eliminated Detour Flights: 635,000 flights/yr | Annual Fuel Saved: 232,000 tonnes Jet-A
+Annual CO₂ Mitigated: 733,120 tonnes CO₂ | Airline Net Direct Cost Benefit: €248,500,000.00 EUR
+```
+
+### `flightml delay-spreaders`
+Identify super-spreader flights where morning departure delays infected downstream aircraft rotations on a given date.
+```bash
+flightml delay-spreaders --period 202510 --date 2025-10-15 --min-delay 20.0 --top 3
+```
+
+**Synthetic Output Table:**
+```text
+      Flights Generating Severe Downstream Reactionary Delay Contagion (Synthetic Sample)
+┌──────────┬─────────────────┬────────────┬───────────────┬───────────────┬──────────────────┬─────────────────┬──────────────────────┐
+│ Flight ID│ Tail / Airline  │ Origin Hub │ Initial Delay │ Infected Legs │ Downstream Delay │ Economic Cost € │ Infected Destination │
+├──────────┼─────────────────┼────────────┼───────────────┼───────────────┼──────────────────┼─────────────────┼──────────────────────┤
+│ 900104215│ G-SYNA (SYN)    │ EGLL ➔ EHAM│       +52 min │        3 legs │          4.8 hrs │     €30,240 EUR │ EHAM, EDDF, LEBL     │
+│ 900112640│ EI-SYNB (SYN)   │ EIDW ➔ EGSS│       +46 min │        3 legs │          4.1 hrs │     €25,830 EUR │ EGSS, LEMD, LFPG     │
+│ 900119004│ D-SYNE (SYN)    │ EDDF ➔ LIRF│       +38 min │        2 legs │          2.9 hrs │     €18,270 EUR │ LIRF, LGAV           │
+└──────────┴─────────────────┴────────────┴───────────────┴───────────────┴──────────────────┴─────────────────┴──────────────────────┘
+```
+
+### `flightml delay-offenders`
+Scan an entire reporting period for chronic repeat offender routes and operators causing systemic delay contagion.
+```bash
+# Repeat offender routes
+flightml delay-offenders --period 202510 --type routes --top 3
+
+# Repeat offender airline operators
+flightml delay-offenders --period 202510 --type operators --top 3
+```
+
+**Synthetic Output Table (`--type routes`):**
+```text
+  City-Pair Routes Triggering Systemic Downstream Reactionary Delay Contagion (Synthetic Sample)
+┌───────────┬────────────────────┬───────────────────┬──────────────────────────┬───────────────────┬─────────────────────┐
+│ Route     │ Contagion Incident │ Avg Initial Delay │ Infected Downstream Legs │ Reactionary Delay │ Reactionary Cost €  │
+├───────────┼────────────────────┼───────────────────┼──────────────────────────┼───────────────────┼─────────────────────┤
+│ EIDW-EHAM │ 36 days            │ 48.6 min          │ 68 legs                  │ 27.1 hrs          │ €170,625 EUR        │
+│ EDDB-LEPA │ 20 days            │ 57.5 min          │ 34 legs                  │ 10.6 hrs          │  €66,780 EUR        │
+│ EGLL-EDDF │ 18 days            │ 42.1 min          │ 31 legs                  │  9.4 hrs          │  €59,220 EUR        │
+└───────────┴────────────────────┴───────────────────┴──────────────────────────┴───────────────────┴─────────────────────┘
+```
+
+**Synthetic Output Table (`--type operators`):**
+```text
+   Airline Operators Triggering Systemic Downstream Delay Cascades (Synthetic Sample)
+┌─────────┬──────────────────┬───────────────────┬───────────────┬─────────────────────┬───────────────────┬────────────────────┐
+│ Airline │ Spreader Flights │ Avg Initial Delay │ Infected Legs │ Infection Multiplier│ Reactionary Delay │ Reactionary Cost € │
+├─────────┼──────────────────┼───────────────────┼───────────────┼─────────────────────┼───────────────────┼────────────────────┤
+│ RYR     │ 450              │ 34.2 min          │ 782 legs      │ 1.74x               │ 257.3 hrs         │ €1,620,990 EUR     │
+│ EZY     │ 220              │ 36.8 min          │ 396 legs      │ 1.80x               │ 132.1 hrs         │   €832,230 EUR     │
+│ KLM     │ 217              │ 38.5 min          │ 378 legs      │ 1.74x               │ 128.8 hrs         │   €811,440 EUR     │
+└─────────┴──────────────────┴───────────────────┴───────────────┴─────────────────────┴───────────────────┴────────────────────┘
+```
+
+### `flightml simulate-shock`
+Simulate systemic network delay contagion resulting from an airport runway or FIR airspace capacity shock.
+```bash
+flightml simulate-shock EGLL --type AIRPORT --duration 2.0 --cut 50.0 --date 2025-10-15 --period 202510
+```
+
+**Synthetic Output Table:**
+```text
+Network Shock & Systemic Delay Contagion Simulation: EGLL (AIRPORT) (Synthetic Sample)
+Simulated Disruption: 2.0 hours @ 50% capacity cut (2025-10-15)
+Directly Delayed Flights: 72 | Reactionary Infected Rotations: 148 | Total Impacted: 220 flights
+Cumulative Delay: 184.5 flight hours | Economic Delay Cost: €1,162,350.00 EUR
+Passenger Misconnections: 1,840 passengers | Cancellation Risk Flights: 14 flights
 ```
