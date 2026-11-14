@@ -983,7 +983,11 @@ with tab_cat_single:
                 st.subheader("🌬️ Upper-Air Winds, Equivalent Still Air Distance (ESAD) & Contrail Climate")
 
                 # Wind Routing & Dispatch Efficiency Verdict
-                v_text = contrail_rep.wind_efficiency_verdict
+                v_text = getattr(
+                    contrail_rep,
+                    "wind_efficiency_verdict",
+                    getattr(contrail_rep, "wind_routing_verdict", "NEUTRAL_WIND_PROFILE"),
+                )
                 if "SMART_WIND_RIDING" in v_text or "FAVORABLE" in v_text:
                     st.success(f"💨 **Wind Routing Verdict:** {v_text}")
                 elif "HEADWIND" in v_text:
@@ -997,17 +1001,21 @@ with tab_cat_single:
                 ct1, ct2, ct3, ct4 = st.columns(4)
                 ct1.metric("Avg GS vs TAS", f"{contrail_rep.avg_groundspeed_kts:.0f} kts GS", f"TAS: {contrail_rep.avg_true_airspeed_kts:.0f} kts")
                 ct2.metric("Net Upper-Air Wind", f"{contrail_rep.avg_tailwind_component_kts:+.1f} kts", f"{contrail_rep.wind_time_savings_min:+.1f}m wind time")
-                dist_note = f"Ground: {contrail_rep.ground_distance_nm:,.0f} nm"
+                g_dist = getattr(contrail_rep, "ground_distance_nm", contrail_rep.cruise_distance_nm)
+                esad = getattr(contrail_rep, "esad_nm", contrail_rep.cruise_distance_nm)
+                air_benefit = getattr(contrail_rep, "wind_distance_benefit_nm", 0.0)
                 ct3.metric(
                     "Air Distance (ESAD)",
-                    f"{contrail_rep.esad_nm:,.0f} nm",
-                    f"{contrail_rep.wind_distance_benefit_nm:+.0f} nm air savings vs {dist_note}",
+                    f"{esad:,.0f} nm",
+                    f"{air_benefit:+.0f} nm air savings vs Ground: {g_dist:,.0f} nm",
                 )
-                fuel_lbl = "Saved" if contrail_rep.wind_fuel_impact_kg >= 0 else "Penalty"
+                f_kg = getattr(contrail_rep, "wind_fuel_impact_kg", 0.0)
+                f_eur = getattr(contrail_rep, "wind_fuel_impact_eur", 0.0)
+                fuel_lbl = "Saved" if f_kg >= 0 else "Penalty"
                 ct4.metric(
                     f"Wind Fuel {fuel_lbl}",
-                    f"{contrail_rep.wind_fuel_impact_kg:+,.0f} kg Jet-A",
-                    f"€{contrail_rep.wind_fuel_impact_eur:+,.2f} EUR vs still air",
+                    f"{f_kg:+,.0f} kg Jet-A",
+                    f"€{f_eur:+,.2f} EUR vs still air",
                 )
 
                 # Metric Row 2: Persistent Contrail Cirrus & Climate Multiplier
