@@ -28,6 +28,7 @@ from flightml.viz.map_builder import create_trajectory_map
 from flightml.eval.macro_comparison import compare_aviation_periods
 from flightml.eval.longitudinal import LongitudinalEngine
 from flightml.models.airspace_forecaster import AirspaceForecaster
+from flightml.eval.airline_economics import AirlineEconomicsEngine
 from flightml.eval.cdo_analyzer import (
     analyze_cdo_descent,
     analyze_cco_climb,
@@ -1020,6 +1021,119 @@ def forecast_airspace_cmd(
                 f"{g.complexity_score:.1f}",
             )
         console.print(g_tab)
+
+
+@app.command("flight-doc")
+def flight_doc_cmd(
+    ectrl_id: int = typer.Argument(..., help="ECTRL Flight ID (e.g. 291262109)"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period"),
+    time_cost: float = typer.Option(850.0, "--time-cost", "-t", help="Cost of flight operational time (€/hour)"),
+) -> None:
+    """Evaluate Total Direct Operating Cost (DOC = Fuel € + Crew/Time € + CRCO Charges €) and fee avoidance ratio."""
+    ds = FlightDataset(period=period)
+    engine = AirlineEconomicsEngine(ds)
+    with console.status(f"[cyan]Evaluating Direct Operating Cost (DOC) for Flight {ectrl_id}..."):
+        doc = engine.evaluate_flight_doc(ectrl_id, cost_of_time_eur_per_hour=time_cost)
+
+    if not doc:
+        console.print(f"[bold red]Flight {ectrl_id} not found in period {period}[/bold red]")
+        raise typer.Exit(code=1)
+
+    console.print(f"\n[bold green]Flight Direct Operating Cost (DOC) Breakdown:[/bold green] ECTRL [cyan]{doc.ectrl_id}[/cyan]")
+    console.print(
+        f"Route: [cyan]{doc.route}[/cyan] | Aircraft: [white]{doc.ac_type}[/white] | Airline: [white]{doc.ac_operator}[/white] | "
+        f"Flown: [white]{doc.distance_nm:.1f} NM[/white] ({doc.flight_duration_min:.0f} min)\n"
+    )
+
+    doc_table = Table(title="Direct Operating Cost (€ EUR) Allocation", header_style="bold magenta")
+    doc_table.add_column("Cost Component", style="cyan")
+    doc_table.add_column("Cost (€ EUR)", justify="right", style="bold yellow")
+    doc_table.add_column("DOC Share (%)", justify="right", style="green")
+    doc_table.add_column("Economic Operational Driver", style="white")
+
+    doc_table.add_row("1. Jet-A Fuel Burn Cost", f"€{doc.fuel_cost_eur:,.2f}", f"{doc.fuel_cost_share_pct:.1f}%", f"{doc.fuel_burn_kg:,.1f} kg Jet-A burned")
+    doc_table.add_row("2. Flight Time & Crew Cost", f"€{doc.time_crew_cost_eur:,.2f}", f"{doc.time_cost_share_pct:.1f}%", f"{doc.flight_duration_min / 60.0:.2f} flight hours @ €{time_cost:.0f}/hr")
+    doc_table.add_row("3. Eurocontrol CRCO Route Charges", f"€{doc.crco_navigation_charges_eur:,.2f}", f"{doc.crco_cost_share_pct:.1f}%", "En-route navigation service charges")
+    doc_table.add_row("[bold white]Total Direct Operating Cost[/bold white]", f"[bold yellow]€{doc.total_doc_eur:,.2f}[/bold yellow]", "[bold green]100.0%[/bold green]", f"Avoidance Incentive Ratio: €{doc.avoidance_incentive_ratio:.2f}/NM")
+    console.print(doc_table)
+
+
+@app.command("scan-avoidance")
+def scan_avoidance_cmd(
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period"),
+    min_flights: int = typer.Option(50, "--min-flights", "-m", help="Minimum corridor flight count"),
+    detour_nm: float = typer.Option(15.0, "--detour-nm", "-d", help="Minimum detour distance threshold (NM)"),
+    fee_saved: float = typer.Option(25.0, "--fee-saved", "-f", help="Minimum CRCO fee savings threshold (€)"),
+    top_n: int = typer.Option(10, "--top", "-n", help="Number of corridors to display"),
+) -> None:
+    """Scan European network city pairs for systematic FIR route charge avoidance detours."""
+    ds = FlightDataset(period=period)
+    engine = AirlineEconomicsEngine(ds)
+    with console.status(f"[cyan]Scanning network for route charge avoidance detours ({period})..."):
+        avoid_list = engine.scan_network_route_charge_avoidance(
+            min_corridor_flights=min_flights,
+            detour_distance_threshold_nm=detour_nm,
+            fee_savings_threshold_eur=fee_saved,
+            top_n=top_n,
+        )
+
+    console.print(f"\n[bold green]European Network Route-Charge Avoidance Detours ({period}):[/bold green]")
+    if not avoid_list:
+        console.print("[yellow]No significant route charge avoidance corridors detected under given thresholds.[/yellow]")
+        return
+
+    av_tab = Table(title="Detected Route Charge Avoidance Corridors", header_style="bold magenta")
+    av_tab.add_column("Corridor", style="cyan")
+    av_tab.add_column("Analyzed", justify="right", style="white")
+    av_tab.add_column("Detours", justify="right", style="bold yellow")
+    av_tab.add_column("Share (%)", justify="right", style="yellow")
+    av_tab.add_column("Extra Dist", justify="right", style="white")
+    av_tab.add_column("Fee Saved", justify="right", style="green")
+    av_tab.add_column("Extra CO₂", justify="right", style="red")
+    av_tab.add_column("Avoided FIR", style="magenta")
+
+    for a in avoid_list:
+        av_tab.add_row(
+            str(a.route),
+            f"{a.total_flights_analyzed}",
+            f"{a.avoidance_flights_count}",
+            f"{a.avoidance_share_pct:.1f}%",
+            f"+{a.mean_extra_distance_nm:.1f} NM",
+            f"€{a.mean_crco_savings_eur:,.2f}",
+            f"+{a.mean_extra_co2_kg:,.0f} kg",
+            str(a.avoided_fir or "—"),
+        )
+    console.print(av_tab)
+
+
+@app.command("simulate-harmonization")
+def simulate_harmonization_cmd(
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period"),
+    rate: float = typer.Option(72.50, "--rate", "-r", help="Harmonized CRCO unit rate (€/SU)"),
+    sample: int = typer.Option(30, "--sample", "-s", help="Sample size for Monte Carlo flight scaling"),
+) -> None:
+    """Simulate Single European Sky (SES) unified CRCO en-route navigation rate policy impact."""
+    ds = FlightDataset(period=period)
+    engine = AirlineEconomicsEngine(ds)
+    with console.status(f"[cyan]Simulating Harmonized European Navigation Rate (€{rate:.2f}/SU)..."):
+        sim = engine.simulate_harmonized_eurocontrol_rate(harmonized_rate_eur=rate, sample_size=sample)
+
+    console.print(f"\n[bold green]Single European Sky (SES) Harmonized Rate Policy Simulation:[/bold green]")
+    console.print(
+        f"Analyzed Period: [cyan]{sim.period}[/cyan] | Harmonized Unit Rate: [bold yellow]€{sim.harmonized_unit_rate_eur:.2f} / SU[/bold yellow]\n"
+        f"Eliminated Detour Flights: [bold cyan]{sim.eliminated_detour_flights:,}[/bold cyan] | "
+        f"Annual Fuel Saved: [bold green]{sim.estimated_annual_fuel_saved_tonnes:,.0f} tonnes Jet-A[/bold green] | "
+        f"Annual CO₂ Mitigated: [bold green]{sim.estimated_annual_co2_saved_tonnes:,.0f} tonnes CO₂[/bold green]\n"
+        f"Airline Net Direct Cost Benefit: [bold yellow]€{sim.estimated_annual_airline_cost_saved_eur:,.2f} EUR[/bold yellow]\n"
+    )
+
+    shift_tab = Table(title="Airspace Traffic Redistribution Under Harmonized Pricing", header_style="bold magenta")
+    shift_tab.add_column("Airspace / FIR", style="cyan")
+    shift_tab.add_column("Projected Traffic Alignment", style="green")
+
+    for s in sim.airspace_traffic_shifts:
+        shift_tab.add_row(s["fir"], s["shift"])
+    console.print(shift_tab)
 
 
 @app.command("cdo-descent")
