@@ -22,6 +22,7 @@ from flightml.models.flight2vec import Flight2VecEngine
 from flightml.models.st_gnn import SpatioTemporalDelayEngine
 from flightml.sim.airspace_closure import AirspaceClosureSimulator
 from flightml.sim.marl_atfm import ASSUMPTIONS_GLOSSARY, MultiAgentATFMSimulator
+from flightml.eval.passenger_journey import PassengerJourneyEngine
 
 # Global singleton cache for datasets by period
 _DATASET_CACHE: dict[str, FlightDataset] = {}
@@ -347,6 +348,49 @@ def create_mcp_server() -> FastMCP:
             "nominal_hourly_capacity_movements": cap,
             "profile": "Dual parallel runway saturated hub" if cap >= 85 else "Coordinated European airport / FIR node",
         }, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: assess_passenger_itinerary
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def assess_passenger_itinerary(
+        origin: str = "EINN",
+        destination: str = "EBBR",
+        hub: str = "EGLL",
+        day_of_week: str = "tuesday",
+        time_window: str = "morning",
+        scheduled_layover_min: int = 75,
+        target_date: str = "",
+        period: str = "202510",
+    ) -> str:
+        """Assess flight journey delay risk, missed connection probability, weather impact, and EU261 compensation for the general travelling public.
+
+        Args:
+            origin: Departure airport 4-letter ICAO code (e.g. 'EINN' Shannon, 'EHAM' Amsterdam).
+            destination: Arrival airport 4-letter ICAO code (e.g. 'EBBR' Brussels, 'EGLL' Heathrow).
+            hub: Optional transfer connection hub (e.g. 'EGLL'). Leave empty or None for direct flights.
+            day_of_week: Day of week for departure (e.g. 'tuesday', 'monday', 'friday').
+            time_window: Departure window ('morning', 'midday', 'afternoon', 'evening').
+            scheduled_layover_min: Scheduled layover duration at transfer hub in minutes (e.g. 75).
+            target_date: Target flight date in YYYY-MM-DD format (or leave empty for upcoming forecast).
+            period: Eurocontrol baseline data period (default: '202510').
+        """
+        try:
+            ds = get_dataset(period)
+            engine = PassengerJourneyEngine(ds)
+            clean_hub = hub.strip() if hub and hub.strip().upper() not in (origin.strip().upper(), destination.strip().upper()) else None
+            res = engine.assess_itinerary(
+                origin=origin.strip().upper(),
+                destination=destination.strip().upper(),
+                hub=clean_hub,
+                day_of_week=day_of_week,
+                time_window=time_window,
+                scheduled_layover_min=scheduled_layover_min,
+                target_date=target_date if target_date else None,
+            )
+            return json.dumps(res.to_dict(), indent=2)
+        except Exception as exc:
+            return json.dumps({"error": f"Passenger itinerary assessment failed: {exc}"}, indent=2)
 
     # -------------------------------------------------------------------------
     # RESOURCE: Assumptions Glossary

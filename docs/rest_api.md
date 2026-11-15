@@ -238,3 +238,70 @@ flightml serve --host 127.0.0.1 --port 8000
   ]
 }
 ```
+
+---
+
+## 9. Passenger Travel Copilot & Public Travel Risk
+
+### `GET /api/v1/passenger/itinerary-risk`
+Assess multi-leg flight journey delay risk, transfer hub missed connection probability, live 7-day meteorological forecast impact, and EU261/UK261 statutory passenger rights.
+
+#### Query Parameters
+- `origin` *(string, default: "EINN")*: 4-letter ICAO code of departure airport.
+- `destination` *(string, default: "EBBR")*: 4-letter ICAO code of arrival airport.
+- `hub` *(string, optional, default: "EGLL")*: 4-letter ICAO code of transfer connection hub.
+- `day_of_week` *(string, default: "tuesday")*: Day of the week.
+- `time_window` *(string, default: "morning")*: Departure wave (`morning`, `midday`, `afternoon`, `evening`).
+- `scheduled_layover_min` *(integer, default: 75)*: Scheduled connection layover duration at transfer hub.
+- `date` *(string, optional)*: Target flight date `YYYY-MM-DD` (defaults to upcoming 7-day forecast).
+- `period` *(string, default: "202510")*: Eurocontrol baseline data period.
+
+#### Response Schema
+```json
+{
+  "itinerary_id": "EINN_EGLL_EBBR_Tue_TGT",
+  "origin": "EINN",
+  "hub": "EGLL",
+  "destination": "EBBR",
+  "day_of_week": "Tuesday",
+  "time_window": "Morning",
+  "target_date": "2026-11-17",
+  "overall_delay_risk_score": 63.6,
+  "overall_delay_risk_level": "ELEVATED",
+  "legs": [
+    {
+      "origin": "EINN",
+      "destination": "EGLL",
+      "dominant_operator": "EIN",
+      "operator_name": "Aer Lingus (operated as BAW codeshare)",
+      "typical_aircraft": "A320",
+      "mean_arr_delay_min": 5.8,
+      "median_arr_delay_min": 1.0,
+      "p90_arr_delay_min": 32.2,
+      "prob_delay_gt_15m_pct": 22.5,
+      "weather_risk_multiplier": 1.15,
+      "weather_adjusted_prob_delay_pct": 25.8
+    }
+  ],
+  "connection": {
+    "hub": "EGLL",
+    "hub_name": "London Heathrow Airport",
+    "scheduled_layover_min": 75,
+    "minimum_connection_time_min": 90,
+    "slack_buffer_min": -15.0,
+    "misconnect_probability_pct": 97.7,
+    "luggage_transfer_risk_pct": 40.0,
+    "luggage_status": "MODERATE_RISK",
+    "misconnect_risk_level": "CRITICAL"
+  },
+  "passenger_rights": {
+    "statutory_framework": "EU Regulation 261/2004 & UK261 Statutory Passenger Charter",
+    "total_journey_distance_km": 942.0,
+    "compensation_bracket": "Short-haul (≤ 1,500 km)",
+    "statutory_compensation_amount_eur": 250.0,
+    "delay_threshold_hours": 3.0,
+    "right_to_care_hours": 2.0
+  }
+}
+```
+

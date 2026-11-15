@@ -98,6 +98,7 @@ from flightml.models.contrail_surrogate import ContrailNeuralSurrogate
 from flightml.models.st_gnn import SpatioTemporalDelayEngine
 from flightml.sim.airspace_closure import AirspaceClosureSimulator
 from flightml.sim.marl_atfm import ASSUMPTIONS_GLOSSARY, MultiAgentATFMSimulator
+from flightml.eval.passenger_journey import PassengerJourneyEngine
 
 
 
@@ -429,6 +430,7 @@ st.markdown(
     tab_cat_maps,
     tab_cat_econ,
     tab_cat_ai_lab,
+    tab_cat_passenger,
 ) = st.tabs(
     [
         "✈️ Single Aircraft / Flight Views",
@@ -438,6 +440,7 @@ st.markdown(
         "🗺️ Information & Map Views",
         "💶 General Economic Views (€)",
         "🧪 Experimental AI & Machine Learning Lab",
+        "🧳 Passenger Travel Copilot & Itinerary Risk",
     ]
 )
 
@@ -4196,4 +4199,197 @@ with tab_cat_ai_lab:
                        - Each airline optimizes its mixed strategy $\\pi_i$ against competitors' responses. The simulation computes the stable Nash equilibrium where no airline can unilaterally improve its payoff.
                     """
                 )
+
+# =============================================================================
+# 8. PASSENGER TRAVEL COPILOT & ITINERARY RISK
+# =============================================================================
+with tab_cat_passenger:
+    st.header("🧳 Passenger Travel Copilot & Multi-Leg Journey Predictor")
+    st.caption(
+        "Empowering the general travelling public with empirical airline delay distributions, live 7-day airport "
+        "meteorological forecasts, transfer hub missed connection probabilities (Minimum Connection Time MCT), "
+        "and EU261 / UK261 statutory compensation rights."
+    )
+
+    p_col1, p_col2, p_col3 = st.columns(3)
+    with p_col1:
+        p_origin = st.text_input("🛫 Origin Airport (ICAO)", value="EINN", help="e.g. EINN (Shannon), EHAM (Amsterdam)").strip().upper()
+    with p_col2:
+        p_hub = st.text_input("🔄 Transfer Connection Hub (ICAO)", value="EGLL", help="e.g. EGLL (London Heathrow), EHAM, EDDF. Leave blank for direct flights.").strip().upper()
+    with p_col3:
+        p_dest = st.text_input("🛬 Final Destination (ICAO)", value="EBBR", help="e.g. EBBR (Brussels), LFPG (Paris)").strip().upper()
+
+    p_r2_col1, p_r2_col2, p_r2_col3, p_r2_col4 = st.columns([1.2, 1.2, 1.2, 1.2])
+    with p_r2_col1:
+        p_dow = st.selectbox("📅 Day of the Week", ["Tuesday", "Monday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"], index=0)
+    with p_r2_col2:
+        p_wave = st.selectbox("🕒 Departure Window", ["Morning (06:00 - 11:00 UTC)", "Midday (11:00 - 16:00 UTC)", "Evening (17:00 - 22:00 UTC)"], index=0)
+    with p_r2_col3:
+        p_layover = st.slider("⏳ Scheduled Layover at Hub (min)", min_value=30, max_value=240, value=75, step=5)
+    with p_r2_col4:
+        p_target_date = st.text_input("📆 Target Flight Date", value="", help="YYYY-MM-DD or leave empty for upcoming 7-day live weather forecast").strip()
+
+    p_run = st.button("🔍 Assess My Flight Journey & Delay Risk", type="primary", use_container_width=True)
+
+    if p_run or True:
+        with st.spinner("Analyzing empirical flight distributions, live 7-day meteorological models & connection buffers..."):
+            p_engine = PassengerJourneyEngine(dataset)
+            clean_hub_val = p_hub if p_hub and p_hub not in (p_origin, p_dest, "NONE", "") else None
+            p_res = p_engine.assess_itinerary(
+                origin=p_origin,
+                destination=p_dest,
+                hub=clean_hub_val,
+                day_of_week=p_dow,
+                time_window=p_wave,
+                scheduled_layover_min=p_layover,
+                target_date=p_target_date if p_target_date else None,
+            )
+
+        st.markdown("---")
+
+        # Top KPI Scoreboard
+        k1, k2, k3, k4 = st.columns(4)
+        risk_color = "🔴" if p_res.overall_delay_risk_score > 60 else "🟡" if p_res.overall_delay_risk_score > 30 else "🟢"
+        k1.metric(
+            "Overall Journey Risk",
+            f"{p_res.overall_delay_risk_score:.1f} / 100",
+            f"{risk_color} {p_res.overall_delay_risk_level}",
+        )
+        if p_res.connection:
+            mc_color = "🔴" if p_res.connection.misconnect_probability_pct > 40 else "🟡" if p_res.connection.misconnect_probability_pct > 15 else "🟢"
+            k2.metric(
+                "Missed Connection Risk",
+                f"{p_res.connection.misconnect_probability_pct:.1f}%",
+                f"{mc_color} {p_res.connection.misconnect_risk_level}",
+            )
+            lug_color = "🔴" if "CRITICAL" in p_res.connection.luggage_status else "🟡" if "MODERATE" in p_res.connection.luggage_status else "🟢"
+            k3.metric(
+                "Luggage Transfer Risk",
+                f"{p_res.connection.luggage_transfer_risk_pct:.0f}%",
+                f"{lug_color} {p_res.connection.luggage_status.replace('_', ' ')}",
+            )
+        else:
+            k2.metric("Flight Type", "Direct Non-Stop", "No Hub Layover")
+            k3.metric("Baggage Routing", "Direct Transfer", "🟢 LOW RISK")
+
+        k4.metric(
+            "EU261 Statutory Rights",
+            f"€{p_res.passenger_rights.statutory_compensation_amount_eur:,.0f} EUR",
+            f"If delayed ≥ {p_res.passenger_rights.delay_threshold_hours:.0f}h",
+        )
+
+        # Actionable Passenger Advisories
+        st.subheader("💡 Actionable Travel Recommendations & Alerts")
+        for rec in p_res.actionable_recommendations:
+            if "🚨" in rec:
+                st.error(rec)
+            elif "🧳" in rec:
+                st.warning(rec)
+            elif "💨" in rec:
+                st.info(rec)
+            else:
+                st.success(rec)
+
+        st.markdown("---")
+
+        # Flight Legs Breakdown
+        st.subheader("✈️ Flight Legs & Meteorological Risk Analysis")
+        for idx, leg in enumerate(p_res.legs):
+            with st.container():
+                st.markdown(
+                    f"#### Leg {idx + 1}: **{leg.origin}** ({leg.origin_name}) ➔ **{leg.destination}** ({leg.destination_name})"
+                )
+                l_col1, l_col2, l_col3, l_col4 = st.columns(4)
+                l_col1.metric("Operating Airline", leg.operator_name, f"Aircraft: {leg.typical_aircraft}")
+                l_col2.metric("Average / Median Delay", f"{leg.mean_arr_delay_min:+.1f} min", f"Median: {leg.median_arr_delay_min:+.1f} min")
+                l_col3.metric("P90 Delay (Worst 10%)", f"{leg.p90_arr_delay_min:+.1f} min", f"Delay > 15m: {leg.prob_delay_gt_15m_pct:.1f}%")
+                l_col4.metric(
+                    "Weather-Adjusted Risk",
+                    f"{leg.weather_adjusted_prob_delay_pct:.1f}%",
+                    f"Multiplier: {leg.weather_risk_multiplier:.2f}x ({leg.expected_delay_bracket})",
+                )
+
+                # Weather Forecast Sub-cards
+                wx_c1, wx_c2 = st.columns(2)
+                with wx_c1:
+                    ow = leg.origin_weather
+                    live_tag = "🟢 Live 7-Day Forecast" if ow.is_live_api else "ℹ️ Climatological Model"
+                    st.info(
+                        f"**{leg.origin} Weather ({ow.date_str}) [{live_tag}]:** {ow.weather_description} | "
+                        f"Temp: {ow.temperature_c}°C | Wind: {ow.wind_speed_kts} kts (Gusts: **{ow.wind_gusts_kts} kts**) | "
+                        f"Rain Chance: {ow.precipitation_probability_pct:.0f}% | Runway Crosswind: {ow.crosswind_kts} kts"
+                    )
+                with wx_c2:
+                    dw = leg.destination_weather
+                    live_tag = "🟢 Live 7-Day Forecast" if dw.is_live_api else "ℹ️ Climatological Model"
+                    st.info(
+                        f"**{leg.destination} Weather ({dw.date_str}) [{live_tag}]:** {dw.weather_description} | "
+                        f"Temp: {dw.temperature_c}°C | Wind: {dw.wind_speed_kts} kts (Gusts: **{dw.wind_gusts_kts} kts**) | "
+                        f"Rain Chance: {dw.precipitation_probability_pct:.0f}% | Runway Crosswind: {dw.crosswind_kts} kts"
+                    )
+                st.markdown("<br>", unsafe_allow_html=True)
+
+        # Connection Hub Deep-Dive
+        if p_res.connection:
+            st.markdown("---")
+            st.subheader(f"🔄 Connection Hub Analysis: {p_res.connection.hub_name} ({p_res.connection.hub})")
+            c = p_res.connection
+
+            ch_c1, ch_c2, ch_c3, ch_c4 = st.columns(4)
+            ch_c1.metric("Scheduled Layover", f"{c.scheduled_layover_min} min", "Passenger itinerary")
+            ch_c2.metric("Official MCT Requirement", f"{c.minimum_connection_time_min} min", "Minimum Connection Time")
+            slack_delta_color = "normal" if c.slack_buffer_min >= 15 else "inverse"
+            ch_c3.metric("Connection Slack Buffer", f"{c.slack_buffer_min:+.0f} min", f"{'Adequate' if c.slack_buffer_min >= 15 else 'DEFICIT / CRITICAL'}", delta_color=slack_delta_color)
+            ch_c4.metric("Missed Connection Probability", f"{c.misconnect_probability_pct:.1f}%", c.misconnect_risk_level)
+
+            st.warning(f"**Airport Transit Note:** {c.terminal_transfer_note}")
+
+        # When Should I Fly? Departure Wave Comparison
+        st.markdown("---")
+        st.subheader(f"🕒 'When Should I Fly?' Reliability Comparison across Departure Waves ({p_res.origin} ➔ {p_res.legs[0].destination})")
+        st.caption(
+            "Empirical evidence demonstrates the **First Wave Advantage**: Flights in the early morning start with fresh aircraft "
+            "and rested flight crews after overnight maintenance, exhibiting minimal reactionary delay. Evening flights absorb cascading delays "
+            "across 4–6 preceding rotations."
+        )
+
+        wave_rows = []
+        for w in p_res.departure_waves:
+            wave_rows.append({
+                "Departure Wave": w.wave_name,
+                "Time Window": w.hours_range,
+                "Average Arrival Delay (min)": w.avg_arr_delay_min,
+                "P90 Delay (min)": w.p90_delay_min,
+                "On-Time Performance (≤ 15m)": f"{w.on_time_pct:.1f}%",
+                "Reactionary Ripple Risk": w.reactionary_risk_level,
+                "Recommendation": w.recommendation_badge,
+            })
+        st.dataframe(pd.DataFrame(wave_rows), use_container_width=True)
+
+        # EU261 / UK261 Passenger Rights Explainer
+        st.markdown("---")
+        st.subheader("💶 Passenger Rights & Statutory Compensation Charter (EU261 & UK261)")
+        pr = p_res.passenger_rights
+
+        pr_c1, pr_c2, pr_c3 = st.columns(3)
+        pr_c1.metric("Total Route Distance", f"{pr.total_journey_distance_km:,.0f} km", pr.compensation_bracket)
+        pr_c2.metric("Cash Compensation Due", f"€{pr.statutory_compensation_amount_eur:,.0f} EUR", "If delayed ≥ 3 hours at arrival")
+        pr_c3.metric("Right to Care Trigger", f"After {pr.right_to_care_hours:.0f} hours delay", "Meals, drinks & communication")
+
+        st.markdown("##### 🛡️ Mandatory Duty-of-Care Entitlements:")
+        for ent in pr.duty_of_care_entitlements:
+            st.markdown(f"- {ent}")
+
+        with st.expander("ℹ️ Legal Explainer: Extraordinary Circumstances vs. Airline Operational Fault", expanded=False):
+            st.markdown(
+                f"""
+                ### What Qualifies Under European & UK Case Law?
+                {pr.claimability_guidance}
+
+                - **Technical Aircraft Defects**: The European Court of Justice (*Wallentin-Hermann v Alitalia*, C-549/07) ruled that unexpected technical defects are inherent in the normal operation of air carriers and **do not** excuse airlines from paying compensation.
+                - **Missed Connections**: If an initial delay causes you to miss a connecting flight booked under a single ticket and you arrive at your final destination 3+ hours late (*Folkerts v Air France*, C-11/11), compensation is calculated based on the **final destination arrival time** across the entire journey.
+                - **Right to Care is Unconditional**: Even if severe gales or volcanic ash ground your flight (*McDonagh v Ryanair*, C-12/11), the airline's obligation to provide free hotel accommodation, food, and transport remains **unlimited in cost and duration**.
+                """
+            )
+
 

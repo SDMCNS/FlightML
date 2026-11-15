@@ -103,3 +103,26 @@ async def test_mcp_tool_marl_slot_gaming() -> None:
     assert data["regulated_airport"] == "EGLL"
     assert len(data["airline_strategies"]) == 4
     assert len(data["decision_log"]) >= 8
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_assess_passenger_itinerary():
+    server = create_mcp_server()
+    res = await server.call_tool(
+        "assess_passenger_itinerary",
+        {
+            "origin": "EINN",
+            "destination": "EBBR",
+            "hub": "EGLL",
+            "day_of_week": "tuesday",
+            "time_window": "morning",
+            "scheduled_layover_min": 75,
+        },
+    )
+    data = json.loads(res[0][0].text)
+    assert data["origin"] == "EINN"
+    assert data["destination"] == "EBBR"
+    assert data["hub"] == "EGLL"
+    assert len(data["legs"]) == 2
+    assert data["connection"]["hub"] == "EGLL"
+    assert data["passenger_rights"]["statutory_compensation_amount_eur"] == 250.0

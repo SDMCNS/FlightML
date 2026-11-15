@@ -2533,6 +2533,144 @@ def find_twins_cmd(
     console.print(table)
 
 
+@app.command("trip-risk")
+@app.command("passenger-itinerary")
+def trip_risk_cmd(
+    origin: str = typer.Option("EINN", "--origin", "-o", help="Departure airport ICAO code"),
+    dest: str = typer.Option("EBBR", "--dest", "-d", help="Destination airport ICAO code"),
+    hub: str = typer.Option("EGLL", "--hub", help="Optional transfer connection hub ICAO code"),
+    day: str = typer.Option("tuesday", "--day", help="Day of the week (e.g. tuesday, monday)"),
+    time: str = typer.Option("morning", "--time", help="Departure wave ('morning', 'midday', 'afternoon', 'evening')"),
+    layover: int = typer.Option(75, "--layover", "-l", help="Scheduled connection layover at hub in minutes"),
+    date: str = typer.Option(None, "--date", help="Target flight date YYYY-MM-DD (defaults to live 7-day forecast)"),
+    period: str = typer.Option("202510", "--period", help="Eurocontrol baseline data period"),
+) -> None:
+    """Assess flight journey delay risk, missed connection probability, weather impact, and EU261 compensation for the travelling public."""
+    from flightml.eval.passenger_journey import PassengerJourneyEngine
+    from rich.panel import Panel
+
+    dataset = FlightDataset(period=period)
+    engine = PassengerJourneyEngine(dataset)
+    clean_hub = hub.strip().upper() if hub and hub.strip().upper() not in (origin.strip().upper(), dest.strip().upper(), "NONE") else None
+
+    console.print(Panel(
+        f"[bold cyan]🧳 Passenger Journey & Delay Risk Copilot[/bold cyan]\n"
+        f"Route: [bold yellow]{origin.upper()}[/bold yellow] ➔ "
+        f"{'[bold yellow]' + clean_hub + '[/bold yellow] (Hub) ➔ ' if clean_hub else ''}"
+        f"[bold yellow]{dest.upper()}[/bold yellow] | "
+        f"Day: [green]{day.capitalize()}[/green] | Wave: [green]{time.capitalize()}[/green] | Period: [magenta]{period}[/magenta]",
+        title="FlightML Public Travel Advisory",
+        border_style="cyan",
+    ))
+
+    with console.status("[bold green]Evaluating historical distributions, live weather forecast & connection tightness...[/bold green]"):
+        res = engine.assess_itinerary(
+            origin=origin,
+            destination=dest,
+            hub=clean_hub,
+            day_of_week=day,
+            time_window=time,
+            scheduled_layover_min=layover,
+            target_date=date,
+        )
+
+    # 1. Legs Breakdown Table
+    t_legs = Table(title=f"✈️ Flight Legs & Delay Risk ({res.day_of_week} {res.time_window})", border_style="blue")
+    t_legs.add_column("Leg", style="bold cyan")
+    t_legs.add_column("Operator", style="green")
+    t_legs.add_column("Aircraft", style="magenta")
+    t_legs.add_column("Avg / Med Delay", justify="right")
+    t_legs.add_column("P90 Delay", justify="right", style="yellow")
+    t_legs.add_column("Delay > 15m", justify="right")
+    t_legs.add_column("Weather Forecast", style="white")
+    t_legs.add_column("Adjusted Delay Risk", justify="right", style="bold red")
+
+    for i, leg in enumerate(res.legs):
+        wx = f"{leg.origin_weather.weather_description} (G{leg.origin_weather.wind_gusts_kts:.0f}kt, {leg.origin_weather.precipitation_probability_pct:.0f}% rain)"
+        t_legs.add_row(
+            f"{leg.origin} ➔ {leg.destination}",
+            leg.dominant_operator,
+            leg.typical_aircraft,
+            f"{leg.mean_arr_delay_min:+.1f}m / {leg.median_arr_delay_min:+.1f}m",
+            f"{leg.p90_arr_delay_min:+.1f}m",
+            f"{leg.prob_delay_gt_15m_pct:.1f}%",
+            wx,
+            f"{leg.weather_adjusted_prob_delay_pct:.1f}%",
+        )
+    console.print(t_legs)
+
+    # 2. Connection Risk Table
+    if res.connection:
+        c = res.connection
+        t_conn = Table(title=f"⏳ Connection Hub & Missed Flight Risk ({c.hub_name})", border_style="yellow")
+        t_conn.add_column("Transfer Hub", style="bold")
+        t_conn.add_column("Layover", justify="right")
+        t_conn.add_column("Official MCT", justify="right")
+        t_conn.add_column("Slack Buffer", justify="right")
+        t_conn.add_column("Missed Flight Risk", justify="right", style="bold red")
+        t_conn.add_column("Luggage Risk", justify="right")
+        t_conn.add_column("Connection Status", style="bold")
+
+        slack_style = "[green]" if c.slack_buffer_min >= 15 else "[red]"
+        risk_color = "[red]" if c.misconnect_probability_pct > 30 else "[yellow]" if c.misconnect_probability_pct > 15 else "[green]"
+
+        t_conn.add_row(
+            f"{c.hub} ({c.hub_name})",
+            f"{c.scheduled_layover_min} min",
+            f"{c.minimum_connection_time_min} min",
+            f"{slack_style}{c.slack_buffer_min:+.0f} min[/]",
+            f"{risk_color}{c.misconnect_probability_pct:.1f}%[/]",
+            f"{c.luggage_transfer_risk_pct:.0f}% ({c.luggage_status})",
+            f"{risk_color}{c.misconnect_risk_level}[/]",
+        )
+        console.print(t_conn)
+        console.print(f"[dim italic]{c.terminal_transfer_note}[/dim italic]\n")
+
+    # 3. Passenger Rights (EU261 / UK261)
+    pr = res.passenger_rights
+    t_rights = Table(title="💶 Passenger Rights & Statutory Compensation (EU261 / UK261)", border_style="green")
+    t_rights.add_column("Route Distance", justify="right")
+    t_rights.add_column("Distance Tier")
+    t_rights.add_column("Statutory Compensation", justify="right", style="bold green")
+    t_rights.add_column("Delay Threshold", justify="right")
+    t_rights.add_column("Duty of Care (Meals/Drinks)", justify="right")
+
+    t_rights.add_row(
+        f"{pr.total_journey_distance_km:.0f} km",
+        pr.compensation_bracket,
+        f"€{pr.statutory_compensation_amount_eur:.0f}",
+        f"≥ {pr.delay_threshold_hours:.0f} hours at destination",
+        f"After {pr.right_to_care_hours:.0f} hours delay",
+    )
+    console.print(t_rights)
+
+    # 4. Departure Waves Comparison
+    t_waves = Table(title=f"🕒 When Should I Fly? ({origin.upper()} ➔ {res.legs[0].destination})", border_style="cyan")
+    t_waves.add_column("Departure Wave", style="bold")
+    t_waves.add_column("Time Window", style="dim")
+    t_waves.add_column("Avg Delay", justify="right")
+    t_waves.add_column("P90 Delay", justify="right")
+    t_waves.add_column("On-Time Rate", justify="right", style="green")
+    t_waves.add_column("Recommendation", style="bold")
+
+    for w in res.departure_waves:
+        t_waves.add_row(
+            w.wave_name,
+            w.hours_range,
+            f"{w.avg_arr_delay_min:+.1f} min",
+            f"{w.p90_delay_min:+.1f} min",
+            f"{w.on_time_pct:.1f}%",
+            w.recommendation_badge,
+        )
+    console.print(t_waves)
+
+    # 5. Actionable Advice
+    console.print("\n[bold yellow]💡 Actionable Travel Recommendations:[/bold yellow]")
+    for rec in res.actionable_recommendations:
+        console.print(f"  • {rec}")
+    console.print("")
+
+
 @app.command("dashboard")
 def dashboard_cmd(
     port: int = typer.Option(8501, "--port", "-p", help="Port for the Streamlit dashboard"),

@@ -493,3 +493,58 @@ flightml mcp --transport sse --port 8000
 - `--transport, -t`: Transport mechanism (`stdio`, `sse`, `streamable-http`) [default: `stdio`]
 - `--port, -p`: Port for SSE transport [default: `8000`]
 - `--help`: Show command documentation and exit.
+
+---
+
+## 10. Public Travel Copilot & Itinerary Risk
+
+### `flightml trip-risk` (alias: `flightml passenger-itinerary`)
+Assess multi-leg flight journey delay risk, missed connection probability, live 7-day meteorological forecast impact, EU261/UK261 passenger rights, and departure wave optimization for the general travelling public.
+
+```bash
+flightml trip-risk --origin EINN --dest EBBR --hub EGLL --day tuesday --time morning --layover 75
+```
+
+**Options:**
+- `--origin, -o`: Departure airport 4-letter ICAO code [default: `EINN`]
+- `--dest, -d`: Arrival airport 4-letter ICAO code [default: `EBBR`]
+- `--hub`: Optional transfer connection hub 4-letter ICAO code [default: `EGLL`]
+- `--day`: Day of week (`tuesday`, `monday`, `friday`, etc.) [default: `tuesday`]
+- `--time`: Departure wave (`morning`, `midday`, `afternoon`, `evening`) [default: `morning`]
+- `--layover, -l`: Scheduled layover duration at transfer hub in minutes [default: `75`]
+- `--date`: Target flight date in `YYYY-MM-DD` format (defaults to live 7-day forecast)
+- `--period`: Eurocontrol baseline data period [default: `202510`]
+
+**Synthetic Output:**
+```text
+┌────────────────────── FlightML Public Travel Advisory ──────────────────────┐
+│ 🧳 Passenger Journey & Delay Risk Copilot                                   │
+│ Route: EINN ➔ EGLL (Hub) ➔ EBBR | Day: Tuesday | Wave: Morning | Period:    │
+│ 202510                                                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+                 ✈️ Flight Legs & Delay Risk (Tuesday morning)                 
+┌─────────┬─────────┬─────────┬─────────┬────────┬─────────┬────────┬─────────┐
+│ Leg     │ Operator│ Aircraft│ Avg/Med │ P90 Del│ Del>15m │ Weather│ Adjusted│
+├─────────┼─────────┼─────────┼─────────┼────────┼─────────┼────────┼─────────┤
+│ EINN➔   │ EIN     │ A320    │ +5.8m / │ +32.2m │   22.5% │ Drizzle│   25.8% │
+│ EGLL    │         │         │   +1.0m │        │         │ (G20kt)│         │
+│ EGLL➔   │ BAW     │ A319    │ +8.2m / │ +23.8m │   25.0% │ Overcast│  28.5% │
+│ EBBR    │         │         │   +5.5m │        │         │ (G4kt) │         │
+└─────────┴─────────┴─────────┴─────────┴────────┴─────────┴────────┴─────────┘
+       ⏳ Connection Hub & Missed Flight Risk (London Heathrow Airport)        
+┌──────────┬─────────┬──────────┬──────────┬───────────┬──────────┬───────────┐
+│ Hub      │ Layover │ MCT      │ Slack    │ Misconnect│ Luggage  │ Status    │
+├──────────┼─────────┼──────────┼──────────┼───────────┼──────────┼───────────┤
+│ EGLL     │  75 min │   90 min │  -15 min │     97.7% │      40% │ CRITICAL  │
+└──────────┴─────────┴──────────┴──────────┴───────────┴──────────┴───────────┘
+⚠️ Inter-Terminal Transfer Required: EIN (T2) ➔ BAW (T5). Heathrow inter-terminal 
+transfers require Flight Connections shuttle buses and transit security.
+
+         💶 Passenger Rights & Statutory Compensation (EU261 / UK261)          
+┌───────────────┬──────────────┬───────────────┬──────────────┬───────────────┐
+│ Route Distance│ Distance Tier│ Compensation  │ Delay Thresh │ Duty of Care  │
+├───────────────┼──────────────┼───────────────┼──────────────┼───────────────┤
+│        942 km │ Short-haul   │          €250 │ ≥ 3 hours    │ After 2 hours │
+└───────────────┴──────────────┴───────────────┴──────────────┴───────────────┘
+```
+

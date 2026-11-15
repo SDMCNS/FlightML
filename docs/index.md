@@ -25,6 +25,7 @@ Welcome to the **FlightML** documentation. FlightML is a high-performance Python
 - [**Architecture & Methodology**](architecture.md): Deep dive into DuckDB columnar execution, ICAO GANP & Eurocontrol PRU formulas, OpenAP & ICAO EDB v32B physics, Eurocontrol CRCO charges (`€`), and operations research models.
 - [**Model Context Protocol (MCP) Server Guide**](mcp_server.md): Exposing FlightML as an AI tool to local LLMs (LM Studio, Claude Desktop, Cursor).
   - [**LM Studio + Qwen 2.5 Coder Example Transcript**](mcp_example_lmstudio.md): End-to-end multi-turn transcript querying flight telemetry, calculating punctuality, and rendering markdown tables.
+- [**Passenger Travel Copilot & Itinerary Risk Guide**](cli_reference.md#10-public-travel-copilot--itinerary-risk): Public-facing journey intelligence assessing multi-leg flights, Minimum Connection Times (MCT), live 7-day weather forecasts, and statutory EU261 compensation entitlements.
 
 ---
 
@@ -51,7 +52,7 @@ Welcome to the **FlightML** documentation. FlightML is a high-performance Python
 ├──────────────────────────┼──────────────────────────┼──────────────────────────────────┤
 │ • 128D Flight2Vec Twins  │ • 4D Airspace Closure    │ • FastMCP Server Architecture    │
 │ • Deterministic Weights  │ • Detour NM & Fuel Waste │ • LM Studio, Claude & Cursor     │
-│ • Commercial Taxonomy    │ • Non-Linear Backlog     │ • 8 Tools & Dynamic Resources    │
+│ • Commercial Taxonomy    │ • Non-Linear Backlog     │ • 9 Tools & Travel Copilot       │
 │ • PINN Mass Inversion    │ • MARL ATFM Slot Gaming  │ • Zero-Hallucination Radar Search│
 │ • Contrail Fast Surrogate│ • 10-Step Decision Trace │ • Multi-Turn Context Retention   │
 │ • ST-GNN Delay Contagion │ • Infilled Assumptions   │ • Disruption Briefing Prompts    │

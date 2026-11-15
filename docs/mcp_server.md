@@ -139,7 +139,7 @@ In Cursor, go to **Settings** $\to$ **Features** $\to$ **MCP Servers** $\to$ **A
 
 ## 3. Tool Reference Catalog
 
-The FlightML MCP server exposes 8 specialized tools covering European air traffic operations:
+The FlightML MCP server exposes 9 specialized tools covering European air traffic operations:
 
 ### 1. `get_flight_details`
 Retrieves verified 4D radar telemetry for a specific flight by its Eurocontrol unique identifier (`ectrl_id`).
@@ -212,6 +212,19 @@ Returns nominal hourly movement capacity and operational profile for a European 
 - **Arguments**:
   - `airport_icao` (*str*, optional, default `'EGLL'`): 4-letter ICAO code.
 - **Returns**: Nominal hourly movements and runway configuration profile.
+
+### 9. `assess_passenger_itinerary`
+Evaluates multi-leg flight journey delay risk, transfer hub missed connection probability (Minimum Connection Time MCT), live 7-day meteorological forecast impact, EU261/UK261 passenger statutory compensation, and departure wave optimization for the general travelling public.
+- **Arguments**:
+  - `origin` (*str*, optional, default `'EINN'`): Departure airport ICAO code.
+  - `destination` (*str*, optional, default `'EBBR'`): Arrival airport ICAO code.
+  - `hub` (*str*, optional, default `'EGLL'`): Transfer connection hub ICAO code (or empty for direct flights).
+  - `day_of_week` (*str*, optional, default `'tuesday'`): Planned day of departure.
+  - `time_window` (*str*, optional, default `'morning'`): Departure wave (`morning`, `midday`, `afternoon`, `evening`).
+  - `scheduled_layover_min` (*int*, optional, default `75`): Scheduled transfer layover duration in minutes.
+  - `target_date` (*str*, optional): Target date `YYYY-MM-DD` (defaults to live upcoming 7-day forecast).
+  - `period` (*str*, optional, default `'202510'`): Eurocontrol archive period.
+- **Returns**: Leg-by-leg delay distributions (mean, median, P90, % delayed > 15m), live airport weather forecasts (wind, gusts, rain %, crosswind), hub missed connection probability, luggage transfer risk, EU261 statutory rights, departure wave comparison, and actionable passenger recommendations.
 
 ---
 
