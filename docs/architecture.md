@@ -188,10 +188,18 @@ FlightML features an experimental machine learning and operations research suite
 
 ### 7. Model Context Protocol (MCP) Server Architecture
 - **FastMCP Protocol Bridge**: Implements the Model Context Protocol over standard input/output (`stdio`) and Server-Sent Events (`SSE`), enabling any local LLM runner (LM Studio, Claude Desktop, Cursor) to invoke FlightML engines as structured tools.
-- **Tool Suite**: Exposes 8 tools (`get_flight_details`, `search_flights`, `find_operational_twins`, `simulate_delay_contagion`, `simulate_fir_closure`, `simulate_marl_slot_gaming`, `evaluate_contrail_climate_forcing`, `get_airport_capacity`).
+- **Tool Suite**: Exposes 9 tools (`get_flight_details`, `search_flights`, `find_operational_twins`, `simulate_delay_contagion`, `simulate_fir_closure`, `simulate_marl_slot_gaming`, `evaluate_contrail_climate_forcing`, `get_airport_capacity`, `assess_passenger_itinerary`).
 - **Dynamic Resources & Prompts**: Exposes airport capacity profiles (`flightml://airports/{icao}/capacity`), MARL assumptions glossary (`flightml://assumptions/marl_glossary`), and pre-engineered disruption briefing prompts.
 
-### 8. Multimodal Aeronautical Copilot Architecture (Epic 6 - Specification)
+### 8. Passenger Journey & Public Travel Delay Risk Architecture
+- **Intelligent Period Auto-Selection**: Evaluates target flight dates against available Eurocontrol monthly archives (`202402`, `202406`, `202410`, `202502`, `202506`, `202510`, `201611`). Calculates circular seasonal distance $\Delta M = \min(|M_T - M_P|, 12 - |M_T - M_P|)$, year distance $|Y_T - Y_P|$, and penalizes pre-COVID archives (>5 years old) when modern 2024/2025 archives exist:
+  $$\text{Score} = (\Delta M \times 10) + |Y_T - Y_P| + \text{LegacyPenalty}$$
+- **Empirical Flight Sampling & Commercial Filtering**: Filters out high-frequency overnight cargo haulers (`BCS` DHL, `FDX`, `UPS`, `CLX`, `BOX`, `GEC`) and private jet operators (`NJE`, `AHO`, `FYG`, `VJT`) to guarantee punctuality distributions represent scheduled commercial passenger operations.
+- **Meteorological NWP Coupling**: Interrogates Open-Meteo live numerical weather prediction models (ECMWF / DWD ICON Ensemble) at airport coordinates, extracting temperature, wind speed, gusts, and precipitation probabilities. Projects wind vectors onto runway geometry to calculate primary crosswind components.
+- **Transfer Hub Minimum Connection Time (MCT) Buffer Dynamics**: Implements a published European hub MCT database (`EGLL`, `EHAM`, `EDDF`, `LFPG`, `EBBR`, `LEMD`, `EDDM`, `EIDW`, `EINN`). Dynamically distinguishes between same-terminal transfers (e.g. Heathrow T5 $\to$ T5) and inter-terminal airside shuttle transfers (e.g. T2 $\to$ T5). Enforces strict airline biometric flight connection gate conformance cutoffs (20 minutes before departure), accounting for weather-induced tarmac transit delays, arrival holding delays, and luggage sortation misconnect probabilities.
+- **Data Provenance & Diagnostic Audit Framework**: When `--debug` is requested, outputs a full accounting trail detailing DuckDB SQL queries, sample flight records, distribution quantiles, NWP model endpoints, and buffer calculations.
+
+### 9. Multimodal Aeronautical Copilot Architecture (Epic 6 - Specification)
 - **Document Text Corpus**: Designed to ingest Eurocontrol Route Availability Document (RAD), national Aeronautical Information Publications (AIPs), active NOTAMs, and METAR/TAF weather briefings into a vector database with hybrid BM25 + dense neural retrieval.
 - **Implementation Status**: Architectural specification defined; implementation deferred pending authoritative raw document text pipelines.
 

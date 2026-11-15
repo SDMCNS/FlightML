@@ -244,28 +244,31 @@ flightml serve --host 127.0.0.1 --port 8000
 ## 9. Passenger Travel Copilot & Public Travel Risk
 
 ### `GET /api/v1/passenger/itinerary-risk`
-Assess multi-leg flight journey delay risk, transfer hub missed connection probability, live 7-day meteorological forecast impact, and EU261/UK261 statutory passenger rights.
+Assess multi-leg flight journey delay risk, transfer hub missed connection probability, live 7-day meteorological forecast impact, EU261/UK261 statutory passenger rights, and full diagnostic data provenance.
 
 #### Query Parameters
 - `origin` *(string, default: "EINN")*: 4-letter ICAO code of departure airport.
 - `destination` *(string, default: "EBBR")*: 4-letter ICAO code of arrival airport.
-- `hub` *(string, optional, default: "EGLL")*: 4-letter ICAO code of transfer connection hub.
+- `hub` *(string, optional, default: null)*: 4-letter ICAO code of transfer connection hub (leave empty for direct flights).
 - `day_of_week` *(string, default: "tuesday")*: Day of the week.
 - `time_window` *(string, default: "morning")*: Departure wave (`morning`, `midday`, `afternoon`, `evening`).
-- `scheduled_layover_min` *(integer, default: 75)*: Scheduled connection layover duration at transfer hub.
-- `date` *(string, optional)*: Target flight date `YYYY-MM-DD` (defaults to upcoming 7-day forecast).
-- `period` *(string, default: "202510")*: Eurocontrol baseline data period.
+- `scheduled_layover_min` *(integer, default: 75)*: Scheduled connection layover duration at transfer hub in minutes.
+- `date` *(string, optional)*: Target flight date `YYYY-MM-DD` or relative keywords (`today`, `tomorrow`, `next tuesday`).
+- `period` *(string, default: "auto")*: Eurocontrol baseline data period (defaults to `auto` for intelligent seasonal and modern archive selection).
+- `debug` *(boolean, default: false)*: Set to `true` to return full `debug_audit` dictionary including DuckDB SQL queries, sample historical records, NWP endpoints, and MCT buffer calculations.
 
 #### Response Schema
 ```json
 {
-  "itinerary_id": "EINN_EGLL_EBBR_Tue_TGT",
+  "itinerary_id": "EINN_EGLL_EBBR_Tue_2026-11-17_P202510",
   "origin": "EINN",
   "hub": "EGLL",
   "destination": "EBBR",
   "day_of_week": "Tuesday",
   "time_window": "Morning",
   "target_date": "2026-11-17",
+  "period": "202510",
+  "period_selection_reason": "Closest seasonal match (autumn shoulder season: October 2025, archive 202510) for flight date 2026-11-17.",
   "overall_delay_risk_score": 63.6,
   "overall_delay_risk_level": "ELEVATED",
   "legs": [
@@ -274,7 +277,7 @@ Assess multi-leg flight journey delay risk, transfer hub missed connection proba
       "destination": "EGLL",
       "dominant_operator": "EIN",
       "operator_name": "Aer Lingus (operated as BAW codeshare)",
-      "typical_aircraft": "A320",
+      "typical_aircraft": "A20N",
       "mean_arr_delay_min": 5.8,
       "median_arr_delay_min": 1.0,
       "p90_arr_delay_min": 32.2,
@@ -288,10 +291,12 @@ Assess multi-leg flight journey delay risk, transfer hub missed connection proba
     "hub_name": "London Heathrow Airport",
     "scheduled_layover_min": 75,
     "minimum_connection_time_min": 90,
+    "effective_mct_min": 91.0,
+    "effective_slack_buffer_min": -19.0,
     "slack_buffer_min": -15.0,
-    "misconnect_probability_pct": 97.7,
-    "luggage_transfer_risk_pct": 40.0,
-    "luggage_status": "MODERATE_RISK",
+    "misconnect_probability_pct": 99.0,
+    "luggage_transfer_risk_pct": 78.0,
+    "luggage_status": "CRITICAL_RISK_CARRY_ON_ADVISED",
     "misconnect_risk_level": "CRITICAL"
   },
   "passenger_rights": {
@@ -301,6 +306,33 @@ Assess multi-leg flight journey delay risk, transfer hub missed connection proba
     "statutory_compensation_amount_eur": 250.0,
     "delay_threshold_hours": 3.0,
     "right_to_care_hours": 2.0
+  },
+  "debug_audit": {
+    "period_selection": {
+      "winning_period": "202510",
+      "candidates": [
+        {"period": "202510", "total_score": 11, "is_winner": true}
+      ]
+    },
+    "legs_audit": [
+      {
+        "origin": "EINN",
+        "destination": "EGLL",
+        "query_executed": "SELECT ... FROM flights WHERE adep = 'EINN' AND ades = 'EGLL'",
+        "sample_records": [
+          {"ectrl_id": 291268739, "operator": "EIN", "aircraft_type": "A21N", "arr_delay_min": 19.0}
+        ]
+      }
+    ],
+    "weather_audit": [
+      {
+        "airport": "EINN",
+        "api_endpoint": "https://api.open-meteo.com/v1/forecast (ECMWF / DWD ICON Ensemble)",
+        "is_live_api": true,
+        "temperature_c": 9.9,
+        "wind_speed_kts": 10.3
+      }
+    ]
   }
 }
 ```

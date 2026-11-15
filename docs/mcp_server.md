@@ -218,13 +218,14 @@ Evaluates multi-leg flight journey delay risk, transfer hub missed connection pr
 - **Arguments**:
   - `origin` (*str*, optional, default `'EINN'`): Departure airport ICAO code.
   - `destination` (*str*, optional, default `'EBBR'`): Arrival airport ICAO code.
-  - `hub` (*str*, optional, default `'EGLL'`): Transfer connection hub ICAO code (or empty for direct flights).
+  - `hub` (*str*, optional, default `''`): Transfer connection hub ICAO code (or empty string for direct flights).
   - `day_of_week` (*str*, optional, default `'tuesday'`): Planned day of departure.
   - `time_window` (*str*, optional, default `'morning'`): Departure wave (`morning`, `midday`, `afternoon`, `evening`).
   - `scheduled_layover_min` (*int*, optional, default `75`): Scheduled transfer layover duration in minutes.
-  - `target_date` (*str*, optional): Target date `YYYY-MM-DD` (defaults to live upcoming 7-day forecast).
-  - `period` (*str*, optional, default `'202510'`): Eurocontrol archive period.
-- **Returns**: Leg-by-leg delay distributions (mean, median, P90, % delayed > 15m), live airport weather forecasts (wind, gusts, rain %, crosswind), hub missed connection probability, luggage transfer risk, EU261 statutory rights, departure wave comparison, and actionable passenger recommendations.
+  - `target_date` (*str*, optional): Target date `YYYY-MM-DD` or relative keyword (`today`, `tomorrow`, `next tuesday`).
+  - `period` (*str*, optional, default `'auto'`): Eurocontrol archive period (`auto` automatically matches the closest seasonal and most modern contemporary archive).
+  - `debug` (*bool*, optional, default `False`): Set `True` to include full diagnostic audit accounting of DuckDB SQL queries, sample historical records, NWP endpoints, and MCT formulas.
+- **Returns**: Leg-by-leg delay distributions (mean, median, P90, % delayed > 15m), live airport weather forecasts (wind, gusts, rain %, crosswind), hub missed connection probability, luggage transfer risk, EU261 statutory rights, departure wave comparison, actionable passenger recommendations, and optional `debug_audit` dictionary.
 
 ---
 

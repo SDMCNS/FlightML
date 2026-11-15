@@ -502,43 +502,48 @@ flightml mcp --transport sse --port 8000
 Assess multi-leg flight journey delay risk, missed connection probability, live 7-day meteorological forecast impact, EU261/UK261 passenger rights, and departure wave optimization for the general travelling public.
 
 ```bash
-flightml trip-risk --origin EINN --dest EBBR --hub EGLL --day tuesday --time morning --layover 75
+flightml trip-risk --origin EINN --dest EBBR --hub EGLL --day tuesday --time morning --layover 75 --date 2026-11-17 --debug
 ```
 
 **Options:**
 - `--origin, -o`: Departure airport 4-letter ICAO code [default: `EINN`]
 - `--dest, -d`: Arrival airport 4-letter ICAO code [default: `EBBR`]
-- `--hub`: Optional transfer connection hub 4-letter ICAO code [default: `EGLL`]
+- `--hub`: Optional transfer connection hub 4-letter ICAO code [default: `None` for direct flights]
 - `--day`: Day of week (`tuesday`, `monday`, `friday`, etc.) [default: `tuesday`]
 - `--time`: Departure wave (`morning`, `midday`, `afternoon`, `evening`) [default: `morning`]
 - `--layover, -l`: Scheduled layover duration at transfer hub in minutes [default: `75`]
-- `--date`: Target flight date in `YYYY-MM-DD` format (defaults to live 7-day forecast)
-- `--period`: Eurocontrol baseline data period [default: `202510`]
+- `--date`: Target flight date in `YYYY-MM-DD` format or relative keywords (`today`, `tomorrow`, `next tuesday`) [default: upcoming date]
+- `--period`: Eurocontrol baseline data period (`202402`, `202406`, `202410`, `202502`, `202506`, `202510`, `201611`) [default: `auto` to automatically select the closest seasonal and most modern contemporary archive]
+- `--debug`: Flag to print detailed diagnostic accounting of all historical records, DuckDB SQL queries, NWP weather endpoints, and MCT buffer calculations.
 
-**Synthetic Output:**
+**Standard Advisory Output:**
 ```text
 ┌────────────────────── FlightML Public Travel Advisory ──────────────────────┐
 │ 🧳 Passenger Journey & Delay Risk Copilot                                   │
-│ Route: EINN ➔ EGLL (Hub) ➔ EBBR | Day: Tuesday | Wave: Morning | Period:    │
-│ 202510                                                                      │
+│ Route: EINN ➔ EGLL (Hub) ➔ EBBR | Flight Date: 2026-11-17 (Tuesday) | Wave: │
+│ Morning                                                                     │
+│ Data Period: 202510 (Closest seasonal match (autumn shoulder season:        │
+│ October 2025, archive 202510) for flight date 2026-11-17.)                  │
 └─────────────────────────────────────────────────────────────────────────────┘
                  ✈️ Flight Legs & Delay Risk (Tuesday morning)                 
 ┌─────────┬─────────┬─────────┬─────────┬────────┬─────────┬────────┬─────────┐
 │ Leg     │ Operator│ Aircraft│ Avg/Med │ P90 Del│ Del>15m │ Weather│ Adjusted│
 ├─────────┼─────────┼─────────┼─────────┼────────┼─────────┼────────┼─────────┤
-│ EINN➔   │ EIN     │ A320    │ +5.8m / │ +32.2m │   22.5% │ Drizzle│   25.8% │
+│ EINN➔   │ EIN     │ A20N    │ +5.8m / │ +32.2m │   22.5% │ Drizzle│   25.8% │
 │ EGLL    │         │         │   +1.0m │        │         │ (G20kt)│         │
-│ EGLL➔   │ BAW     │ A319    │ +8.2m / │ +23.8m │   25.0% │ Overcast│  28.5% │
+│ EGLL➔   │ BAW     │ A20N    │ +8.2m / │ +23.8m │   25.0% │ Overcast│  28.5% │
 │ EBBR    │         │         │   +5.5m │        │         │ (G4kt) │         │
 └─────────┴─────────┴─────────┴─────────┴────────┴─────────┴────────┴─────────┘
        ⏳ Connection Hub & Missed Flight Risk (London Heathrow Airport)        
 ┌──────────┬─────────┬──────────┬──────────┬───────────┬──────────┬───────────┐
 │ Hub      │ Layover │ MCT      │ Slack    │ Misconnect│ Luggage  │ Status    │
 ├──────────┼─────────┼──────────┼──────────┼───────────┼──────────┼───────────┤
-│ EGLL     │  75 min │   90 min │  -15 min │     97.7% │      40% │ CRITICAL  │
+│ EGLL     │  75 min │   91 min │  -19 min │     99.0% │      78% │ CRITICAL  │
 └──────────┴─────────┴──────────┴──────────┴───────────┴──────────┴───────────┘
 ⚠️ Inter-Terminal Transfer Required: EIN (T2) ➔ BAW (T5). Heathrow inter-terminal 
 transfers require Flight Connections shuttle buses and transit security.
+🌧️ Hub Weather Impact: Inbound Holding: ~2 min delay; Outbound taxi delays will 
+NOT hold the gate (boarding closes strictly 20 minutes before departure).
 
          💶 Passenger Rights & Statutory Compensation (EU261 / UK261)          
 ┌───────────────┬──────────────┬───────────────┬──────────────┬───────────────┐
@@ -546,5 +551,59 @@ transfers require Flight Connections shuttle buses and transit security.
 ├───────────────┼──────────────┼───────────────┼──────────────┼───────────────┤
 │        942 km │ Short-haul   │          €250 │ ≥ 3 hours    │ After 2 hours │
 └───────────────┴──────────────┴───────────────┴──────────────┴───────────────┘
+
+                      🕒 When Should I Fly? (EINN ➔ EGLL)                      
+┌────────────┬─────────────┬───────────┬───────────┬────────────┬─────────────┐
+│ Departure  │ Time Window │ Avg Delay │ P90 Delay │    On-Time │ Recommenda… │
+├────────────┼─────────────┼───────────┼───────────┼────────────┼─────────────┤
+│ Early Morn │ 06:00-09:00 │ +23.0 min │ +38.4 min │      50.0% │ CONGESTED   │
+│ Midday Wave│ 09:00-13:00 │+214.0 min │+214.0 min │       0.0% │ ⚠️ HIGHEST  │
+│ Afternoon  │ 13:00-17:00 │ -10.8 min │  -6.2 min │     100.0% │ CONGESTED   │
+│ Evening    │ 17:00-22:00 │ -16.4 min │ -10.6 min │     100.0% │ 🌟 BEST (100│
+└────────────┴─────────────┴───────────┴───────────┴────────────┴─────────────┘
+```
+
+**Diagnostic Audit Output (`--debug`):**
+```text
+================================================================================
+🛠️ DETAILED FLIGHTML DIAGNOSTIC & DATA PROVENANCE AUDIT (--debug)
+================================================================================
+
+                             🗄️ Eurocontrol Period Selection Scoring Audit                             
+┏━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Period ┃ Year / Month     ┃ Season          ┃  Δ Month ┃  Δ Year ┃ Legacy Penalty ┃ Total Score ┃ Status    ┃
+┡━━━━━━━━╇━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━┩
+│ 201611 │ 2016 / November  │ autumn shoulder │       0m │     10y │            +50 │          60 │ Candidate │
+│ 202402 │ 2024 / February  │ winter          │       3m │      2y │             +0 │          32 │ Candidate │
+│ 202406 │ 2024 / June      │ summer peak     │       5m │      2y │             +0 │          52 │ Candidate │
+│ 202410 │ 2024 / October   │ autumn shoulder │       1m │      2y │             +0 │          12 │ Candidate │
+│ 202502 │ 2025 / February  │ winter          │       3m │      1y │             +0 │          31 │ Candidate │
+│ 202506 │ 2025 / June      │ summer peak     │       5m │      1y │             +0 │          51 │ Candidate │
+│ 202510 │ 2025 / October   │ autumn shoulder │       1m │      1y │             +0 │          11 │ 🏆 WINNER │
+└────────┴━━━━━━━━━━━━━━━━━━┴━━━━━━━━━━━━━━━━━┴━━━━━━━━━━┴━━━━━━━━━┴━━━━━━━━━━━━━━━━┴━━━━━━━━━━━━━┴━━━━━━━━━━━┘
+
+╭────────────────────────────────────── ✈️ Historical Records Audit: Leg 1 ──────────────────────────────────────╮
+│ Leg 1: EINN ➔ EGLL (Shannon Airport to London Heathrow Airport)                                              │
+│ Sampling Stage: Exact Day-of-Week and Departure Window (Commercial Filtered) | Matched Records: 89           │
+│ DuckDB SQL: SELECT ectrl_id, ac_operator, ac_type, ac_reg, actual_off_block_time, actual_arrival_time,       │
+│ arr_delay_min, dep_delay_min FROM flights WHERE adep = 'EINN' AND ades = 'EGLL' ...                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+                     Sample Historical Flight Executions (EINN ➔ EGLL)                      
+┏━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┓
+┃  ECTRL ID ┃ Off-Block (UTC)     ┃ Arrival (UTC)       ┃ Operator          ┃ Type ┃ Reg   ┃ Dep Delay ┃ Arr Delay ┃
+┡━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━┩
+│ 291268739 │ 2025-10-01 06:41:00 │ 2025-10-01 08:08:00 │ EIN (Aer Lingus)  │ A21N │ EILRA │    +1.0m  │   +19.0m  │
+│ 291316499 │ 2025-10-07 06:33:00 │ 2025-10-07 07:56:00 │ EIN (Aer Lingus)  │ A21N │ EILRC │    -7.0m  │    +7.0m  │
+│ 291364239 │ 2025-10-14 06:45:00 │ 2025-10-14 07:59:00 │ EIN (Aer Lingus)  │ A21N │ EILRA │    +5.0m  │   +10.0m  │
+└━━━━━━━━━━━┴━━━━━━━━━━━━━━━━━━━━━┴━━━━━━━━━━━━━━━━━━━━━┴━━━━━━━━━━━━━━━━━━━┴━━━━━━┴━━━━━━━┴━━━━━━━━━━━┴━━━━━━━━━━━┘
+
+                     🌦️ Live NWP Weather Observation & API Provenance Audit                     
+┏━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ Airport        ┃ Role     ┃ Coordinates      ┃ NWP Provider / Endpoint        ┃ Matched UTC      ┃ Live/NWP ┃ Temp ┃ Winds (kts)         ┃ Rain % ┃ Conditions    ┃
+┡━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ EINN (Shannon) ┃ Dep.     ┃ 52.70°, -8.92°   ┃ open-meteo.com (ECMWF/ICON)    ┃ 2026-11-17T08:00 ┃ LIVE API ┃ 9.9° │ 254° @ 10kt (G20kt) │    68% │ Light drizzle │
+│ EGLL (Heathrow)┃ Hub      ┃ 51.47°, -0.46°   ┃ open-meteo.com (ECMWF/ICON)    ┃ 2026-11-17T10:00 ┃ LIVE API ┃ 8.5° │ 179° @ 04kt (G04kt) │    62% │ Overcast      │
+│ EBBR (Brussels)┃ Dest.    ┃ 50.90°, 4.48°    ┃ open-meteo.com (ECMWF/ICON)    ┃ 2026-11-17T12:00 ┃ LIVE API ┃ 9.2° │ 178° @ 05kt (G10kt) │    35% │ Overcast      │
+└━━━━━━━━━━━━━━━━┴━━━━━━━━━━┴━━━━━━━━━━━━━━━━━━┴━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┴━━━━━━━━━━━━━━━━━━┴━━━━━━━━━━┴━━━━━━┴━━━━━━━━━━━━━━━━━━━━━┴━━━━━━━━┴━━━━━━━━━━━━━━━┘
 ```
 
