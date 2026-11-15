@@ -4215,7 +4215,7 @@ with tab_cat_passenger:
     with p_col1:
         p_origin = st.text_input("🛫 Origin Airport (ICAO)", value="EINN", help="e.g. EINN (Shannon), EHAM (Amsterdam)").strip().upper()
     with p_col2:
-        p_hub = st.text_input("🔄 Transfer Connection Hub (ICAO)", value="EGLL", help="e.g. EGLL (London Heathrow), EHAM, EDDF. Leave blank for direct flights.").strip().upper()
+        p_hub = st.text_input("🔄 Transfer Connection Hub (ICAO)", value="", help="e.g. EGLL (London Heathrow), EHAM, EDDF. Leave blank for direct flights.").strip().upper()
     with p_col3:
         p_dest = st.text_input("🛬 Final Destination (ICAO)", value="EBBR", help="e.g. EBBR (Brussels), LFPG (Paris)").strip().upper()
 

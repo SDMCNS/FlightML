@@ -241,6 +241,11 @@ class PassengerJourneyEngine:
     Core engine evaluating flight itinerary risk for the travelling public.
     """
 
+    CARGO_AND_GA_OPERATORS: set[str] = {
+        "BCS", "FDX", "UPS", "CLX", "BOX", "GEC", "TFL", "SWN", "ABR", "MNB", "NPT", "SRR",
+        "ZZZ", "AHO", "FYG", "TGM", "AAB", "EJA", "NJE", "VJT", "BZE", "JME",
+    }
+
     OPERATOR_NAMES: dict[str, str] = {
         "EIN": "Aer Lingus (operated as BAW codeshare)",
         "BAW": "British Airways",
@@ -252,8 +257,16 @@ class PassengerJourneyEngine:
         "EZY": "easyJet",
         "SAS": "Scandinavian Airlines",
         "IBE": "Iberia",
+        "AEA": "Air Europa",
+        "VLG": "Vueling Airlines",
+        "WZZ": "Wizz Air",
         "SWR": "Swiss International Air Lines",
         "TAP": "TAP Air Portugal",
+        "AUA": "Austrian Airlines",
+        "LOT": "LOT Polish Airlines",
+        "THY": "Turkish Airlines",
+        "FIN": "Finnair",
+        "AZA": "ITA Airways",
     }
 
     def __init__(self, dataset: FlightDataset | None = None) -> None:
@@ -484,7 +497,9 @@ class PassengerJourneyEngine:
             display_window = "All Day"
             target_hour = 10
 
-        # Query historical flights
+        # Query historical flights (excluding cargo freighters and private general aviation)
+        cargo_str = ", ".join(f"'{c}'" for c in self.CARGO_AND_GA_OPERATORS)
+        cargo_filter = f"AND ac_operator NOT IN ({cargo_str})"
         sql = f"""
             SELECT 
                 ac_operator,
@@ -496,6 +511,7 @@ class PassengerJourneyEngine:
               AND ades = '{dest_clean}'
               AND CAST(strftime(actual_off_block_time, '%w') AS INT) = {day_of_week_int}
               {hour_filter}
+              {cargo_filter}
         """
         df = self.dataset.query(sql)
 
@@ -505,8 +521,15 @@ class PassengerJourneyEngine:
                 SELECT ac_operator, ac_type, arr_delay_min, dep_delay_min
                 FROM flights
                 WHERE adep = '{orig_clean}' AND ades = '{dest_clean}'
+                  {cargo_filter}
             """
             df = self.dataset.query(fallback_sql)
+
+        # If still empty (e.g. specialized cargo-only or unclassified route), fallback without operator exclusion
+        if df.empty:
+            df = self.dataset.query(
+                f"SELECT ac_operator, ac_type, arr_delay_min, dep_delay_min FROM flights WHERE adep = '{orig_clean}' AND ades = '{dest_clean}'"
+            )
 
         if not df.empty:
             dominant_op = df["ac_operator"].mode().iloc[0] if not df["ac_operator"].empty else "BAW"
@@ -679,11 +702,11 @@ class PassengerJourneyEngine:
             luggage_prob = 10.0
             luggage_status = "LOW_RISK"
 
-        transfer_note = hub_meta.get("transfer_guidance", "")
         if is_inter_terminal:
-            transfer_note = f"⚠️ Inter-Terminal Transfer Required: {in_op} ({in_term}) ➔ {out_op} ({out_term}). {transfer_note}"
+            transfer_guidance = hub_meta.get("transfer_guidance", "Inter-terminal shuttle bus transfer required.")
+            transfer_note = f"⚠️ Inter-Terminal Transfer Required: {in_op} ({in_term}) ➔ {out_op} ({out_term}). {transfer_guidance}"
         else:
-            transfer_note = f"✅ Same Terminal Transfer: {in_term}. {transfer_note}"
+            transfer_note = f"✅ Same Terminal Transfer ({in_term}): Both inbound ({in_op}) and outbound ({out_op}) flights operate within {in_term}. No airside shuttle bus is required; follow internal Flight Connections signage to your departure gate. Note that boarding gate conformance closes strictly 20 minutes before departure."
 
         weather_guidance = (
             f"Weather at intermediate hub {hub_clean} exerts a compound double impact: "
@@ -781,33 +804,47 @@ class PassengerJourneyEngine:
         day_of_week_int: int = 2,
     ) -> list[DepartureWaveComparison]:
         """
-        Compare reliability across time-of-day departure waves to show the First Wave Advantage.
+        Compare reliability across time-of-day departure waves dynamically based on empirical route data.
         """
         orig_clean = origin.strip().upper()
         dest_clean = destination.strip().upper()
 
         waves = [
-            ("Early Morning", "06:00 - 09:00 UTC", 6, 9, "LOW", "🌟 BEST CHOICE (First Wave Advantage)"),
-            ("Midday Wave", "09:00 - 13:00 UTC", 9, 13, "MODERATE", "ACCEPTABLE (Moderate Slack)"),
-            ("Afternoon Peak", "13:00 - 17:00 UTC", 13, 17, "ELEVATED", "CONGESTED (Slot Queue Delays)"),
-            ("Evening Wave", "17:00 - 22:00 UTC", 17, 22, "HIGH", "⚠️ AVOID IF TIGHT CONNECTION (Cascade Delays)"),
+            ("Early Morning", "06:00 - 09:00 UTC", 6, 9),
+            ("Midday Wave", "09:00 - 13:00 UTC", 9, 13),
+            ("Afternoon Peak", "13:00 - 17:00 UTC", 13, 17),
+            ("Evening Wave", "17:00 - 22:00 UTC", 17, 22),
         ]
 
-        results = []
-        for name, h_range, start_h, end_h, risk, badge in waves:
-            sql = f"""
+        cargo_str = ", ".join(f"'{c}'" for c in self.CARGO_AND_GA_OPERATORS)
+        cargo_filter = f"AND ac_operator NOT IN ({cargo_str})"
+
+        raw_wave_data = []
+        for name, h_range, start_h, end_h in waves:
+            sql_dow = f"""
                 SELECT arr_delay_min
                 FROM flights
                 WHERE adep = '{orig_clean}' AND ades = '{dest_clean}'
+                  AND CAST(strftime(actual_off_block_time, '%w') AS INT) = {day_of_week_int}
                   AND CAST(strftime(actual_off_block_time, '%H') AS INT) BETWEEN {start_h} AND {end_h}
+                  {cargo_filter}
             """
-            df = self.dataset.query(sql)
+            df = self.dataset.query(sql_dow)
+            if len(df) < 3:
+                sql_all = f"""
+                    SELECT arr_delay_min
+                    FROM flights
+                    WHERE adep = '{orig_clean}' AND ades = '{dest_clean}'
+                      AND CAST(strftime(actual_off_block_time, '%H') AS INT) BETWEEN {start_h} AND {end_h}
+                      {cargo_filter}
+                """
+                df = self.dataset.query(sql_all)
+
             if not df.empty:
                 avg_del = float(df["arr_delay_min"].mean())
                 p90_del = float(df["arr_delay_min"].quantile(0.90))
                 otp = float((df["arr_delay_min"] <= 15).mean() * 100.0)
             else:
-                # Realistic synthetic model calibrated by wave
                 if start_h < 9:
                     avg_del, p90_del, otp = 3.5, 9.0, 94.0
                 elif start_h < 13:
@@ -817,14 +854,52 @@ class PassengerJourneyEngine:
                 else:
                     avg_del, p90_del, otp = 22.0, 44.0, 68.0
 
+            raw_wave_data.append({
+                "name": name,
+                "range": h_range,
+                "avg_del": avg_del,
+                "p90_del": p90_del,
+                "otp": otp,
+            })
+
+        # Rank waves by empirical performance (highest OTP, then lowest avg delay)
+        best_wave_idx = max(range(len(raw_wave_data)), key=lambda i: (raw_wave_data[i]["otp"], -raw_wave_data[i]["avg_del"]))
+        worst_wave_idx = min(range(len(raw_wave_data)), key=lambda i: (raw_wave_data[i]["otp"], -raw_wave_data[i]["avg_del"]))
+
+        results = []
+        for i, item in enumerate(raw_wave_data):
+            avg_del = item["avg_del"]
+            p90_del = item["p90_del"]
+            otp = item["otp"]
+
+            # Dynamic risk classification
+            if otp >= 80.0 and avg_del <= 10.0:
+                risk_level = "LOW"
+            elif otp >= 65.0 and avg_del <= 18.0:
+                risk_level = "MODERATE"
+            elif otp >= 45.0:
+                risk_level = "ELEVATED"
+            else:
+                risk_level = "HIGH"
+
+            # Dynamic recommendation badges
+            if i == best_wave_idx:
+                badge = f"🌟 BEST CHOICE ({otp:.0f}% On-Time)"
+            elif i == worst_wave_idx:
+                badge = f"⚠️ HIGHEST DELAYS (+{avg_del:.0f}m avg)"
+            elif risk_level == "MODERATE":
+                badge = "ACCEPTABLE (Moderate Reliability)"
+            else:
+                badge = "CONGESTED (Slot Queue Risk)"
+
             results.append(
                 DepartureWaveComparison(
-                    wave_name=name,
-                    hours_range=h_range,
+                    wave_name=item["name"],
+                    hours_range=item["range"],
                     avg_arr_delay_min=round(avg_del, 1),
                     p90_delay_min=round(p90_del, 1),
                     on_time_pct=round(otp, 1),
-                    reactionary_risk_level=risk,
+                    reactionary_risk_level=risk_level,
                     recommendation_badge=badge,
                 )
             )
@@ -916,9 +991,18 @@ class PassengerJourneyEngine:
         recommendations.append(
             f"💶 Know Your Rights: If your flight arrives at {destination.upper()} ≥ 3 hours late, you are entitled to €{rights.statutory_compensation_amount_eur:.0f} under EU261/UK261."
         )
-        recommendations.append(
-            "✈️ Take the First Morning Wave: Flights departing before 09:00 UTC have an on-time rate over 90% because aircraft and crews are fresh from overnight maintenance."
-        )
+        # Dynamic wave recommendation
+        if wave_comp:
+            best_w = max(wave_comp, key=lambda w: (w.on_time_pct, -w.avg_arr_delay_min))
+            worst_w = min(wave_comp, key=lambda w: (w.on_time_pct, -w.avg_arr_delay_min))
+            if best_w.on_time_pct > worst_w.on_time_pct + 8.0:
+                recommendations.append(
+                    f"✈️ Optimal Departure Window: The {best_w.wave_name} ({best_w.hours_range}) is the most reliable departure window on this route with {best_w.on_time_pct:.1f}% on-time performance (avg delay {best_w.avg_arr_delay_min:+.1f} min), whereas the {worst_w.wave_name} has the lowest reliability ({worst_w.on_time_pct:.1f}% on-time, avg delay {worst_w.avg_arr_delay_min:+.1f} min)."
+                )
+            else:
+                recommendations.append(
+                    f"✈️ Departure Reliability: Flights on this route maintain relatively consistent reliability across the day (best: {best_w.wave_name} at {best_w.on_time_pct:.1f}% on-time)."
+                )
 
         itinerary_id = f"{origin.upper()}_{hub.upper() if hub else 'DIRECT'}_{destination.upper()}_{day_name[:3]}_{target_date or 'TGT'}"
 

@@ -2538,7 +2538,7 @@ def find_twins_cmd(
 def trip_risk_cmd(
     origin: str = typer.Option("EINN", "--origin", "-o", help="Departure airport ICAO code"),
     dest: str = typer.Option("EBBR", "--dest", "-d", help="Destination airport ICAO code"),
-    hub: str = typer.Option("EGLL", "--hub", help="Optional transfer connection hub ICAO code"),
+    hub: str = typer.Option(None, "--hub", help="Optional transfer connection hub ICAO code (leave empty for direct flights)"),
     day: str = typer.Option("tuesday", "--day", help="Day of the week (e.g. tuesday, monday)"),
     time: str = typer.Option("morning", "--time", help="Departure wave ('morning', 'midday', 'afternoon', 'evening')"),
     layover: int = typer.Option(75, "--layover", "-l", help="Scheduled connection layover at hub in minutes"),

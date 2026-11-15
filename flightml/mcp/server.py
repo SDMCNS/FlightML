@@ -356,7 +356,7 @@ def create_mcp_server() -> FastMCP:
     def assess_passenger_itinerary(
         origin: str = "EINN",
         destination: str = "EBBR",
-        hub: str = "EGLL",
+        hub: str = "",
         day_of_week: str = "tuesday",
         time_window: str = "morning",
         scheduled_layover_min: int = 75,
@@ -368,7 +368,7 @@ def create_mcp_server() -> FastMCP:
         Args:
             origin: Departure airport 4-letter ICAO code (e.g. 'EINN' Shannon, 'EHAM' Amsterdam).
             destination: Arrival airport 4-letter ICAO code (e.g. 'EBBR' Brussels, 'EGLL' Heathrow).
-            hub: Optional transfer connection hub (e.g. 'EGLL'). Leave empty or None for direct flights.
+            hub: Optional transfer connection hub (e.g. 'EGLL'). Leave empty for direct flights.
             day_of_week: Day of week for departure (e.g. 'tuesday', 'monday', 'friday').
             time_window: Departure window ('morning', 'midday', 'afternoon', 'evening').
             scheduled_layover_min: Scheduled layover duration at transfer hub in minutes (e.g. 75).
