@@ -118,32 +118,64 @@ def train_with_transformers_native(
 
     dataset = load_sft_dataset(dataset_path)
 
-    training_args = TrainingArguments(
-        per_device_train_batch_size=micro_batch_size,
-        gradient_accumulation_steps=gradient_accumulation_steps,
-        warmup_ratio=0.03,
-        num_train_epochs=epochs,
-        learning_rate=lr,
-        fp16=False,
-        bf16=True,
-        logging_steps=10,
-        optim="paged_adamw_8bit",  # Offloads memory spikes to 32GB system RAM
-        weight_decay=0.01,
-        lr_scheduler_type="cosine",
-        output_dir=output_dir,
-        save_strategy="epoch",
-        report_to="none",
-    )
+    # Use SFTConfig for modern TRL versions, falling back to TrainingArguments for older versions
+    try:
+        from trl import SFTConfig
+        training_args = SFTConfig(
+            output_dir=output_dir,
+            per_device_train_batch_size=micro_batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            warmup_ratio=0.03,
+            num_train_epochs=epochs,
+            learning_rate=lr,
+            fp16=False,
+            bf16=True,
+            logging_steps=10,
+            optim="paged_adamw_8bit",  # Offloads memory spikes to 32GB system RAM
+            weight_decay=0.01,
+            lr_scheduler_type="cosine",
+            save_strategy="epoch",
+            report_to="none",
+            max_length=max_seq_length,
+        )
+    except (ImportError, TypeError):
+        from transformers import TrainingArguments
+        training_args = TrainingArguments(
+            output_dir=output_dir,
+            per_device_train_batch_size=micro_batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            warmup_ratio=0.03,
+            num_train_epochs=epochs,
+            learning_rate=lr,
+            fp16=False,
+            bf16=True,
+            logging_steps=10,
+            optim="paged_adamw_8bit",
+            weight_decay=0.01,
+            lr_scheduler_type="cosine",
+            save_strategy="epoch",
+            report_to="none",
+        )
 
-    trainer = SFTTrainer(
-        model=model,
-        tokenizer=tokenizer,
-        train_dataset=dataset,
-        peft_config=peft_config,
-        max_seq_length=max_seq_length,
-        dataset_text_field="messages",
-        args=training_args,
-    )
+    import inspect
+    sig = inspect.signature(SFTTrainer.__init__)
+    trainer_kwargs = {
+        "model": model,
+        "args": training_args,
+        "train_dataset": dataset,
+    }
+    if "peft_config" in sig.parameters:
+        trainer_kwargs["peft_config"] = peft_config
+    if "processing_class" in sig.parameters:
+        trainer_kwargs["processing_class"] = tokenizer
+    elif "tokenizer" in sig.parameters:
+        trainer_kwargs["tokenizer"] = tokenizer
+    if "dataset_text_field" in sig.parameters:
+        trainer_kwargs["dataset_text_field"] = "messages"
+    if "max_seq_length" in sig.parameters:
+        trainer_kwargs["max_seq_length"] = max_seq_length
+
+    trainer = SFTTrainer(**trainer_kwargs)
 
     print("⏳ Starting QLoRA fine-tuning...")
     trainer.train()
@@ -193,31 +225,61 @@ def train_with_unsloth(
 
     dataset = load_sft_dataset(dataset_path)
 
-    training_args = TrainingArguments(
-        per_device_train_batch_size=micro_batch_size,
-        gradient_accumulation_steps=gradient_accumulation_steps,
-        warmup_ratio=0.03,
-        num_train_epochs=epochs,
-        learning_rate=lr,
-        fp16=False,
-        bf16=True,
-        logging_steps=10,
-        optim="paged_adamw_8bit",
-        weight_decay=0.01,
-        lr_scheduler_type="cosine",
-        output_dir=output_dir,
-        save_strategy="epoch",
-        report_to="none",
-    )
+    try:
+        from trl import SFTConfig
+        training_args = SFTConfig(
+            output_dir=output_dir,
+            per_device_train_batch_size=micro_batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            warmup_ratio=0.03,
+            num_train_epochs=epochs,
+            learning_rate=lr,
+            fp16=False,
+            bf16=True,
+            logging_steps=10,
+            optim="paged_adamw_8bit",
+            weight_decay=0.01,
+            lr_scheduler_type="cosine",
+            save_strategy="epoch",
+            report_to="none",
+            max_length=max_seq_length,
+        )
+    except (ImportError, TypeError):
+        from transformers import TrainingArguments
+        training_args = TrainingArguments(
+            output_dir=output_dir,
+            per_device_train_batch_size=micro_batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            warmup_ratio=0.03,
+            num_train_epochs=epochs,
+            learning_rate=lr,
+            fp16=False,
+            bf16=True,
+            logging_steps=10,
+            optim="paged_adamw_8bit",
+            weight_decay=0.01,
+            lr_scheduler_type="cosine",
+            save_strategy="epoch",
+            report_to="none",
+        )
 
-    trainer = SFTTrainer(
-        model=model,
-        tokenizer=tokenizer,
-        train_dataset=dataset,
-        dataset_text_field="messages",
-        max_seq_length=max_seq_length,
-        args=training_args,
-    )
+    import inspect
+    sig = inspect.signature(SFTTrainer.__init__)
+    trainer_kwargs = {
+        "model": model,
+        "args": training_args,
+        "train_dataset": dataset,
+    }
+    if "processing_class" in sig.parameters:
+        trainer_kwargs["processing_class"] = tokenizer
+    elif "tokenizer" in sig.parameters:
+        trainer_kwargs["tokenizer"] = tokenizer
+    if "dataset_text_field" in sig.parameters:
+        trainer_kwargs["dataset_text_field"] = "messages"
+    if "max_seq_length" in sig.parameters:
+        trainer_kwargs["max_seq_length"] = max_seq_length
+
+    trainer = SFTTrainer(**trainer_kwargs)
 
     print("⏳ Starting QLoRA fine-tuning run...")
     trainer.train()
