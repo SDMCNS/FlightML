@@ -125,7 +125,7 @@ def train_with_transformers_native(
             output_dir=output_dir,
             per_device_train_batch_size=micro_batch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
-            warmup_ratio=0.03,
+            warmup_steps=50,
             num_train_epochs=epochs,
             learning_rate=lr,
             fp16=False,
@@ -144,7 +144,7 @@ def train_with_transformers_native(
             output_dir=output_dir,
             per_device_train_batch_size=micro_batch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
-            warmup_ratio=0.03,
+            warmup_steps=50,
             num_train_epochs=epochs,
             learning_rate=lr,
             fp16=False,
@@ -164,8 +164,7 @@ def train_with_transformers_native(
         "args": training_args,
         "train_dataset": dataset,
     }
-    if "peft_config" in sig.parameters:
-        trainer_kwargs["peft_config"] = peft_config
+    # Note: peft_config is NOT passed because model is already a PeftModel instance
     if "processing_class" in sig.parameters:
         trainer_kwargs["processing_class"] = tokenizer
     elif "tokenizer" in sig.parameters:
@@ -231,7 +230,7 @@ def train_with_unsloth(
             output_dir=output_dir,
             per_device_train_batch_size=micro_batch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
-            warmup_ratio=0.03,
+            warmup_steps=50,
             num_train_epochs=epochs,
             learning_rate=lr,
             fp16=False,
@@ -250,7 +249,7 @@ def train_with_unsloth(
             output_dir=output_dir,
             per_device_train_batch_size=micro_batch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
-            warmup_ratio=0.03,
+            warmup_steps=50,
             num_train_epochs=epochs,
             learning_rate=lr,
             fp16=False,
