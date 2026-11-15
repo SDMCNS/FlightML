@@ -6,6 +6,15 @@ import typer
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    BarColumn,
+    TaskProgressColumn,
+    TimeRemainingColumn,
+    MofNCompleteColumn,
+)
 import uvicorn
 
 from flightml.data.dataset import FlightDataset
@@ -2953,14 +2962,33 @@ def generate_corpus_cmd(
         expand=False,
     ))
 
-    with console.status("[bold green]Synthesizing European ATM physics, CRCO economics & passenger rights datasets..."):
-        generator = CorpusGenerator(period=period, seed=seed)
-        fmt_list = [f.strip() for f in formats.split(",") if f.strip()]
+    generator = CorpusGenerator(period=period, seed=seed)
+    fmt_list = [f.strip() for f in formats.split(",") if f.strip()]
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]{task.description}"),
+        BarColumn(bar_width=35),
+        MofNCompleteColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        task_id = progress.add_task("[bold cyan]Synthesizing European ATM training data...", total=samples)
+
+        def on_progress(completed: int, total: int, current_track: str) -> None:
+            progress.update(
+                task_id,
+                completed=completed,
+                description=f"[bold cyan]Synthesizing {current_track.replace('_', ' ').title()}",
+            )
+
         result = generator.generate_corpus(
             total_samples=samples,
             tracks=tracks,
             output_dir=output_dir,
             formats=fmt_list,
+            progress_callback=on_progress,
         )
 
     table = Table(title="📁 Generated Training Corpora Summary", show_header=True, header_style="bold green")

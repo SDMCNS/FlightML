@@ -75,6 +75,7 @@ class CorpusGenerator:
         output_dir: str | Path = "data/llm_corpus",
         formats: list[str] | None = None,
         train_split: float = 0.9,
+        progress_callback: Any = None,
     ) -> dict[str, Any]:
         """Synthesize and export structured LLM training datasets."""
         if formats is None:
@@ -92,21 +93,44 @@ class CorpusGenerator:
             selected_tracks = valid_tracks
 
         samples_per_track = max(1, total_samples // len(selected_tracks))
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
         ds = self._ensure_dataset()
 
         sft_samples: list[SFTConversation] = []
         dpo_pairs: list[DPOPair] = []
         tool_samples: list[ToolCallSample] = []
 
-        # 1. Trajectory Physics & CRCO Generation (Data-backed where possible)
-        historical_flights: list[dict[str, Any]] = []
+        # 1. Pre-compute real flight trajectory physics pool (15-20 flights max)
+        pru_pool: list[Any] = []
+        fuel_crco_pool: list[tuple[Any, Any]] = []
+
         if ds is not None:
             try:
-                df = ds.search_flights(limit=min(samples_per_track * 2, 200))
-                if not df.empty:
-                    historical_flights = df.to_dict(orient="records")
+                if progress_callback:
+                    progress_callback(0, total_samples, "sampling flight pool")
+                df = ds.search_flights(limit=25)
+                for row in df.to_dict(orient="records"):
+                    eid = int(row["ectrl_id"])
+                    try:
+                        pru = compute_flight_pru_kpis(ds, ectrl_id=eid)
+                        if pru:
+                            pru_pool.append(pru)
+                    except Exception:
+                        pass
+                    try:
+                        fuel = compute_flight_fuel_and_emissions(ds, ectrl_id=eid)
+                        crco = compute_flight_crco_charges(ds, ectrl_id=eid)
+                        if fuel and crco:
+                            fuel_crco_pool.append((fuel, crco))
+                    except Exception:
+                        pass
+                    if len(pru_pool) >= 15 and len(fuel_crco_pool) >= 15:
+                        break
             except Exception:
-                historical_flights = []
+                pass
+
+        total_target_samples = samples_per_track * len(selected_tracks)
+        completed_count = 0
 
         for track in selected_tracks:
             count = 0
@@ -117,18 +141,12 @@ class CorpusGenerator:
                     "dest": pair[1],
                 }
 
-                if track in ("pru_physics", "crco_fuel") and historical_flights:
-                    fl_row = self.rng.choice(historical_flights)
-                    ectrl_id = int(fl_row.get("ectrl_id", 900104215))
-                    context["ectrl_id"] = ectrl_id
-                    try:
-                        if track == "pru_physics":
-                            context["pru"] = compute_flight_pru_kpis(ds, ectrl_id=ectrl_id)
-                        else:
-                            context["fuel_impact"] = compute_flight_fuel_and_emissions(ds, ectrl_id=ectrl_id)
-                            context["crco"] = compute_flight_crco_charges(ds, ectrl_id=ectrl_id)
-                    except Exception:
-                        pass
+                if track == "pru_physics" and pru_pool:
+                    context["pru"] = self.rng.choice(pru_pool)
+                    context["ectrl_id"] = context["pru"].ectrl_id
+                elif track == "crco_fuel" and fuel_crco_pool:
+                    context["fuel_impact"], context["crco"] = self.rng.choice(fuel_crco_pool)
+                    context["ectrl_id"] = context["crco"].ectrl_id
 
                 # Track-specific dispatch
                 conv: SFTConversation | None = None
@@ -150,6 +168,10 @@ class CorpusGenerator:
                     sft_samples.append(conv)
                     dpo_pairs.append(self.negative_sampler.generate_dpo_pair(conv))
                     count += 1
+                    completed_count += 1
+
+                    if progress_callback and (completed_count % 250 == 0 or completed_count == total_target_samples):
+                        progress_callback(completed_count, total_target_samples, track)
 
         # 2. Function-Calling Agent Trajectories
         if "tools" in formats:
