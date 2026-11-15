@@ -5,6 +5,7 @@ import pandas as pd
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.panel import Panel
 import uvicorn
 
 from flightml.data.dataset import FlightDataset
@@ -2931,6 +2932,60 @@ def mcp_cmd(
     server = create_mcp_server()
     console.print(f"[bold green]Starting FlightML MCP Server[/bold green] (transport={transport})...")
     server.run(transport=transport)
+
+
+@app.command("generate-corpus")
+def generate_corpus_cmd(
+    output_dir: str = typer.Option("data/llm_corpus", "--output-dir", "-o", help="Target output directory for JSONL datasets"),
+    samples: int = typer.Option(1000, "--samples", "-n", help="Total number of SFT training samples to synthesize"),
+    tracks: str = typer.Option("all", "--tracks", "-t", help="Tracks to include: pru_physics, crco_fuel, delay_contagion, simulations, passenger_copilot, or all"),
+    formats: str = typer.Option("chatml,dpo,tools", "--formats", "-f", help="Output formats: comma-separated chatml, alpaca, dpo, tools"),
+    period: str = typer.Option("auto", "--period", help="Historical Eurocontrol dataset period or auto"),
+    seed: int = typer.Option(42, "--seed", help="Random seed for reproducibility"),
+) -> None:
+    """Synthesize structured European aviation training data for fine-tuning 4B-8B parameter LLMs."""
+    from flightml.corpus.engine import CorpusGenerator
+
+    console.print(Panel(
+        f"[bold cyan]🧠 FlightML-Instruct: Synthetic LLM Training Corpus Generator[/bold cyan]\n"
+        f"Target Samples: [green]{samples:,}[/green] | Tracks: [yellow]{tracks}[/yellow] | Formats: [magenta]{formats}[/magenta]\n"
+        f"Output Directory: [blue]{output_dir}[/blue] | Baseline Period: [white]{period}[/white]",
+        expand=False,
+    ))
+
+    with console.status("[bold green]Synthesizing European ATM physics, CRCO economics & passenger rights datasets..."):
+        generator = CorpusGenerator(period=period, seed=seed)
+        fmt_list = [f.strip() for f in formats.split(",") if f.strip()]
+        result = generator.generate_corpus(
+            total_samples=samples,
+            tracks=tracks,
+            output_dir=output_dir,
+            formats=fmt_list,
+        )
+
+    table = Table(title="📁 Generated Training Corpora Summary", show_header=True, header_style="bold green")
+    table.add_column("Dataset Type", style="cyan")
+    table.add_column("Train Samples", justify="right", style="green")
+    table.add_column("Validation Samples", justify="right", style="yellow")
+    table.add_column("Estimated Tokens", justify="right", style="magenta")
+    table.add_column("Output File Path", style="dim")
+
+    summary = result.get("export_summary", {})
+    if "chatml" in summary:
+        c = summary["chatml"]
+        table.add_row("SFT (ChatML / OpenAI)", f"{c['train_samples']:,}", f"{c['val_samples']:,}", f"~{c['estimated_tokens']:,}", c["train_path"])
+    if "alpaca" in summary:
+        a = summary["alpaca"]
+        table.add_row("SFT (Alpaca)", f"{a['train_samples']:,}", f"{a['val_samples']:,}", f"~{a['estimated_tokens']:,}", a["train_path"])
+    if "dpo" in summary:
+        d = summary["dpo"]
+        table.add_row("DPO Preference Pairs", f"{d['train_pairs']:,}", f"{d['val_pairs']:,}", "-", d["train_path"])
+    if "tools" in summary:
+        t = summary["tools"]
+        table.add_row("FastMCP Tool Calling", f"{t['total_samples']:,}", "-", "-", t["output_path"])
+
+    console.print(table)
+    console.print(f"[bold green]✓ Successfully generated {result['total_sft_generated']} SFT samples and {result['total_dpo_generated']} DPO preference pairs.[/bold green]\n")
 
 
 if __name__ == "__main__":
