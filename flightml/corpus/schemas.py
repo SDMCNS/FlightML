@@ -21,7 +21,6 @@ class SFTConversation(BaseModel):
         return {
             "messages": [msg.model_dump() for msg in self.messages],
             "track": self.track,
-            "metadata": self.metadata,
         }
 
     def to_alpaca(self) -> dict[str, Any]:
@@ -43,7 +42,6 @@ class SFTConversation(BaseModel):
             "input": user_prompt,
             "output": assistant_resp,
             "track": self.track,
-            "metadata": self.metadata,
         }
 
 

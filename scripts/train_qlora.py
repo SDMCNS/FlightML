@@ -39,6 +39,26 @@ def check_vram_and_resources():
         print(f"  - Safe VRAM Headroom: ~{total_vram_gb - 11.6:.1f} GB")
 
 
+def load_sft_dataset(dataset_path: str):
+    """Loads ChatML dataset cleanly, isolating the 'messages' field to prevent Arrow schema collisions."""
+    import json
+    from datasets import Dataset
+
+    print(f"📖 Loading synthetic dataset from: {dataset_path}")
+    records = []
+    with open(dataset_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line_str = line.strip()
+            if line_str:
+                item = json.loads(line_str)
+                if "messages" in item:
+                    records.append({"messages": item["messages"]})
+                else:
+                    records.append(item)
+    print(f"✓ Successfully loaded {len(records):,} clean ChatML training dialogues.")
+    return Dataset.from_list(records)
+
+
 def train_with_transformers_native(
     dataset_path: str,
     base_model: str = "Qwen/Qwen2.5-7B-Instruct",
@@ -57,7 +77,6 @@ def train_with_transformers_native(
         TrainingArguments,
     )
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-    from datasets import load_dataset
     from trl import SFTTrainer
 
     print(f"🚀 Initializing base model via HuggingFace PEFT: {base_model} (4-bit NF4)")
@@ -97,8 +116,7 @@ def train_with_transformers_native(
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
 
-    print(f"📖 Loading synthetic dataset: {dataset_path}")
-    dataset = load_dataset("json", data_files=dataset_path, split="train")
+    dataset = load_sft_dataset(dataset_path)
 
     training_args = TrainingArguments(
         per_device_train_batch_size=micro_batch_size,
@@ -173,8 +191,7 @@ def train_with_unsloth(
         use_gradient_checkpointing="unsloth",
     )
 
-    print(f"📖 Loading synthetic dataset: {dataset_path}")
-    dataset = load_dataset("json", data_files=dataset_path, split="train")
+    dataset = load_sft_dataset(dataset_path)
 
     training_args = TrainingArguments(
         per_device_train_batch_size=micro_batch_size,
