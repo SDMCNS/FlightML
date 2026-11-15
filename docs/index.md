@@ -25,7 +25,7 @@ Welcome to the **FlightML** documentation. FlightML is a high-performance Python
 - [**Architecture & Methodology**](architecture.md): Deep dive into DuckDB columnar execution, ICAO GANP & Eurocontrol PRU formulas, OpenAP & ICAO EDB v32B physics, Eurocontrol CRCO charges (`€`), and operations research models.
 - [**Model Context Protocol (MCP) Server Guide**](mcp_server.md): Exposing FlightML as an AI tool to local LLMs (LM Studio, Claude Desktop, Cursor).
   - [**LM Studio + Qwen 2.5 Coder Example Transcript**](mcp_example_lmstudio.md): End-to-end multi-turn transcript querying flight telemetry, calculating punctuality, and rendering markdown tables.
-- [**Passenger Travel Copilot & Itinerary Risk Guide**](cli_reference.md#10-public-travel-copilot--itinerary-risk): Public-facing journey intelligence assessing direct and multi-leg connections, automatic seasonal archive selection, Minimum Connection Times (MCT), live 7-day weather forecasts, statutory EU261 compensation entitlements, and full `--debug` data provenance.
+- [**Passenger Travel Copilot & Multi-Leg Journey Predictor**](passenger_copilot.md): Dedicated public-facing journey intelligence assessing direct and multi-leg connections, automatic seasonal archive selection, Minimum Connection Times (MCT), live 7-day weather forecasts, statutory EU261 compensation entitlements, and full `--debug` data provenance.
 
 ---
 
@@ -93,4 +93,12 @@ contagion = DelayContagionGraphEngine(ds)
 top_offenders = contagion.scan_repeat_offender_routes(min_primary_delay_min=25.0, min_incidents=3, top_n=3)
 for r in top_offenders:
     print(f"Repeat Offender {r.route}: {r.incident_count} days, {r.total_downstream_legs_infected} legs infected (€{r.total_reactionary_cost_eur:,.0f} EUR)")
+
+# 6. Public passenger travel copilot & connection delay risk
+from flightml.eval.passenger_journey import PassengerJourneyEngine
+passenger_engine = PassengerJourneyEngine(period="auto")
+itinerary = passenger_engine.assess_itinerary(
+    origin="EINN", dest="EBBR", hub="EGLL", day_of_week="tuesday", time_of_day="morning", scheduled_layover_min=75
+)
+print(f"Connection Slack: {itinerary.connection.effective_slack_buffer_min:+.0f}m | Missed Risk: {itinerary.connection.missed_connection_prob*100:.1f}% | EU261: €{itinerary.passenger_rights.statutory_compensation_amount_eur:.0f} EUR")
 ```

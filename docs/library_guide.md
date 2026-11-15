@@ -378,4 +378,98 @@ mcp_server = create_mcp_server()
 # Run via stdio transport for local desktop LLMs (LM Studio, Claude Desktop, Cursor)
 # mcp_server.run(transport="stdio")
 ```
+
+---
+
+## 9. Passenger Journey & Travel Risk Copilot (`flightml.eval.passenger_journey`)
+
+The `PassengerJourneyEngine` brings Eurocontrol DDR2 ATM big data, live Open-Meteo numerical weather predictions, terminal transfer dynamics, and EU261/UK261 consumer law directly to the travelling public.
+
+### A. Direct Flight Delay Assessment & Live Weather Impact
+
+```python
+from flightml.eval.passenger_journey import PassengerJourneyEngine
+
+# Initialize the engine (uses auto period selection by default)
+engine = PassengerJourneyEngine(period="auto")
+
+# Assess a direct flight from Dublin (EIDW) to Amsterdam (EHAM)
+itinerary = engine.assess_itinerary(
+    origin="EIDW",
+    dest="EHAM",
+    day_of_week="friday",
+    time_of_day="evening",
+    flight_date="2026-11-20",
+)
+
+leg = itinerary.legs[0]
+print(f"Direct Route: {leg.origin} ➔ {leg.dest} ({leg.operator} {leg.aircraft_type})")
+print(f"Historical Delay > 15m : {leg.historical_delay_prob * 100:.1f}%")
+print(f"Weather-Adjusted Delay : {leg.weather_adjusted_delay_prob * 100:.1f}%")
+print(f"Destination Weather    : {leg.dest_weather.weather_summary}")
+print(f"EU261 Compensation     : €{itinerary.passenger_rights.statutory_compensation_amount_eur:.0f} EUR")
+```
+
+### B. Multi-Leg Connecting Itinerary & Missed Connection Risk
+
+```python
+# Assess a multi-leg connection: Shannon (EINN) to Brussels (EBBR) via London Heathrow (EGLL)
+itinerary = engine.assess_itinerary(
+    origin="EINN",
+    dest="EBBR",
+    hub="EGLL",
+    day_of_week="tuesday",
+    time_of_day="morning",
+    scheduled_layover_min=75,
+    operator="BAW",
+    flight_date="2026-11-17",
+    debug=True,
+)
+
+# Leg details
+for idx, leg in enumerate(itinerary.legs, 1):
+    print(f"Leg #{idx}: {leg.origin} ➔ {leg.dest} | P90 Delay: +{leg.p90_delay_min:.1f}m | Risk: {leg.weather_adjusted_delay_prob*100:.1f}%")
+
+# Hub connection metrics
+conn = itinerary.connection
+print(f"Hub Airport: {conn.hub_airport} ({conn.hub_name})")
+print(f"Effective Slack Buffer  : {conn.effective_slack_buffer_min:+.1f} min (Nominal MCT: {conn.minimum_connection_time_min}m)")
+print(f"Missed Connection Risk  : {conn.missed_connection_prob * 100:.1f}% ({conn.connection_risk_rating})")
+print(f"Checked Luggage Risk    : {conn.luggage_risk_level}")
+
+# Statutory passenger rights
+rights = itinerary.passenger_rights
+print(f"Distance: {rights.great_circle_distance_km:,.0f} km ({rights.distance_tier})")
+print(f"Statutory Compensation  : €{rights.statutory_compensation_amount_eur:,.0f} EUR (Delay Threshold: ≥{rights.delay_threshold_hours:.0f}h)")
+print(f"Duty of Care (Meals)    : After {rights.duty_of_care_threshold_hours:.0f} hours delay")
+```
+
+### C. Diurnal Departure Wave Recommendations ("When Should I Fly?")
+
+```python
+# Inspect delay risk across diurnal departure windows for the first leg
+print(f"Departure Wave Recommendations for {itinerary.legs[0].origin} ➔ {itinerary.legs[0].dest}:")
+for wave in itinerary.legs[0].departure_waves:
+    print(f"  {wave.wave_name:12s} ({wave.time_window}): Avg +{wave.avg_delay_min:4.1f}m | P90 +{wave.p90_delay_min:4.1f}m | >15m Risk: {wave.prob_delay_over_15m*100:4.1f}%")
+```
+
+### D. Full Provenance & Diagnostic Audit (`debug=True`)
+
+```python
+# Inspect underlying historical records and calculation trace
+dbg = itinerary.debug_info
+print(f"Audit Baseline Period Selected: {dbg['baseline_period']}")
+print(f"Leg 1 Records Sampled         : {dbg['leg_1_audit']['records_sampled']}")
+print(f"Leg 1 SQL Filter              : {dbg['leg_1_audit']['sql_filter']}")
+for sample in dbg['leg_1_audit']['sample_records'][:3]:
+    print(f"  Sample: ECTRL {sample['ectrl_id']} | Date: {sample['date']} | AC: {sample['aircraft_type']} ({sample['ac_reg']}) | Delay: +{sample['arr_delay_min']:.1f}m")
+```
+
+### E. Available Commercial Passenger Airlines Discovery
+
+```python
+# Discover active commercial carriers on a city pair (automatically filtering out cargo freighters)
+operators = engine.get_available_operators(origin="LEMD", dest="EGLL")
+for op in operators:
+    print(f"Airline: {op['operator']} | Historical Flights: {op['flight_count']} | Fleet: {op['top_aircraft']}")
 ```

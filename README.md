@@ -32,6 +32,7 @@ Detailed manuals and developer guides are located in the [**`docs/`**](docs/inde
 - 🏛️ [**Architecture & Methodology**](docs/architecture.md): DuckDB columnar execution, ICAO GANP & Eurocontrol PRU formulas, OpenAP & ICAO EDB v32B physics, Eurocontrol CRCO charges (`€`), operations research models, and v4 neural architectures.
 - 🤖 [**Model Context Protocol (MCP) Server Guide**](docs/mcp_server.md): Exposing FlightML tools to local LLMs (LM Studio, Claude Desktop, Cursor) via MCP.
 - 💬 [**LM Studio + Qwen 2.5 Coder Example Transcript**](docs/mcp_example_lmstudio.md): End-to-end multi-turn transcript querying flight telemetry, calculating punctuality, and rendering markdown tables.
+- 🧳 [**Passenger Travel Copilot & Multi-Leg Journey Predictor**](docs/passenger_copilot.md): Dedicated public travel intelligence assessing direct and multi-leg connections, automatic seasonal archive selection, Minimum Connection Times (MCT), live 7-day weather forecasts, statutory EU261 compensation entitlements, and full `--debug` data provenance.
 
 ---
 
@@ -264,7 +265,7 @@ Launch the simulation workbench:
 flightml dashboard
 ```
 
-Opens at **`http://localhost:8501`** organized into **7 primary operational categories**:
+Opens at **`http://localhost:8501`** organized into **8 primary operational categories**:
 
 ### 1. ✈️ Single Aircraft / Flight Views
 - 🗺️ **4D Trajectory & Holdings**: Single-flight 4D radar track vs. filed plan map, `KPI04 KEP` / `KPI05 KEA` / `KPI08 ASMA` / `KPI19` scorecard, `FRA` vs. ATS airway snapping, and FIR/AUA sector dwell tables.
@@ -306,6 +307,9 @@ Opens at **`http://localhost:8501`** organized into **7 primary operational cate
 - 🌪️ **4D Trajectory & FIR Closure Simulator**: What-if simulation modeling temporary closure of a Flight Information Region (e.g. `LSASFIR`, `EDUUUIR`) from Time A to Time B; calculates 4D reroutes, extra distance, extra fuel/$\text{CO}_2$, ground delays, cancellations, and post-reopening recovery queue duration.
 - 🎮 **Multi-Agent RL ATFM Slot Gaming**: Game-theoretic simulation of heterogeneous airline agents (Legacy, LCC, Hybrid, Cargo) competing under ATFM slot cuts, optimizing slot swaps, en-route speedups, and cancellations toward a Nash equilibrium.
 - 🤖 **Multimodal Aeronautical Copilot Architecture (Epic 6 - Specification)**: Comprehensive design integrating Eurocontrol RAD, national AIPs, NOTAMs, and METAR/TAF (implementation deferred pending raw text ingestion pipelines).
+
+### 8. 🧳 Passenger Travel Copilot & Itinerary Risk
+- 🧳 **Passenger Journey & Delay Risk Copilot**: Direct and multi-leg connection assessments (e.g. Shannon to Brussels via Heathrow, Madrid to London), empirical delay distributions by day-of-week and departure wave, Minimum Connection Times (MCT) and biometric gate conformance (T5 20-min cutoff), compound hub weather impact, quantitative baggage misconnect risk, statutory EU261/UK261 passenger rights (€250–€600), and full `--debug` data provenance.
 
 ---
 
