@@ -153,6 +153,33 @@ def load_model_and_adapter(base_model_id: str, adapter_path: str | None, load_ba
         console.print("[green]✓ Base model loaded without adapters.[/green]")
         return base_model, tokenizer
 
+    from pathlib import Path
+    p = Path(adapter_path)
+    if not (p / "adapter_config.json").exists():
+        # Check for intermediate checkpoint directories e.g. checkpoint-100, checkpoint-200
+        checkpoints = sorted(list(p.glob("checkpoint-*")), key=lambda x: str(x), reverse=True)
+        found_checkpoint = False
+        for cp in checkpoints:
+            if (cp / "adapter_config.json").exists():
+                console.print(f"[yellow]ℹ️ Found intermediate checkpoint: {cp}[/yellow]")
+                adapter_path = str(cp)
+                found_checkpoint = True
+                break
+
+        if not found_checkpoint:
+            console.print(Panel(
+                f"[bold red]❌ Cannot find LoRA adapter files at '{adapter_path}'![/bold red]\n\n"
+                f"The directory does not contain [bold cyan]adapter_config.json[/bold cyan].\n"
+                f"This happens because the previous training run was stopped before an epoch or checkpoint was written to disk.\n\n"
+                f"💡 [bold green]What to do:[/bold green]\n"
+                f"1. Start the training run with [bold yellow]--max-steps 500[/bold yellow]:\n"
+                f"   [yellow]python scripts/train_qlora.py --data data/llm_corpus/sft_chatml_train.jsonl --model Qwen/Qwen2.5-7B-Instruct --max-steps 500[/yellow]\n\n"
+                f"2. The script will automatically save every 100 steps and save the final adapter upon completion.\n"
+                f"3. Then re-run this benchmark script!",
+                title="⚠️ LoRA Adapter Not Found Yet",
+            ))
+            sys.exit(1)
+
     console.print(f"[bold cyan]🔧 Attaching QLoRA adapter:[/bold cyan] [yellow]{adapter_path}[/yellow]")
     model = PeftModel.from_pretrained(base_model, adapter_path)
     console.print("[bold green]✓ QLoRA adapter successfully attached and active![/bold green]\n")
