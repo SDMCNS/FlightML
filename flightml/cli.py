@@ -2605,26 +2605,32 @@ def trip_risk_cmd(
         t_conn = Table(title=f"⏳ Connection Hub & Missed Flight Risk ({c.hub_name})", border_style="yellow")
         t_conn.add_column("Transfer Hub", style="bold")
         t_conn.add_column("Layover", justify="right")
-        t_conn.add_column("Official MCT", justify="right")
-        t_conn.add_column("Slack Buffer", justify="right")
+        t_conn.add_column("Nominal / Eff. MCT", justify="right")
+        t_conn.add_column("Effective Slack", justify="right")
+        t_conn.add_column("Arr. Holding", justify="right", style="cyan")
+        t_conn.add_column("Dep. Taxi Queue", justify="right", style="magenta")
         t_conn.add_column("Missed Flight Risk", justify="right", style="bold red")
         t_conn.add_column("Luggage Risk", justify="right")
         t_conn.add_column("Connection Status", style="bold")
 
-        slack_style = "[green]" if c.slack_buffer_min >= 15 else "[red]"
+        slack_style = "[green]" if c.effective_slack_buffer_min >= 15 else "[red]"
         risk_color = "[red]" if c.misconnect_probability_pct > 30 else "[yellow]" if c.misconnect_probability_pct > 15 else "[green]"
 
         t_conn.add_row(
             f"{c.hub} ({c.hub_name})",
             f"{c.scheduled_layover_min} min",
-            f"{c.minimum_connection_time_min} min",
-            f"{slack_style}{c.slack_buffer_min:+.0f} min[/]",
+            f"{c.minimum_connection_time_min}m / {c.effective_mct_min:.0f}m",
+            f"{slack_style}{c.effective_slack_buffer_min:+.0f} min[/]",
+            f"+{c.hub_arrival_flow_penalty_min:.0f} min",
+            f"+{c.hub_departure_taxi_penalty_min:.0f} min",
             f"{risk_color}{c.misconnect_probability_pct:.1f}%[/]",
             f"{c.luggage_transfer_risk_pct:.0f}% ({c.luggage_status})",
             f"{risk_color}{c.misconnect_risk_level}[/]",
         )
         console.print(t_conn)
-        console.print(f"[dim italic]{c.terminal_transfer_note}[/dim italic]\n")
+        console.print(f"[dim italic]{c.terminal_transfer_note}[/dim italic]")
+        if c.weather_compound_guidance:
+            console.print(f"[dim yellow]🌧️ Hub Weather Impact: {c.weather_compound_guidance}[/dim yellow]\n")
 
     # 3. Passenger Rights (EU261 / UK261)
     pr = res.passenger_rights

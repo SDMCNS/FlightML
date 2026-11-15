@@ -171,6 +171,13 @@ class ConnectionRisk:
     luggage_status: str  # "LOW_RISK", "MODERATE_RISK", "CRITICAL_RISK_CARRY_ON_ADVISED"
     misconnect_risk_level: str  # "SECURE", "TIGHT", "HIGH_RISK", "CRITICAL"
     terminal_transfer_note: str
+    hub_arrival_flow_penalty_min: float = 0.0
+    hub_departure_taxi_penalty_min: float = 0.0
+    inter_terminal_transit_weather_penalty_min: float = 0.0
+    effective_mct_min: float = 0.0
+    effective_slack_buffer_min: float = 0.0
+    boarding_conformance_cutoff_min: int = 20
+    weather_compound_guidance: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -579,12 +586,14 @@ class PassengerJourneyEngine:
         self,
         hub: str,
         inbound_leg: FlightLegRisk,
+        outbound_leg: FlightLegRisk | None = None,
         scheduled_layover_min: int = 75,
         inbound_op: str | None = None,
         outbound_op: str | None = None,
     ) -> ConnectionRisk:
         """
-        Evaluate missed connection probability and baggage transfer risk at a transfer hub.
+        Evaluate missed connection probability and baggage transfer risk at a transfer hub,
+        explicitly accounting for intermediate airport arrival holding and departure taxi weather impacts.
         """
         hub_clean = hub.strip().upper()
         hub_meta = HUB_MCT_DATABASE.get(
@@ -600,7 +609,7 @@ class PassengerJourneyEngine:
         )
 
         in_op = (inbound_op or inbound_leg.dominant_operator).strip().upper()
-        out_op = (outbound_op or "BAW").strip().upper()
+        out_op = (outbound_op or (outbound_leg.dominant_operator if outbound_leg else "BAW")).strip().upper()
 
         term_map = hub_meta.get("terminal_mapping", {})
         in_term = term_map.get(in_op, "T2")
@@ -608,39 +617,63 @@ class PassengerJourneyEngine:
 
         is_inter_terminal = (in_term != out_term)
         mct = hub_meta["inter_terminal_mct_min"] if is_inter_terminal else hub_meta["same_terminal_mct_min"]
-        slack_buffer = float(scheduled_layover_min - mct)
 
-        # Misconnect probability based on inbound P80, P90, and slack
-        # If inbound delay > scheduled_layover - MCT, connection is broken
-        # We calibrate using an empirical CDF based on inbound delay stats
-        cutoff_delay = scheduled_layover_min - mct
+        # ---------------------------------------------------------------------
+        # Intermediate Airport Weather Impacts: Arrival Flow vs Departure Taxi
+        # ---------------------------------------------------------------------
+        hub_arr_wx = inbound_leg.destination_weather
+        hub_dep_wx = outbound_leg.origin_weather if outbound_leg else hub_arr_wx
+
+        # 1. Inbound Arrival Holding Penalty:
+        # At busy hubs (e.g. EGLL, EHAM), adverse weather (gusts, low ceiling, rain)
+        # reduces the arrival acceptance rate (AAR) by increasing vortex wake spacing
+        # and activating Low Visibility Procedures (LVP), causing airborne holding at outer stacks.
+        hub_arr_penalty = round(max(0.0, (hub_arr_wx.adverse_risk_score - 1.0) * 2.8), 1)
+
+        # 2. Inter-Terminal Ramp Transit Weather Penalty:
+        # Wet, gusty, or low-visibility apron conditions enforce speed restrictions
+        # on airside shuttle buses and luggage tugs traversing perimeter roads.
+        ramp_transit_penalty = round(max(0.0, (hub_arr_wx.adverse_risk_score - 1.0) * 1.5), 1) if is_inter_terminal else 0.0
+        effective_mct = round(mct + ramp_transit_penalty, 1)
+
+        # 3. Outbound Departure Taxi & Spacing Penalty:
+        # Outbound departures face taxiway holding, de-icing queues, and departure vortex separation.
+        hub_dep_penalty = round(max(0.0, (hub_dep_wx.adverse_risk_score - 1.0) * 2.2), 1)
+
+        # 4. Effective Slack Buffer:
+        # Scheduled Layover minus Effective MCT minus Inbound Arrival Holding Penalty
+        slack_buffer = float(scheduled_layover_min - mct)
+        effective_slack = round(scheduled_layover_min - effective_mct - hub_arr_penalty, 1)
+
+        # Misconnect probability evaluated against effective slack buffer
+        cutoff_delay = effective_slack
         if cutoff_delay <= 0:
-            # Scheduled layover is ALREADY less than official MCT!
-            misconnect_prob = 85.0
+            # Scheduled layover is ALREADY consumed by MCT + holding delays!
+            misconnect_prob = min(99.0, max(88.0, 88.0 + abs(cutoff_delay) * 0.8))
             misconnect_level = "CRITICAL"
         elif cutoff_delay < 15:
             # Very tight: only 0-15 min delay allowed
-            misconnect_prob = max(45.0, inbound_leg.prob_delay_gt_15m_pct * 1.5)
+            misconnect_prob = min(96.0, max(48.0, inbound_leg.prob_delay_gt_15m_pct * 1.6))
             misconnect_level = "HIGH_RISK"
         elif cutoff_delay < 35:
             # Moderate buffer
-            misconnect_prob = max(18.0, inbound_leg.prob_delay_gt_30m_pct * 1.2)
+            misconnect_prob = max(20.0, inbound_leg.prob_delay_gt_30m_pct * 1.3)
             misconnect_level = "TIGHT"
         else:
             # Plentiful buffer (> 35 min slack above MCT)
             misconnect_prob = max(4.0, inbound_leg.prob_delay_gt_60m_pct * 0.8)
             misconnect_level = "SECURE"
 
-        misconnect_prob = min(98.0, round(misconnect_prob * inbound_leg.weather_risk_multiplier, 1))
+        misconnect_prob = min(99.0, round(misconnect_prob * inbound_leg.weather_risk_multiplier, 1))
 
-        # Luggage transfer risk
+        # Luggage transfer risk adjusted for weather on the apron
         luggage_threshold = hub_meta.get("luggage_safe_buffer_min", 60)
-        luggage_margin = scheduled_layover_min - luggage_threshold
+        luggage_margin = scheduled_layover_min - (luggage_threshold + ramp_transit_penalty)
         if luggage_margin < 0:
-            luggage_prob = 75.0
+            luggage_prob = 78.0
             luggage_status = "CRITICAL_RISK_CARRY_ON_ADVISED"
         elif luggage_margin < 20:
-            luggage_prob = 40.0
+            luggage_prob = 45.0
             luggage_status = "MODERATE_RISK"
         else:
             luggage_prob = 10.0
@@ -651,6 +684,14 @@ class PassengerJourneyEngine:
             transfer_note = f"⚠️ Inter-Terminal Transfer Required: {in_op} ({in_term}) ➔ {out_op} ({out_term}). {transfer_note}"
         else:
             transfer_note = f"✅ Same Terminal Transfer: {in_term}. {transfer_note}"
+
+        weather_guidance = (
+            f"Weather at intermediate hub {hub_clean} exerts a compound double impact: "
+            f"(1) Inbound Arrival: ~{hub_arr_penalty:.0f} min expected airborne holding/approach spacing delay. "
+            f"(2) Ramp Transit: Wet/windy tarmac conditions add +{ramp_transit_penalty:.0f} min to airside inter-terminal shuttle buses (effective MCT: {effective_mct:.0f} min). "
+            f"(3) Outbound Departure: While departure taxi queues add ~{hub_dep_penalty:.0f} min to takeoff, "
+            f"boarding conformance at {out_term} closes strictly 20 minutes before scheduled off-blocks. Outbound taxi delays will NOT hold the gate."
+        )
 
         return ConnectionRisk(
             hub=hub_clean,
@@ -663,6 +704,13 @@ class PassengerJourneyEngine:
             luggage_status=luggage_status,
             misconnect_risk_level=misconnect_level,
             terminal_transfer_note=transfer_note,
+            hub_arrival_flow_penalty_min=hub_arr_penalty,
+            hub_departure_taxi_penalty_min=hub_dep_penalty,
+            inter_terminal_transit_weather_penalty_min=ramp_transit_penalty,
+            effective_mct_min=effective_mct,
+            effective_slack_buffer_min=effective_slack,
+            boarding_conformance_cutoff_min=20,
+            weather_compound_guidance=weather_guidance,
         )
 
     def calculate_passenger_rights(
@@ -812,6 +860,7 @@ class PassengerJourneyEngine:
             conn_risk = self.evaluate_connection_risk(
                 hub=hub_clean,
                 inbound_leg=leg1,
+                outbound_leg=leg2,
                 scheduled_layover_min=scheduled_layover_min,
                 inbound_op=inbound_op,
                 outbound_op=outbound_op,
@@ -846,7 +895,15 @@ class PassengerJourneyEngine:
         recommendations = []
         if conn_risk and conn_risk.misconnect_probability_pct > 30.0:
             recommendations.append(
-                f"🚨 High Misconnection Risk ({conn_risk.misconnect_probability_pct:.0f}%): Your {scheduled_layover_min} min layover at {conn_risk.hub} is tight against the {conn_risk.minimum_connection_time_min} min Minimum Connection Time (MCT). If possible, rebook to a connection with ≥ 90–120 min buffer."
+                f"🚨 High Misconnection Risk ({conn_risk.misconnect_probability_pct:.0f}%): Your {scheduled_layover_min} min layover at {conn_risk.hub} is tight against the {conn_risk.effective_mct_min:.0f} min Effective MCT (accounting for weather). If possible, rebook to a connection with ≥ 90–120 min buffer."
+            )
+        if conn_risk and conn_risk.hub_arrival_flow_penalty_min > 0:
+            recommendations.append(
+                f"🌧️ Intermediate Hub Arrival Flow Impact ({conn_risk.hub}): Weather reduces arrival runway throughput, introducing ~{conn_risk.hub_arrival_flow_penalty_min:.0f} min expected holding delay on Leg 1 landing, leaving you with {conn_risk.effective_slack_buffer_min:+.0f} min effective connection slack."
+            )
+        if conn_risk and conn_risk.hub_departure_taxi_penalty_min > 0:
+            recommendations.append(
+                f"⏱️ Intermediate Hub Departure Queue vs Gate Conformance ({conn_risk.hub}): Outbound flight faces ~{conn_risk.hub_departure_taxi_penalty_min:.0f} min taxiway departure queues, but boarding gates close strictly {conn_risk.boarding_conformance_cutoff_min} min before scheduled departure. Outbound taxi delays will NOT hold the gate for connecting passengers."
             )
         if conn_risk and conn_risk.luggage_status == "CRITICAL_RISK_CARRY_ON_ADVISED":
             recommendations.append(

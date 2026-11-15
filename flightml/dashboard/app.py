@@ -4337,12 +4337,28 @@ with tab_cat_passenger:
 
             ch_c1, ch_c2, ch_c3, ch_c4 = st.columns(4)
             ch_c1.metric("Scheduled Layover", f"{c.scheduled_layover_min} min", "Passenger itinerary")
-            ch_c2.metric("Official MCT Requirement", f"{c.minimum_connection_time_min} min", "Minimum Connection Time")
-            slack_delta_color = "normal" if c.slack_buffer_min >= 15 else "inverse"
-            ch_c3.metric("Connection Slack Buffer", f"{c.slack_buffer_min:+.0f} min", f"{'Adequate' if c.slack_buffer_min >= 15 else 'DEFICIT / CRITICAL'}", delta_color=slack_delta_color)
+            ch_c2.metric("Effective MCT (Weather)", f"{c.effective_mct_min:.0f} min", f"Nominal: {c.minimum_connection_time_min}m (+{c.inter_terminal_transit_weather_penalty_min:.0f}m transit)")
+            slack_delta_color = "normal" if c.effective_slack_buffer_min >= 15 else "inverse"
+            ch_c3.metric("Effective Slack Buffer", f"{c.effective_slack_buffer_min:+.0f} min", f"{'Adequate' if c.effective_slack_buffer_min >= 15 else 'DEFICIT / CRITICAL'}", delta_color=slack_delta_color)
             ch_c4.metric("Missed Connection Probability", f"{c.misconnect_probability_pct:.1f}%", c.misconnect_risk_level)
 
-            st.warning(f"**Airport Transit Note:** {c.terminal_transfer_note}")
+            # Weather flow impact breakdown
+            wh_c1, wh_c2 = st.columns(2)
+            with wh_c1:
+                st.info(
+                    f"🛬 **Leg 1 Inbound Arrival Flow Impact:** Weather at {c.hub} restricts runway throughput, adding "
+                    f"**+{c.hub_arrival_flow_penalty_min:.0f} min** expected airborne holding at outer stacks before touchdown."
+                )
+            with wh_c2:
+                st.warning(
+                    f"🛫 **Leg 2 Outbound Departure vs. Gate Conformance:** Outbound flight faces **+{c.hub_departure_taxi_penalty_min:.0f} min** "
+                    f"taxiway queues, but **gate conformance closes strictly {c.boarding_conformance_cutoff_min} min prior to scheduled departure**. "
+                    f"Taxi delays will NOT hold the gate open."
+                )
+
+            st.error(f"**Airport Transit Note:** {c.terminal_transfer_note}")
+            if c.weather_compound_guidance:
+                st.caption(f"ℹ️ **Detailed Hub Weather Guidance:** {c.weather_compound_guidance}")
 
         # When Should I Fly? Departure Wave Comparison
         st.markdown("---")
