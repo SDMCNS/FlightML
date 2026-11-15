@@ -2544,6 +2544,7 @@ def trip_risk_cmd(
     layover: int = typer.Option(75, "--layover", "-l", help="Scheduled connection layover at hub in minutes"),
     date: str = typer.Option(None, "--date", help="Target flight date YYYY-MM-DD (defaults to upcoming date/7-day forecast)"),
     period: str = typer.Option("auto", "--period", help="Eurocontrol baseline data period (default: 'auto' to select the best fitting archive for the flight date)"),
+    debug: bool = typer.Option(False, "--debug", help="Print detailed diagnostic accounting of all historical records, weather API origins, and buffer formulas"),
 ) -> None:
     """Assess flight journey delay risk, missed connection probability, weather impact, and EU261 compensation for the travelling public."""
     from flightml.eval.passenger_journey import PassengerJourneyEngine
@@ -2570,7 +2571,8 @@ def trip_risk_cmd(
         f"{'[bold yellow]' + clean_hub + '[/bold yellow] (Hub) ➔ ' if clean_hub else ''}"
         f"[bold yellow]{dest.upper()}[/bold yellow] | "
         f"Flight Date: [bold green]{resolved_date_str}[/bold green] ({day.capitalize()}) | Wave: [green]{time.capitalize()}[/green]\n"
-        f"Data Period: [magenta]{resolved_period}[/magenta] [dim]({period_reason})[/dim]",
+        f"Data Period: [magenta]{resolved_period}[/magenta] [dim]({period_reason})[/dim]"
+        f"{' | [bold red][DEBUG MODE ON][/bold red]' if debug else ''}",
         title="FlightML Public Travel Advisory",
         border_style="cyan",
     ))
@@ -2585,6 +2587,7 @@ def trip_risk_cmd(
             scheduled_layover_min=layover,
             target_date=resolved_date_str,
             period=resolved_period,
+            debug=debug,
         )
 
     # 1. Legs Breakdown Table
@@ -2688,6 +2691,199 @@ def trip_risk_cmd(
     for rec in res.actionable_recommendations:
         console.print(f"  • {rec}")
     console.print("")
+
+    # 6. Detailed Debug Audit (when --debug is enabled)
+    if debug and res.debug_audit:
+        dbg = res.debug_audit
+        console.print("\n" + "=" * 80)
+        console.print("[bold red]🛠️ DETAILED FLIGHTML DIAGNOSTIC & DATA PROVENANCE AUDIT (--debug)[/bold red]")
+        console.print("=" * 80 + "\n")
+
+        # Period Selection Audit Table
+        p_sec = dbg.get("period_selection", {})
+        candidates = p_sec.get("candidates", [])
+        if candidates:
+            t_cand = Table(title="🗄️ Eurocontrol Period Selection Scoring Audit", border_style="magenta")
+            t_cand.add_column("Period", style="bold")
+            t_cand.add_column("Year / Month")
+            t_cand.add_column("Season")
+            t_cand.add_column("Δ Month", justify="right")
+            t_cand.add_column("Δ Year", justify="right")
+            t_cand.add_column("Legacy Penalty", justify="right")
+            t_cand.add_column("Total Score", justify="right", style="bold")
+            t_cand.add_column("Status", style="bold")
+
+            for c in candidates:
+                is_win = c.get("is_winner", False)
+                status = "[bold green]🏆 WINNER[/bold green]" if is_win else "[dim]Candidate[/dim]"
+                score_style = "[bold green]" if is_win else "[white]"
+                t_cand.add_row(
+                    str(c.get("period")),
+                    f"{c.get('year')} / {c.get('month_name')}",
+                    str(c.get("season")),
+                    f"{c.get('seasonal_dist_months')}m",
+                    f"{c.get('year_dist')}y",
+                    f"+{c.get('legacy_penalty')}",
+                    f"{score_style}{c.get('total_score')}[/]",
+                    status,
+                )
+            console.print(t_cand)
+            console.print(f"[dim]Rationale: {p_sec.get('period_reason')}[/dim]\n")
+
+        # Historical Flight Records Audit
+        legs_dbg = dbg.get("legs_audit", [])
+        for i, l_dbg in enumerate(legs_dbg, 1):
+            console.print(Panel(
+                f"[bold cyan]Leg {i}: {l_dbg.get('origin')} ➔ {l_dbg.get('destination')}[/bold cyan] "
+                f"({l_dbg.get('origin_name')} to {l_dbg.get('destination_name')})\n"
+                f"Sampling Stage: [yellow]{l_dbg.get('sampling_stage')}[/yellow] | Matched Records: [bold green]{l_dbg.get('sample_size_flights')}[/bold green]\n"
+                f"DuckDB SQL: [dim]{l_dbg.get('query_executed')}[/dim]",
+                title=f"✈️ Historical Records Audit: Leg {i}",
+                border_style="blue",
+            ))
+
+            samples = l_dbg.get("sample_records", [])
+            if samples:
+                t_samp = Table(title=f"Sample Historical Flight Executions ({l_dbg.get('origin')} ➔ {l_dbg.get('destination')})", border_style="blue")
+                t_samp.add_column("ECTRL ID", style="bold")
+                t_samp.add_column("Off-Block (UTC)")
+                t_samp.add_column("Arrival (UTC)")
+                t_samp.add_column("Operator")
+                t_samp.add_column("Type")
+                t_samp.add_column("Reg")
+                t_samp.add_column("Dep Delay", justify="right")
+                t_samp.add_column("Arr Delay", justify="right")
+
+                for s in samples:
+                    arr_del = s.get("arr_delay_min", 0.0)
+                    arr_style = "[red]" if arr_del > 15 else "[green]" if arr_del <= 0 else "[yellow]"
+                    t_samp.add_row(
+                        str(s.get("ectrl_id")),
+                        str(s.get("off_block_time")),
+                        str(s.get("arrival_time")),
+                        f"{s.get('operator')} ({s.get('operator_name')[:14]})",
+                        str(s.get("aircraft_type")),
+                        str(s.get("registration")),
+                        f"{s.get('dep_delay_min'):+.1f}m",
+                        f"{arr_style}{arr_del:+.1f}m[/]",
+                    )
+                console.print(t_samp)
+
+            pcts = l_dbg.get("delay_percentiles", {})
+            t_pct = Table(title=f"Delay Distribution Quantiles ({l_dbg.get('origin')} ➔ {l_dbg.get('destination')})", border_style="cyan")
+            t_pct.add_column("Min", justify="right")
+            t_pct.add_column("P10", justify="right")
+            t_pct.add_column("P25", justify="right")
+            t_pct.add_column("Median (P50)", justify="right", style="bold green")
+            t_pct.add_column("Mean", justify="right")
+            t_pct.add_column("P75", justify="right")
+            t_pct.add_column("P80", justify="right")
+            t_pct.add_column("P90", justify="right", style="bold yellow")
+            t_pct.add_column("P99", justify="right", style="red")
+            t_pct.add_column("Max", justify="right", style="bold red")
+
+            t_pct.add_row(
+                f"{pcts.get('min_arr_delay_min'):+.1f}m",
+                f"{pcts.get('p10_arr_delay_min'):+.1f}m",
+                f"{pcts.get('p25_arr_delay_min'):+.1f}m",
+                f"{pcts.get('median_arr_delay_min'):+.1f}m",
+                f"{pcts.get('mean_arr_delay_min'):+.1f}m",
+                f"{pcts.get('p75_arr_delay_min'):+.1f}m",
+                f"{pcts.get('p80_arr_delay_min'):+.1f}m",
+                f"{pcts.get('p90_arr_delay_min'):+.1f}m",
+                f"{pcts.get('p99_arr_delay_min'):+.1f}m",
+                f"{pcts.get('max_arr_delay_min'):+.1f}m",
+            )
+            console.print(t_pct)
+
+            ops = l_dbg.get("operator_breakdown", [])
+            if ops:
+                t_ops = Table(title=f"Airline Operator Share & Fleets ({l_dbg.get('origin')} ➔ {l_dbg.get('destination')})", border_style="green")
+                t_ops.add_column("Operator", style="bold")
+                t_ops.add_column("Airline Name")
+                t_ops.add_column("Flights Count", justify="right")
+                t_ops.add_column("Route Share %", justify="right")
+                for o in ops:
+                    t_ops.add_row(
+                        o.get("operator"),
+                        o.get("name"),
+                        str(o.get("count")),
+                        f"{o.get('share_pct'):.1f}%",
+                    )
+                console.print(t_ops)
+            console.print("")
+
+        # Weather Forecast API & NWP Model Observations Audit
+        wx_audit = dbg.get("weather_audit", [])
+        if wx_audit:
+            t_wx = Table(title="🌦️ Live NWP Weather Observation & API Provenance Audit", border_style="yellow")
+            t_wx.add_column("Airport", style="bold")
+            t_wx.add_column("Role")
+            t_wx.add_column("Coordinates")
+            t_wx.add_column("NWP Provider / Endpoint")
+            t_wx.add_column("Matched Valid UTC")
+            t_wx.add_column("Live/Fallback")
+            t_wx.add_column("Temp", justify="right")
+            t_wx.add_column("Winds (kts)", justify="right")
+            t_wx.add_column("Rain %", justify="right")
+            t_wx.add_column("Conditions")
+
+            for w in wx_audit:
+                live_badge = "[bold green]LIVE API[/bold green]" if w.get("is_live_api") else "[yellow]Climatology[/yellow]"
+                t_wx.add_row(
+                    f"{w.get('airport')} ({w.get('airport_name')[:14]})",
+                    str(w.get("role")),
+                    f"{w.get('latitude'):.2f}°, {w.get('longitude'):.2f}°",
+                    str(w.get("api_endpoint")),
+                    str(w.get("forecast_time_matched")),
+                    live_badge,
+                    f"{w.get('temperature_c'):.1f}°C",
+                    f"{w.get('wind_dir_deg'):.0f}° @ {w.get('wind_speed_kts'):.0f}kt (G{w.get('wind_gusts_kts'):.0f})",
+                    f"{w.get('precipitation_prob_pct'):.0f}%",
+                    str(w.get("weather_description")),
+                )
+            console.print(t_wx)
+            console.print("")
+
+        # Connection MCT & Buffer Dynamics Audit
+        conn_dbg = dbg.get("connection_audit")
+        if conn_dbg:
+            t_cb = Table(title=f"⏳ Connection MCT & Buffer Accounting Audit ({conn_dbg.get('hub')})", border_style="red")
+            t_cb.add_column("Connection Parameter", style="bold")
+            t_cb.add_column("Value", justify="right", style="cyan")
+            t_cb.add_column("Operational Context & Formula")
+
+            t_cb.add_row("Scheduled Layover", f"{conn_dbg.get('scheduled_layover_min')} min", "Passenger scheduled time between inbound touchdown and outbound off-blocks")
+            t_cb.add_row("Nominal Hub MCT", f"{conn_dbg.get('nominal_mct_min')} min", "Published Minimum Connection Time database standard")
+            t_cb.add_row("Transit Weather Penalty", f"+{conn_dbg.get('transit_weather_penalty_min'):.0f} min", "Tarmac shuttle bus & airside transit delay due to wind/rain")
+            t_cb.add_row("Effective MCT", f"{conn_dbg.get('effective_mct_min'):.0f} min", "Nominal MCT + Weather Transit delay")
+            t_cb.add_row("Inbound Holding Delay", f"+{conn_dbg.get('hub_arrival_flow_penalty_min'):.0f} min", "ATC flow management runway arrival delay into hub")
+            t_cb.add_row("Outbound Taxiway Queue", f"+{conn_dbg.get('hub_departure_taxi_penalty_min'):.0f} min", "Taxiway delay before takeoff (does NOT extend boarding cutoff)")
+            t_cb.add_row("Boarding Conformance Cutoff", f"{conn_dbg.get('boarding_conformance_cutoff_min')} min", "Minutes before departure when flight connections gate strictly closes")
+            t_cb.add_row("Effective Slack Buffer", f"{conn_dbg.get('effective_slack_buffer_min'):+.0f} min", "Layover - Effective MCT - Inbound Delay - Holding Delay")
+            t_cb.add_row("Misconnect Probability", f"{conn_dbg.get('misconnect_probability_pct'):.1f}%", "Calculated via Gaussian CDF against empirical arrival distribution")
+            t_cb.add_row("Luggage Transfer Risk", f"{conn_dbg.get('luggage_transfer_risk_pct'):.1f}%", f"Baggage system sortation risk ({conn_dbg.get('luggage_status')})")
+
+            console.print(t_cb)
+            console.print(f"[dim]Transfer Details: {conn_dbg.get('terminal_transfer_note')}[/dim]\n")
+
+        # Statutory Rights Geodesic Audit
+        pr_dbg = dbg.get("passenger_rights_audit")
+        if pr_dbg:
+            t_pr = Table(title="⚖️ Statutory Passenger Rights & Geodesic Calculation Audit", border_style="green")
+            t_pr.add_column("Legal Metric", style="bold")
+            t_pr.add_column("Value", style="cyan")
+            t_pr.add_column("Statutory Basis")
+
+            t_pr.add_row("Great Circle Distance", f"{pr_dbg.get('total_journey_distance_km'):.1f} km ({pr_dbg.get('total_journey_distance_nm'):.1f} nm)", "Geodesic Haversine calculation between origin and final destination")
+            t_pr.add_row("Legal Framework", str(pr_dbg.get("statutory_framework")), "Applicable consumer law based on departure/carrier jurisdiction")
+            t_pr.add_row("Distance Tier", str(pr_dbg.get("compensation_bracket")), "Tier determines mandatory statutory compensation under Article 7")
+            t_pr.add_row("Statutory Compensation", f"€{pr_dbg.get('statutory_compensation_amount_eur'):.0f}", "Fixed indemnity payable for non-extraordinary delays")
+            t_pr.add_row("Delay Threshold", f"≥ {pr_dbg.get('delay_threshold_hours'):.0f} hours", "Threshold at destination gate arrival for financial compensation")
+            t_pr.add_row("Duty of Care Threshold", f"≥ {pr_dbg.get('right_to_care_hours'):.0f} hours", "Free meals, refreshments, and communication under Article 9")
+
+            console.print(t_pr)
+            console.print(f"[dim]Legal Guidance: {pr_dbg.get('claimability_guidance')}[/dim]\n")
 
 
 @app.command("dashboard")

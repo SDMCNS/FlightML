@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 import math
 from typing import Any
+import pandas as pd
 import requests
 
 from flightml.data.dataset import FlightDataset
@@ -166,6 +167,11 @@ class AirportWeatherForecast:
     crosswind_kts: float
     risk_level: str  # "LOW", "MODERATE", "ELEVATED", "SEVERE"
     is_live_api: bool
+    api_endpoint: str = "https://api.open-meteo.com/v1/forecast"
+    latitude_deg: float = 0.0
+    longitude_deg: float = 0.0
+    forecast_iso_time: str = ""
+    weather_code: int = 3
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -277,6 +283,7 @@ class PassengerItineraryAssessment:
     passenger_rights: PassengerRightsAssessment
     departure_waves: list[DepartureWaveComparison]
     actionable_recommendations: list[str]
+    debug_audit: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -435,6 +442,10 @@ class PassengerJourneyEngine:
         except Exception:
             is_live = False
 
+        forecast_time_str = times[idx] if (is_live and idx != -1 and idx < len(times)) else f"{target_date_str}T{target_hour:02d}:00"
+        weather_code_val = code if is_live else 3
+        api_source = "https://api.open-meteo.com/v1/forecast (ECMWF / DWD ICON Ensemble)" if is_live else "Historical Climatological Fallback Model"
+
         # Compute crosswind against primary runway
         runways = self._get_airport_runways(icao)
         crosswind_kts = self._compute_primary_crosswind(runways, wind_dir_deg, wind_spd_kts)
@@ -468,6 +479,11 @@ class PassengerJourneyEngine:
             crosswind_kts=round(crosswind_kts, 1),
             risk_level=risk_level,
             is_live_api=is_live,
+            api_endpoint=api_source,
+            latitude_deg=float(lat),
+            longitude_deg=float(lon),
+            forecast_iso_time=str(forecast_time_str),
+            weather_code=weather_code_val,
         )
 
     def _compute_primary_crosswind(
@@ -523,7 +539,8 @@ class PassengerJourneyEngine:
         day_of_week_int: int = 2,
         time_window: str = "morning",
         target_date: str | None = None,
-    ) -> FlightLegRisk:
+        return_debug: bool = False,
+    ) -> FlightLegRisk | tuple[FlightLegRisk, dict[str, Any]]:
         """
         Assess risk for a single flight leg using empirical statistics & live weather forecast.
         """
@@ -551,15 +568,12 @@ class PassengerJourneyEngine:
             display_window = "All Day"
             target_hour = 10
 
+        cols = "ectrl_id, ac_operator, ac_type, ac_reg, actual_off_block_time, actual_arrival_time, arr_delay_min, dep_delay_min"
         # Query historical flights (excluding cargo freighters and private general aviation)
         cargo_str = ", ".join(f"'{c}'" for c in self.CARGO_AND_GA_OPERATORS)
         cargo_filter = f"AND ac_operator NOT IN ({cargo_str})"
         sql = f"""
-            SELECT 
-                ac_operator,
-                ac_type,
-                arr_delay_min,
-                dep_delay_min
+            SELECT {cols}
             FROM flights
             WHERE adep = '{orig_clean}' 
               AND ades = '{dest_clean}'
@@ -568,22 +582,31 @@ class PassengerJourneyEngine:
               {cargo_filter}
         """
         df = self.dataset.query(sql)
+        executed_query = sql
+        fallback_stage = "Exact Day-of-Week and Departure Window (Commercial Filtered)"
 
         # Fallback if specific DOW + window is small: broaden to all days on that route
         if len(df) < 5:
             fallback_sql = f"""
-                SELECT ac_operator, ac_type, arr_delay_min, dep_delay_min
+                SELECT {cols}
                 FROM flights
                 WHERE adep = '{orig_clean}' AND ades = '{dest_clean}'
                   {cargo_filter}
             """
             df = self.dataset.query(fallback_sql)
+            executed_query = fallback_sql
+            fallback_stage = "Broadened to all days of week on route (Commercial Filtered)"
 
         # If still empty (e.g. specialized cargo-only or unclassified route), fallback without operator exclusion
         if df.empty:
-            df = self.dataset.query(
-                f"SELECT ac_operator, ac_type, arr_delay_min, dep_delay_min FROM flights WHERE adep = '{orig_clean}' AND ades = '{dest_clean}'"
-            )
+            raw_sql = f"""
+                SELECT {cols}
+                FROM flights
+                WHERE adep = '{orig_clean}' AND ades = '{dest_clean}'
+            """
+            df = self.dataset.query(raw_sql)
+            executed_query = raw_sql
+            fallback_stage = "All flights on route (including private/charter/GA)"
 
         if not df.empty:
             dominant_op = df["ac_operator"].mode().iloc[0] if not df["ac_operator"].empty else "BAW"
@@ -633,7 +656,7 @@ class PassengerJourneyEngine:
 
         day_name = INT_TO_DAY_NAME.get(day_of_week_int, "Tuesday")
 
-        return FlightLegRisk(
+        leg_obj = FlightLegRisk(
             origin=orig_clean,
             origin_name=orig_info.get("name", orig_clean),
             destination=dest_clean,
@@ -651,13 +674,90 @@ class PassengerJourneyEngine:
             prob_delay_gt_15m_pct=round(p_gt_15, 1),
             prob_delay_gt_30m_pct=round(p_gt_30, 1),
             prob_delay_gt_60m_pct=round(p_gt_60, 1),
-            cancellation_rate_pct=round(canc_rate, 1),
+            cancellation_rate_pct=canc_rate,
             weather_risk_multiplier=weather_multiplier,
             weather_adjusted_prob_delay_pct=adjusted_p_delay,
             expected_delay_bracket=delay_bracket,
             origin_weather=orig_weather,
             destination_weather=dest_weather,
         )
+
+        if not return_debug:
+            return leg_obj
+
+        # Build detailed debug accounting for this leg
+        sample_records = []
+        if not df.empty:
+            for _, r in df.head(10).iterrows():
+                sample_records.append({
+                    "ectrl_id": int(r.get("ectrl_id", 0)) if pd.notna(r.get("ectrl_id")) else 0,
+                    "off_block_time": str(r.get("actual_off_block_time", "")),
+                    "arrival_time": str(r.get("actual_arrival_time", "")),
+                    "operator": str(r.get("ac_operator", "")),
+                    "operator_name": self.OPERATOR_NAMES.get(str(r.get("ac_operator", "")), str(r.get("ac_operator", ""))),
+                    "aircraft_type": str(r.get("ac_type", "")),
+                    "registration": str(r.get("ac_reg", "")),
+                    "dep_delay_min": round(float(r.get("dep_delay_min", 0.0)), 1) if pd.notna(r.get("dep_delay_min")) else 0.0,
+                    "arr_delay_min": round(float(r.get("arr_delay_min", 0.0)), 1) if pd.notna(r.get("arr_delay_min")) else 0.0,
+                })
+
+        op_shares = []
+        if not df.empty and "ac_operator" in df.columns:
+            vc = df["ac_operator"].value_counts()
+            for op_code, cnt in vc.items():
+                op_shares.append({
+                    "operator": op_code,
+                    "name": self.OPERATOR_NAMES.get(op_code, op_code),
+                    "count": int(cnt),
+                    "share_pct": round(float(cnt / len(df) * 100.0), 1),
+                })
+
+        ac_shares = []
+        if not df.empty and "ac_type" in df.columns:
+            vc_ac = df["ac_type"].value_counts()
+            for ac_code, cnt in vc_ac.items():
+                ac_shares.append({
+                    "aircraft_type": ac_code,
+                    "count": int(cnt),
+                    "share_pct": round(float(cnt / len(df) * 100.0), 1),
+                })
+
+        dist_stats = {
+            "min_arr_delay_min": round(float(df["arr_delay_min"].min()), 1) if not df.empty else 0.0,
+            "p10_arr_delay_min": round(float(df["arr_delay_min"].quantile(0.10)), 1) if not df.empty else 0.0,
+            "p25_arr_delay_min": round(float(df["arr_delay_min"].quantile(0.25)), 1) if not df.empty else 0.0,
+            "median_arr_delay_min": round(median_delay, 1),
+            "mean_arr_delay_min": round(mean_delay, 1),
+            "p75_arr_delay_min": round(float(df["arr_delay_min"].quantile(0.75)), 1) if not df.empty else 0.0,
+            "p80_arr_delay_min": round(p80_delay, 1),
+            "p90_arr_delay_min": round(p90_delay, 1),
+            "p99_arr_delay_min": round(float(df["arr_delay_min"].quantile(0.99)), 1) if not df.empty else 0.0,
+            "max_arr_delay_min": round(float(df["arr_delay_min"].max()), 1) if not df.empty else 0.0,
+        }
+
+        leg_debug_info = {
+            "origin": orig_clean,
+            "origin_name": orig_info.get("name", orig_clean),
+            "destination": dest_clean,
+            "destination_name": dest_info.get("name", dest_clean),
+            "query_executed": " ".join(executed_query.split()),
+            "sampling_stage": fallback_stage,
+            "sample_size_flights": sample_size,
+            "sample_records": sample_records,
+            "delay_percentiles": dist_stats,
+            "operator_breakdown": op_shares,
+            "aircraft_breakdown": ac_shares,
+            "weather_impact_calculation": {
+                "origin_adverse_score": orig_weather.adverse_risk_score,
+                "destination_adverse_score": dest_weather.adverse_risk_score,
+                "combined_adverse_score": combined_adv,
+                "weather_risk_multiplier": weather_multiplier,
+                "baseline_delay_gt15_pct": round(p_gt_15, 1),
+                "adjusted_delay_risk_pct": adjusted_p_delay,
+            },
+        }
+
+        return leg_obj, leg_debug_info
 
     def evaluate_connection_risk(
         self,
@@ -973,9 +1073,11 @@ class PassengerJourneyEngine:
         period: str | None = None,
         inbound_op: str | None = None,
         outbound_op: str | None = None,
+        debug: bool = False,
     ) -> PassengerItineraryAssessment:
         """
         Assess complete passenger itinerary: multi-leg delays, layover risk, EU261 compensation, and wave options.
+        Supports debug=True for comprehensive accounting of historical flights, NWP weather sources, and buffers.
         """
         dow_int = DAY_NAME_TO_INT.get(str(day_of_week).lower().strip(), 2)
         day_name = INT_TO_DAY_NAME.get(dow_int, "Tuesday")
@@ -985,21 +1087,37 @@ class PassengerJourneyEngine:
         resolved_date_str = target_dt.isoformat()
 
         # Check if period should be auto-selected
+        period_candidates: list[dict[str, Any]] = []
         if period is not None and str(period).lower().strip() not in ("auto", "none", ""):
             effective_period = str(period).strip()
             if hasattr(self.dataset, "period_selection_reason") and getattr(self.dataset, "period", None) == effective_period:
                 period_reason = self.dataset.period_selection_reason
             else:
                 period_reason = f"Archive {effective_period}"
+            if debug:
+                _, _, period_candidates = FlightDataset.find_best_period(
+                    target_date=resolved_date_str,
+                    day_of_week=day_name,
+                    parquet_dir=self.dataset.parquet_dir,
+                    return_candidates=True,
+                )
         elif self._auto_period or not self.dataset.period or self.dataset.period == "auto":
-            effective_period, period_reason = FlightDataset.find_best_period(
+            effective_period, period_reason, period_candidates = FlightDataset.find_best_period(
                 target_date=resolved_date_str,
                 day_of_week=day_name,
                 parquet_dir=self.dataset.parquet_dir,
+                return_candidates=True,
             )
         else:
             effective_period = self.dataset.period
             period_reason = getattr(self.dataset, "period_selection_reason", f"Configured engine dataset: {effective_period}")
+            if debug:
+                _, _, period_candidates = FlightDataset.find_best_period(
+                    target_date=resolved_date_str,
+                    day_of_week=day_name,
+                    parquet_dir=self.dataset.parquet_dir,
+                    return_candidates=True,
+                )
 
         # Ensure dataset matches the resolved period
         if self.dataset.period != effective_period:
@@ -1008,12 +1126,18 @@ class PassengerJourneyEngine:
             self._runway_cache.clear()
 
         legs: list[FlightLegRisk] = []
+        legs_debug: list[dict[str, Any]] = []
         conn_risk: ConnectionRisk | None = None
 
         if hub and hub.strip().upper() != origin.strip().upper() and hub.strip().upper() != destination.strip().upper():
             hub_clean = hub.strip().upper()
-            leg1 = self.assess_leg(origin, hub_clean, dow_int, time_window, resolved_date_str)
-            leg2 = self.assess_leg(hub_clean, destination, dow_int, time_window, resolved_date_str)
+            if debug:
+                leg1, leg1_dbg = self.assess_leg(origin, hub_clean, dow_int, time_window, resolved_date_str, return_debug=True)
+                leg2, leg2_dbg = self.assess_leg(hub_clean, destination, dow_int, time_window, resolved_date_str, return_debug=True)
+                legs_debug = [leg1_dbg, leg2_dbg]
+            else:
+                leg1 = self.assess_leg(origin, hub_clean, dow_int, time_window, resolved_date_str)
+                leg2 = self.assess_leg(hub_clean, destination, dow_int, time_window, resolved_date_str)
             legs = [leg1, leg2]
             conn_risk = self.evaluate_connection_risk(
                 hub=hub_clean,
@@ -1024,7 +1148,11 @@ class PassengerJourneyEngine:
                 outbound_op=outbound_op,
             )
         else:
-            leg = self.assess_leg(origin, destination, dow_int, time_window, resolved_date_str)
+            if debug:
+                leg, leg_dbg = self.assess_leg(origin, destination, dow_int, time_window, resolved_date_str, return_debug=True)
+                legs_debug = [leg_dbg]
+            else:
+                leg = self.assess_leg(origin, destination, dow_int, time_window, resolved_date_str)
             legs = [leg]
 
         rights = self.calculate_passenger_rights(origin, destination, hub)
@@ -1097,6 +1225,93 @@ class PassengerJourneyEngine:
 
         itinerary_id = f"{origin.upper()}_{hub.upper() if hub else 'DIRECT'}_{destination.upper()}_{day_name[:3]}_{resolved_date_str}_P{effective_period}"
 
+        debug_audit = None
+        if debug:
+            weather_audit = []
+            for leg in legs:
+                weather_audit.append({
+                    "airport": leg.origin,
+                    "airport_name": leg.origin_name,
+                    "role": "Departure Airport",
+                    "latitude": leg.origin_weather.latitude_deg,
+                    "longitude": leg.origin_weather.longitude_deg,
+                    "api_endpoint": leg.origin_weather.api_endpoint,
+                    "forecast_time_matched": leg.origin_weather.forecast_iso_time,
+                    "is_live_api": leg.origin_weather.is_live_api,
+                    "temperature_c": leg.origin_weather.temperature_c,
+                    "wind_speed_kts": leg.origin_weather.wind_speed_kts,
+                    "wind_gusts_kts": leg.origin_weather.wind_gusts_kts,
+                    "wind_dir_deg": leg.origin_weather.wind_dir_deg,
+                    "precipitation_prob_pct": leg.origin_weather.precipitation_probability_pct,
+                    "crosswind_kts": leg.origin_weather.crosswind_kts,
+                    "adverse_risk_score": leg.origin_weather.adverse_risk_score,
+                    "weather_description": leg.origin_weather.weather_description,
+                })
+                weather_audit.append({
+                    "airport": leg.destination,
+                    "airport_name": leg.destination_name,
+                    "role": "Arrival Airport" if not conn_risk or leg.destination != conn_risk.hub else "Transfer Hub",
+                    "latitude": leg.destination_weather.latitude_deg,
+                    "longitude": leg.destination_weather.longitude_deg,
+                    "api_endpoint": leg.destination_weather.api_endpoint,
+                    "forecast_time_matched": leg.destination_weather.forecast_iso_time,
+                    "is_live_api": leg.destination_weather.is_live_api,
+                    "temperature_c": leg.destination_weather.temperature_c,
+                    "wind_speed_kts": leg.destination_weather.wind_speed_kts,
+                    "wind_gusts_kts": leg.destination_weather.wind_gusts_kts,
+                    "wind_dir_deg": leg.destination_weather.wind_dir_deg,
+                    "precipitation_prob_pct": leg.destination_weather.precipitation_probability_pct,
+                    "crosswind_kts": leg.destination_weather.crosswind_kts,
+                    "adverse_risk_score": leg.destination_weather.adverse_risk_score,
+                    "weather_description": leg.destination_weather.weather_description,
+                })
+
+            conn_audit = None
+            if conn_risk:
+                conn_audit = {
+                    "hub": conn_risk.hub,
+                    "hub_name": conn_risk.hub_name,
+                    "nominal_mct_min": conn_risk.minimum_connection_time_min,
+                    "effective_mct_min": conn_risk.effective_mct_min,
+                    "scheduled_layover_min": conn_risk.scheduled_layover_min,
+                    "effective_slack_buffer_min": conn_risk.effective_slack_buffer_min,
+                    "nominal_slack_buffer_min": conn_risk.slack_buffer_min,
+                    "hub_arrival_flow_penalty_min": conn_risk.hub_arrival_flow_penalty_min,
+                    "hub_departure_taxi_penalty_min": conn_risk.hub_departure_taxi_penalty_min,
+                    "transit_weather_penalty_min": conn_risk.inter_terminal_transit_weather_penalty_min,
+                    "boarding_conformance_cutoff_min": conn_risk.boarding_conformance_cutoff_min,
+                    "misconnect_probability_pct": conn_risk.misconnect_probability_pct,
+                    "luggage_transfer_risk_pct": conn_risk.luggage_transfer_risk_pct,
+                    "luggage_status": conn_risk.luggage_status,
+                    "connection_status": conn_risk.misconnect_risk_level,
+                    "terminal_transfer_note": conn_risk.terminal_transfer_note,
+                }
+
+            debug_audit = {
+                "period_selection": {
+                    "raw_target_date": target_date,
+                    "resolved_date": resolved_date_str,
+                    "day_of_week": day_name,
+                    "winning_period": effective_period,
+                    "period_reason": period_reason,
+                    "candidates": period_candidates,
+                },
+                "legs_audit": legs_debug,
+                "weather_audit": weather_audit,
+                "connection_audit": conn_audit,
+                "passenger_rights_audit": {
+                    "statutory_framework": rights.statutory_framework,
+                    "total_journey_distance_km": rights.total_journey_distance_km,
+                    "total_journey_distance_nm": round(rights.total_journey_distance_km / 1.852, 1),
+                    "compensation_bracket": rights.compensation_bracket,
+                    "statutory_compensation_amount_eur": rights.statutory_compensation_amount_eur,
+                    "delay_threshold_hours": rights.delay_threshold_hours,
+                    "right_to_care_hours": rights.right_to_care_hours,
+                    "claimability_guidance": rights.claimability_guidance,
+                },
+                "departure_waves_audit": [w.to_dict() for w in wave_comp],
+            }
+
         return PassengerItineraryAssessment(
             itinerary_id=itinerary_id,
             origin=origin.upper(),
@@ -1114,4 +1329,5 @@ class PassengerJourneyEngine:
             passenger_rights=rights,
             departure_waves=wave_comp,
             actionable_recommendations=recommendations,
+            debug_audit=debug_audit,
         )

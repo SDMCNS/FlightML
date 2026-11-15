@@ -362,6 +362,7 @@ def create_mcp_server() -> FastMCP:
         scheduled_layover_min: int = 75,
         target_date: str = "",
         period: str = "auto",
+        debug: bool = False,
     ) -> str:
         """Assess flight journey delay risk, missed connection probability, weather impact, and EU261 compensation for the general travelling public.
 
@@ -374,6 +375,7 @@ def create_mcp_server() -> FastMCP:
             scheduled_layover_min: Scheduled layover duration at transfer hub in minutes (e.g. 75).
             target_date: Target flight date in YYYY-MM-DD format (or leave empty for upcoming forecast).
             period: Eurocontrol baseline data period (default: 'auto' to auto-select the best fitting archive for the target date).
+            debug: Set True to include full diagnostic audit accounting of historical flights, NWP weather endpoints, and buffers.
         """
         try:
             from flightml.data.dataset import FlightDataset
@@ -397,6 +399,7 @@ def create_mcp_server() -> FastMCP:
                 scheduled_layover_min=scheduled_layover_min,
                 target_date=resolved_date_str,
                 period=resolved_period,
+                debug=debug,
             )
             return json.dumps(res.to_dict(), indent=2)
         except Exception as exc:

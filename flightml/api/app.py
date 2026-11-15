@@ -1020,6 +1020,7 @@ def get_passenger_itinerary_risk_endpoint(
     scheduled_layover_min: int = Query(default=75, description="Scheduled layover duration in minutes at transfer hub"),
     date: str | None = Query(default=None, description="Target flight date YYYY-MM-DD (defaults to upcoming date/live 7-day forecast)"),
     period: str = Query(default="auto", description="Eurocontrol baseline data period (default: 'auto' to select best fitting archive for flight date)"),
+    debug: bool = Query(default=False, description="Include detailed diagnostic audit accounting of records, weather endpoints, and formulas"),
 ) -> dict[str, Any]:
     """Assess flight itinerary delay risk, missed connection probability, live weather impact, and EU261 statutory compensation for the travelling public."""
     parsed_date, _ = FlightDataset.parse_flight_date(date, day_of_week)
@@ -1042,6 +1043,7 @@ def get_passenger_itinerary_risk_endpoint(
         scheduled_layover_min=scheduled_layover_min,
         target_date=resolved_date_str,
         period=resolved_period,
+        debug=debug,
     )
     return res.to_dict()
 

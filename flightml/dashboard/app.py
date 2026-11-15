@@ -4236,6 +4236,7 @@ with tab_cat_passenger:
             help="Auto selects the best fitting Eurocontrol archive based on season & modernity for the flight date."
         )
 
+    p_debug = st.checkbox("🛠️ Detailed Accounting & Data Provenance Audit (--debug)", value=False, help="Show exact historical flight records, DuckDB SQL queries, NWP weather endpoints, and buffer calculations.")
     p_run = st.button("🔍 Assess My Flight Journey & Delay Risk", type="primary", use_container_width=True)
 
     if p_run or True:
@@ -4252,6 +4253,7 @@ with tab_cat_passenger:
                 scheduled_layover_min=p_layover,
                 target_date=p_target_date if p_target_date else None,
                 period=chosen_p,
+                debug=p_debug,
             )
 
         st.markdown("---")
@@ -4417,5 +4419,54 @@ with tab_cat_passenger:
                 - **Right to Care is Unconditional**: Even if severe gales or volcanic ash ground your flight (*McDonagh v Ryanair*, C-12/11), the airline's obligation to provide free hotel accommodation, food, and transport remains **unlimited in cost and duration**.
                 """
             )
+
+        # Detailed Debug & Provenance Accounting (when debug is enabled)
+        if p_res.debug_audit:
+            dbg = p_res.debug_audit
+            st.markdown("---")
+            st.subheader("🛠️ Detailed FlightML Diagnostic & Data Provenance Audit (--debug)")
+
+            # 1. Period Selection
+            with st.expander("🗄️ Eurocontrol Period Selection Scoring Audit", expanded=True):
+                p_sec = dbg.get("period_selection", {})
+                st.markdown(f"**Selected Winning Archive:** `{p_sec.get('winning_period')}`")
+                st.caption(f"Rationale: {p_sec.get('period_reason')}")
+                if p_sec.get("candidates"):
+                    st.dataframe(pd.DataFrame(p_sec["candidates"]), use_container_width=True)
+
+            # 2. Historical Flight Records
+            with st.expander("✈️ Historical Flight Records & Sampling Audit", expanded=True):
+                for l_dbg in dbg.get("legs_audit", []):
+                    st.markdown(f"#### Leg: {l_dbg.get('origin')} ➔ {l_dbg.get('destination')} ({l_dbg.get('origin_name')} to {l_dbg.get('destination_name')})")
+                    st.caption(f"**Sampling Stage:** {l_dbg.get('sampling_stage')} | **Matched Historical Records:** {l_dbg.get('sample_size_flights')}")
+                    st.code(l_dbg.get("query_executed"), language="sql")
+
+                    if l_dbg.get("sample_records"):
+                        st.markdown("**Sample Matched Flight Executions:**")
+                        st.dataframe(pd.DataFrame(l_dbg["sample_records"]), use_container_width=True)
+
+                    c_pct, c_ops = st.columns([1.2, 1.0])
+                    with c_pct:
+                        st.markdown("**Arrival Delay Distribution Percentiles (min):**")
+                        st.dataframe(pd.DataFrame([l_dbg.get("delay_percentiles", {})]), use_container_width=True)
+                    with c_ops:
+                        if l_dbg.get("operator_breakdown"):
+                            st.markdown("**Airline Market Shares:**")
+                            st.dataframe(pd.DataFrame(l_dbg["operator_breakdown"]), use_container_width=True)
+
+            # 3. Weather Observations
+            with st.expander("🌦️ Live NWP Weather Observations & API Provenance Audit", expanded=True):
+                if dbg.get("weather_audit"):
+                    st.dataframe(pd.DataFrame(dbg["weather_audit"]), use_container_width=True)
+
+            # 4. Connection MCT & Buffer Accounting
+            if dbg.get("connection_audit"):
+                with st.expander("⏳ Connection MCT & Buffer Dynamics Accounting", expanded=True):
+                    st.json(dbg["connection_audit"])
+
+            # 5. Statutory Rights Geodesic
+            if dbg.get("passenger_rights_audit"):
+                with st.expander("⚖️ Statutory Passenger Rights & Geodesic Calculation Audit", expanded=True):
+                    st.json(dbg["passenger_rights_audit"])
 
 

@@ -228,3 +228,45 @@ def test_passenger_itinerary_auto_period_selection():
     assert "202506" in res.period_selection_reason
     assert any("202506" in rec for rec in res.actionable_recommendations)
 
+
+def test_passenger_itinerary_debug_audit():
+    """Verify that debug=True populates full diagnostic accounting of records, weather, and MCT."""
+    engine = PassengerJourneyEngine()
+    res = engine.assess_itinerary(
+        origin="EINN",
+        destination="EBBR",
+        hub="EGLL",
+        target_date="2026-11-17",
+        day_of_week="tuesday",
+        time_window="morning",
+        debug=True,
+    )
+    assert res.debug_audit is not None
+    dbg = res.debug_audit
+    assert "period_selection" in dbg
+    assert "candidates" in dbg["period_selection"]
+    assert len(dbg["period_selection"]["candidates"]) > 0
+
+    assert "legs_audit" in dbg
+    assert len(dbg["legs_audit"]) == 2
+    leg1 = dbg["legs_audit"][0]
+    assert "sample_records" in leg1
+    assert "delay_percentiles" in leg1
+    assert "operator_breakdown" in leg1
+    assert "query_executed" in leg1
+
+    assert "weather_audit" in dbg
+    assert len(dbg["weather_audit"]) >= 2
+    for w in dbg["weather_audit"]:
+        assert "api_endpoint" in w
+        assert "temperature_c" in w
+        assert "wind_speed_kts" in w
+
+    assert "connection_audit" in dbg
+    assert dbg["connection_audit"]["hub"] == "EGLL"
+    assert "effective_mct_min" in dbg["connection_audit"]
+
+    assert "passenger_rights_audit" in dbg
+    assert dbg["passenger_rights_audit"]["statutory_compensation_amount_eur"] == 250.0
+
+

@@ -859,7 +859,8 @@ class FlightDataset:
         day_of_week: str | None = None,
         available_periods: list[str] | None = None,
         parquet_dir: Path | str | None = None,
-    ) -> tuple[str, str]:
+        return_candidates: bool = False,
+    ) -> tuple[str, str] | tuple[str, str, list[dict[str, Any]]]:
         """
         Intelligently select the best fitting Eurocontrol archive period for a flight date.
 
@@ -867,13 +868,13 @@ class FlightDataset:
         1. Seasonality (annual meteorological cycle: convective summer storms vs winter de-icing vs autumn shoulder)
         2. Recency & Operational Modernity (contemporary post-COVID 2024/2025 fleet/network vs 2016 baseline)
 
-        Returns (best_period_id, human_readable_reason).
+        Returns (best_period_id, human_readable_reason) or (best_period_id, reason, candidates_list).
         """
         available = available_periods or cls.list_available_periods(parquet_dir=parquet_dir)
         if not available:
-            return "201611", "Fallback default period (no archives found)"
+            return ("201611", "Fallback default period (no archives found)", []) if return_candidates else ("201611", "Fallback default period (no archives found)")
 
-        dt, _ = cls.parse_flight_date(target_date, day_of_week)
+        dt, parsed_src = cls.parse_flight_date(target_date, day_of_week)
         t_year = dt.year
         t_month = dt.month
 
@@ -888,6 +889,7 @@ class FlightDataset:
         best_p = available[0]
         best_score = float("inf")
         best_details: dict[str, Any] = {}
+        candidate_evaluations: list[dict[str, Any]] = []
 
         for p in available:
             if len(p) != 6 or not p.isdigit():
@@ -903,6 +905,18 @@ class FlightDataset:
             legacy_penalty = 50 if (t_year >= 2024 and p_year < 2020) else 0
             score = (seasonal_dist * 10) + year_diff + legacy_penalty
 
+            candidate_evaluations.append({
+                "period": p,
+                "year": p_year,
+                "month": p_month,
+                "month_name": calendar.month_name[p_month],
+                "season": season_names.get(p_month, "operational"),
+                "seasonal_dist_months": seasonal_dist,
+                "year_dist": year_diff,
+                "legacy_penalty": legacy_penalty,
+                "total_score": score,
+            })
+
             if score < best_score or (score == best_score and p > best_p):
                 best_score = score
                 best_p = p
@@ -912,6 +926,10 @@ class FlightDataset:
                     "seasonal_dist": seasonal_dist,
                     "year_diff": year_diff,
                 }
+
+        # Mark winner in candidate list
+        for c in candidate_evaluations:
+            c["is_winner"] = (c["period"] == best_p)
 
         p_year = best_details.get("p_year", int(best_p[:4]) if len(best_p) >= 4 else 2025)
         p_month = best_details.get("p_month", int(best_p[4:6]) if len(best_p) >= 6 else 10)
@@ -927,5 +945,9 @@ class FlightDataset:
                 f"Closest seasonal match ({p_season} season: {month_name} {p_year}, archive {best_p}) "
                 f"for flight date {dt.isoformat()} ({target_season} season)."
             )
+
+        if return_candidates:
+            return best_p, reason, candidate_evaluations
+        return best_p, reason
 
         return best_p, reason
