@@ -67,6 +67,7 @@ def train_with_transformers_native(
     micro_batch_size: int = 2,
     gradient_accumulation_steps: int = 8,
     epochs: int = 3,
+    max_steps: int = -1,
     lr: float = 2e-4,
 ):
     """Fine-tune 7B/8B model using native HuggingFace PEFT, bitsandbytes 4-bit, and TRL."""
@@ -74,7 +75,6 @@ def train_with_transformers_native(
         AutoModelForCausalLM,
         AutoTokenizer,
         BitsAndBytesConfig,
-        TrainingArguments,
     )
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     from trl import SFTTrainer
@@ -118,6 +118,9 @@ def train_with_transformers_native(
 
     dataset = load_sft_dataset(dataset_path)
 
+    save_strategy = "steps" if max_steps > 0 else "epoch"
+    save_steps = 100 if max_steps > 0 else 500
+
     # Use SFTConfig for modern TRL versions, falling back to TrainingArguments for older versions
     try:
         from trl import SFTConfig
@@ -126,7 +129,8 @@ def train_with_transformers_native(
             per_device_train_batch_size=micro_batch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
             warmup_steps=50,
-            num_train_epochs=epochs,
+            num_train_epochs=epochs if max_steps <= 0 else 1,
+            max_steps=max_steps,
             learning_rate=lr,
             fp16=False,
             bf16=True,
@@ -134,7 +138,8 @@ def train_with_transformers_native(
             optim="paged_adamw_8bit",  # Offloads memory spikes to 32GB system RAM
             weight_decay=0.01,
             lr_scheduler_type="cosine",
-            save_strategy="epoch",
+            save_strategy=save_strategy,
+            save_steps=save_steps,
             report_to="none",
             max_length=max_seq_length,
         )
@@ -145,7 +150,8 @@ def train_with_transformers_native(
             per_device_train_batch_size=micro_batch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
             warmup_steps=50,
-            num_train_epochs=epochs,
+            num_train_epochs=epochs if max_steps <= 0 else 1,
+            max_steps=max_steps,
             learning_rate=lr,
             fp16=False,
             bf16=True,
@@ -153,7 +159,8 @@ def train_with_transformers_native(
             optim="paged_adamw_8bit",
             weight_decay=0.01,
             lr_scheduler_type="cosine",
-            save_strategy="epoch",
+            save_strategy=save_strategy,
+            save_steps=save_steps,
             report_to="none",
         )
 
@@ -176,13 +183,13 @@ def train_with_transformers_native(
 
     trainer = SFTTrainer(**trainer_kwargs)
 
-    print("⏳ Starting QLoRA fine-tuning...")
+    print(f"⏳ Starting QLoRA fine-tuning run ({'max_steps=' + str(max_steps) if max_steps > 0 else str(epochs) + ' epochs'})...")
     trainer.train()
 
     print(f"💾 Saving trained LoRA adapter weights to {output_dir}")
     trainer.model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
-    print("✓ Fine-tuning complete!")
+    print("✓ Fine-tuning complete! Model saved and ready for testing.")
 
 
 def train_with_unsloth(
@@ -310,7 +317,8 @@ def main():
     parser.add_argument("--seq-len", type=int, default=2048, help="Maximum sequence length (2048 or 4096)")
     parser.add_argument("--batch-size", type=int, default=2, help="Micro batch size per device")
     parser.add_argument("--grad-accum", type=int, default=8, help="Gradient accumulation steps")
-    parser.add_argument("--epochs", type=int, default=3, help="Training epochs")
+    parser.add_argument("--epochs", type=int, default=3, help="Training epochs (ignored if --max-steps is set)")
+    parser.add_argument("--max-steps", type=int, default=500, help="Maximum training steps (sweet spot: 400-600 steps)")
     parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
 
     args = parser.parse_args()
@@ -344,6 +352,7 @@ def main():
             micro_batch_size=args.batch_size,
             gradient_accumulation_steps=args.grad_accum,
             epochs=args.epochs,
+            max_steps=args.max_steps,
             lr=args.lr,
         )
 
