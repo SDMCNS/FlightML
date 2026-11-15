@@ -361,7 +361,7 @@ def create_mcp_server() -> FastMCP:
         time_window: str = "morning",
         scheduled_layover_min: int = 75,
         target_date: str = "",
-        period: str = "202510",
+        period: str = "auto",
     ) -> str:
         """Assess flight journey delay risk, missed connection probability, weather impact, and EU261 compensation for the general travelling public.
 
@@ -373,12 +373,21 @@ def create_mcp_server() -> FastMCP:
             time_window: Departure window ('morning', 'midday', 'afternoon', 'evening').
             scheduled_layover_min: Scheduled layover duration at transfer hub in minutes (e.g. 75).
             target_date: Target flight date in YYYY-MM-DD format (or leave empty for upcoming forecast).
-            period: Eurocontrol baseline data period (default: '202510').
+            period: Eurocontrol baseline data period (default: 'auto' to auto-select the best fitting archive for the target date).
         """
         try:
-            ds = get_dataset(period)
+            from flightml.data.dataset import FlightDataset
+            parsed_date, _ = FlightDataset.parse_flight_date(target_date, day_of_week)
+            resolved_date_str = parsed_date.isoformat()
+
+            if str(period).lower().strip() in ("auto", "none", ""):
+                resolved_period, _ = FlightDataset.find_best_period(target_date=resolved_date_str, day_of_week=day_of_week)
+            else:
+                resolved_period = str(period).strip()
+
+            ds = get_dataset(resolved_period)
             engine = PassengerJourneyEngine(ds)
-            clean_hub = hub.strip() if hub and hub.strip().upper() not in (origin.strip().upper(), destination.strip().upper()) else None
+            clean_hub = hub.strip() if hub and hub.strip().upper() not in (origin.strip().upper(), destination.strip().upper(), "NONE", "") else None
             res = engine.assess_itinerary(
                 origin=origin.strip().upper(),
                 destination=destination.strip().upper(),
@@ -386,7 +395,8 @@ def create_mcp_server() -> FastMCP:
                 day_of_week=day_of_week,
                 time_window=time_window,
                 scheduled_layover_min=scheduled_layover_min,
-                target_date=target_date if target_date else None,
+                target_date=resolved_date_str,
+                period=resolved_period,
             )
             return json.dumps(res.to_dict(), indent=2)
         except Exception as exc:

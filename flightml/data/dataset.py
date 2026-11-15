@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from datetime import datetime, date, timedelta, timezone
+import calendar
 import duckdb
 import pandas as pd
 
@@ -22,12 +24,26 @@ class FlightDataset:
         parquet_dir: Path | str | None = None,
         data_dir: Path | str | None = None,
         db_path: str = ":memory:",
+        target_date: str | date | datetime | None = None,
+        day_of_week: str | None = None,
     ) -> None:
-        self.period = str(period)
         self.parquet_dir = Path(parquet_dir or PARQUET_DIR)
         self.data_dir = Path(data_dir or DATA_DIR)
         self.periods_dir = PERIODS_PARQUET_DIR
         self.db_path = str(db_path)
+
+        period_str = str(period).strip() if period is not None else ""
+        if period_str.lower() in ("auto", "none", ""):
+            resolved_period, self.period_selection_reason = self.find_best_period(
+                target_date=target_date,
+                day_of_week=day_of_week,
+                parquet_dir=self.parquet_dir,
+            )
+            self.period = resolved_period
+        else:
+            self.period = period_str
+            self.period_selection_reason = f"Explicitly configured period: {self.period}"
+
         self.con = duckdb.connect(db_path)
         self._init_views()
 
@@ -782,3 +798,134 @@ class FlightDataset:
                     if p.name not in periods:
                         periods.append(p.name)
         return sorted(periods)
+
+    @staticmethod
+    def parse_flight_date(
+        target_date: str | date | datetime | None = None,
+        day_of_week: str | None = None,
+    ) -> tuple[date, str]:
+        """
+        Parse flexible flight target date strings or resolve upcoming day of week.
+        Supports:
+          - ISO dates: YYYY-MM-DD, YYYY/MM/DD, DD-MM-YYYY, DD/MM/YYYY, YYYYMMDD, YYYY-MM
+          - Relative phrases: 'today', 'tomorrow', 'next tuesday', 'friday'
+          - Day of week fallback: resolves upcoming day of week from current UTC date.
+        """
+        now = datetime.now(timezone.utc).date()
+        weekday_map = {
+            "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+            "friday": 4, "saturday": 5, "sunday": 6,
+        }
+
+        if target_date is not None:
+            s = str(target_date).strip().lower()
+            if s in ("", "none", "auto", "default"):
+                pass
+            elif s == "today":
+                return now, "today"
+            elif s == "tomorrow":
+                return now + timedelta(days=1), "tomorrow"
+            else:
+                for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y", "%d/%m/%Y", "%Y%m%d", "%Y-%m"):
+                    try:
+                        parsed = datetime.strptime(s, fmt).date()
+                        if fmt == "%Y-%m":
+                            parsed = date(parsed.year, parsed.month, 15)
+                        return parsed, "explicit_date"
+                    except ValueError:
+                        pass
+                for w_name, w_idx in weekday_map.items():
+                    if w_name in s:
+                        days_ahead = (w_idx - now.weekday()) % 7
+                        if days_ahead == 0 and "next" in s:
+                            days_ahead = 7
+                        elif days_ahead == 0:
+                            days_ahead = 7
+                        return now + timedelta(days=days_ahead), f"relative_{w_name}"
+
+        if day_of_week and str(day_of_week).lower().strip() in weekday_map:
+            w_idx = weekday_map[str(day_of_week).lower().strip()]
+            days_ahead = (w_idx - now.weekday()) % 7
+            if days_ahead == 0:
+                days_ahead = 7
+            return now + timedelta(days=days_ahead), f"upcoming_{day_of_week.lower().strip()}"
+
+        return now + timedelta(days=2), "default_2days_ahead"
+
+    @classmethod
+    def find_best_period(
+        cls,
+        target_date: str | date | datetime | None = None,
+        day_of_week: str | None = None,
+        available_periods: list[str] | None = None,
+        parquet_dir: Path | str | None = None,
+    ) -> tuple[str, str]:
+        """
+        Intelligently select the best fitting Eurocontrol archive period for a flight date.
+
+        Aviation delay characteristics, slot regulations, and ATM capacities are driven by:
+        1. Seasonality (annual meteorological cycle: convective summer storms vs winter de-icing vs autumn shoulder)
+        2. Recency & Operational Modernity (contemporary post-COVID 2024/2025 fleet/network vs 2016 baseline)
+
+        Returns (best_period_id, human_readable_reason).
+        """
+        available = available_periods or cls.list_available_periods(parquet_dir=parquet_dir)
+        if not available:
+            return "201611", "Fallback default period (no archives found)"
+
+        dt, _ = cls.parse_flight_date(target_date, day_of_week)
+        t_year = dt.year
+        t_month = dt.month
+
+        # Seasonal names
+        season_names = {
+            1: "winter", 2: "winter", 3: "spring", 4: "spring", 5: "spring",
+            6: "summer peak", 7: "summer peak", 8: "summer peak",
+            9: "autumn shoulder", 10: "autumn shoulder", 11: "autumn shoulder", 12: "winter",
+        }
+        target_season = season_names.get(t_month, "operational")
+
+        best_p = available[0]
+        best_score = float("inf")
+        best_details: dict[str, Any] = {}
+
+        for p in available:
+            if len(p) != 6 or not p.isdigit():
+                continue
+            p_year = int(p[:4])
+            p_month = int(p[4:6])
+
+            m_diff = abs(t_month - p_month)
+            seasonal_dist = min(m_diff, 12 - m_diff)
+            year_diff = abs(t_year - p_year)
+
+            # Heavy penalty against legacy pre-COVID archives (>5 years old) when modern 2024/2025 archives exist
+            legacy_penalty = 50 if (t_year >= 2024 and p_year < 2020) else 0
+            score = (seasonal_dist * 10) + year_diff + legacy_penalty
+
+            if score < best_score or (score == best_score and p > best_p):
+                best_score = score
+                best_p = p
+                best_details = {
+                    "p_year": p_year,
+                    "p_month": p_month,
+                    "seasonal_dist": seasonal_dist,
+                    "year_diff": year_diff,
+                }
+
+        p_year = best_details.get("p_year", int(best_p[:4]) if len(best_p) >= 4 else 2025)
+        p_month = best_details.get("p_month", int(best_p[4:6]) if len(best_p) >= 6 else 10)
+        p_season = season_names.get(p_month, "operational")
+        month_name = calendar.month_name[p_month]
+
+        if best_details.get("seasonal_dist", 0) == 0 and best_details.get("year_diff", 0) == 0:
+            reason = f"Exact calendar archive match for {month_name} {p_year} ({best_p}) matching flight date {dt.isoformat()}."
+        elif best_details.get("seasonal_dist", 0) == 0:
+            reason = f"Exact month match ({month_name}) using modern {p_year} archive ({best_p}) for flight date {dt.isoformat()}."
+        else:
+            reason = (
+                f"Closest seasonal match ({p_season} season: {month_name} {p_year}, archive {best_p}) "
+                f"for flight date {dt.isoformat()} ({target_season} season)."
+            )
+
+        return best_p, reason

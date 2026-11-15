@@ -1014,15 +1014,23 @@ def get_network_shock_endpoint(
 def get_passenger_itinerary_risk_endpoint(
     origin: str = Query(default="EINN", description="Departure airport 4-letter ICAO code (e.g. EINN, EHAM)"),
     destination: str = Query(default="EBBR", description="Arrival airport 4-letter ICAO code (e.g. EBBR, EGLL)"),
-    hub: str | None = Query(default="EGLL", description="Optional connection hub 4-letter ICAO code (e.g. EGLL)"),
+    hub: str | None = Query(default=None, description="Optional connection hub 4-letter ICAO code (leave empty for direct flights)"),
     day_of_week: str = Query(default="tuesday", description="Day of week (e.g. tuesday, monday, friday)"),
     time_window: str = Query(default="morning", description="Departure wave ('morning', 'midday', 'afternoon', 'evening')"),
     scheduled_layover_min: int = Query(default=75, description="Scheduled layover duration in minutes at transfer hub"),
-    date: str | None = Query(default=None, description="Target flight date YYYY-MM-DD (defaults to live 7-day forecast)"),
-    period: str = Query(default="202510", description="Eurocontrol baseline data period"),
+    date: str | None = Query(default=None, description="Target flight date YYYY-MM-DD (defaults to upcoming date/live 7-day forecast)"),
+    period: str = Query(default="auto", description="Eurocontrol baseline data period (default: 'auto' to select best fitting archive for flight date)"),
 ) -> dict[str, Any]:
     """Assess flight itinerary delay risk, missed connection probability, live weather impact, and EU261 statutory compensation for the travelling public."""
-    ds = FlightDataset(period=period)
+    parsed_date, _ = FlightDataset.parse_flight_date(date, day_of_week)
+    resolved_date_str = parsed_date.isoformat()
+
+    if str(period).lower().strip() in ("auto", "none", ""):
+        resolved_period, _ = FlightDataset.find_best_period(target_date=resolved_date_str, day_of_week=day_of_week)
+    else:
+        resolved_period = str(period).strip()
+
+    ds = FlightDataset(period=resolved_period)
     engine = PassengerJourneyEngine(ds)
     clean_hub = hub.strip().upper() if hub and hub.strip().upper() not in (origin.strip().upper(), destination.strip().upper(), "NONE", "") else None
     res = engine.assess_itinerary(
@@ -1032,7 +1040,8 @@ def get_passenger_itinerary_risk_endpoint(
         day_of_week=day_of_week,
         time_window=time_window,
         scheduled_layover_min=scheduled_layover_min,
-        target_date=date,
+        target_date=resolved_date_str,
+        period=resolved_period,
     )
     return res.to_dict()
 

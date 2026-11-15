@@ -4219,7 +4219,7 @@ with tab_cat_passenger:
     with p_col3:
         p_dest = st.text_input("🛬 Final Destination (ICAO)", value="EBBR", help="e.g. EBBR (Brussels), LFPG (Paris)").strip().upper()
 
-    p_r2_col1, p_r2_col2, p_r2_col3, p_r2_col4 = st.columns([1.2, 1.2, 1.2, 1.2])
+    p_r2_col1, p_r2_col2, p_r2_col3, p_r2_col4, p_r2_col5 = st.columns([1.1, 1.1, 1.1, 1.1, 1.3])
     with p_r2_col1:
         p_dow = st.selectbox("📅 Day of the Week", ["Tuesday", "Monday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"], index=0)
     with p_r2_col2:
@@ -4228,12 +4228,20 @@ with tab_cat_passenger:
         p_layover = st.slider("⏳ Scheduled Layover at Hub (min)", min_value=30, max_value=240, value=75, step=5)
     with p_r2_col4:
         p_target_date = st.text_input("📆 Target Flight Date", value="", help="YYYY-MM-DD or leave empty for upcoming 7-day live weather forecast").strip()
+    with p_r2_col5:
+        p_period_mode = st.selectbox(
+            "🗄️ Baseline Data Period",
+            ["⚡ Auto (Best seasonal fit)", f"Sidebar Period ({selected_period})"],
+            index=0,
+            help="Auto selects the best fitting Eurocontrol archive based on season & modernity for the flight date."
+        )
 
     p_run = st.button("🔍 Assess My Flight Journey & Delay Risk", type="primary", use_container_width=True)
 
     if p_run or True:
         with st.spinner("Analyzing empirical flight distributions, live 7-day meteorological models & connection buffers..."):
-            p_engine = PassengerJourneyEngine(dataset)
+            chosen_p = "auto" if "Auto" in p_period_mode else selected_period
+            p_engine = PassengerJourneyEngine(period=chosen_p)
             clean_hub_val = p_hub if p_hub and p_hub not in (p_origin, p_dest, "NONE", "") else None
             p_res = p_engine.assess_itinerary(
                 origin=p_origin,
@@ -4243,9 +4251,11 @@ with tab_cat_passenger:
                 time_window=p_wave,
                 scheduled_layover_min=p_layover,
                 target_date=p_target_date if p_target_date else None,
+                period=chosen_p,
             )
 
         st.markdown("---")
+        st.info(f"📅 **Baseline Data Archive Selected**: `{p_res.period}` — {p_res.period_selection_reason}")
 
         # Top KPI Scoreboard
         k1, k2, k3, k4 = st.columns(4)

@@ -83,6 +83,50 @@ HUB_MCT_DATABASE: dict[str, dict[str, Any]] = {
         "terminal_mapping": {},
         "transfer_guidance": "Compact single terminal; US Preclearance facility available for transatlantic departures.",
     },
+    "LEMD": {
+        "name": "Adolfo Suárez Madrid–Barajas Airport",
+        "same_terminal_mct_min": 45,
+        "inter_terminal_mct_min": 75,
+        "luggage_safe_buffer_min": 60,
+        "terminal_mapping": {
+            "IBE": "T4",
+            "AEA": "T1",
+            "RYR": "T1",
+            "VLG": "T4",
+            "BAW": "T4S",
+            "TAP": "T2",
+            "DLH": "T2",
+            "AFR": "T2",
+        },
+        "transfer_guidance": "Transfers between T1/T2/T3 and T4 require free airport shuttle buses; T4 to T4S uses the underground automatic people mover (APM) train.",
+    },
+    "EDDM": {
+        "name": "Munich Airport",
+        "same_terminal_mct_min": 40,
+        "inter_terminal_mct_min": 60,
+        "luggage_safe_buffer_min": 50,
+        "terminal_mapping": {
+            "DLH": "T2",
+            "AFR": "T1",
+            "BAW": "T1",
+            "EZY": "T1",
+            "KLM": "T1",
+        },
+        "transfer_guidance": "Terminal 2 (Lufthansa / Star Alliance) connects to satellite concourses via underground train; T1/T2 transfer crosses Central Area.",
+    },
+    "EIDW": {
+        "name": "Dublin Airport",
+        "same_terminal_mct_min": 45,
+        "inter_terminal_mct_min": 60,
+        "luggage_safe_buffer_min": 50,
+        "terminal_mapping": {
+            "EIN": "T2",
+            "RYR": "T1",
+            "BAW": "T1",
+            "DLH": "T1",
+        },
+        "transfer_guidance": "Terminal 1 and Terminal 2 are connected via an indoor passenger covered walkway.",
+    },
 }
 
 DAY_NAME_TO_INT: dict[str, int] = {
@@ -224,6 +268,8 @@ class PassengerItineraryAssessment:
     day_of_week: str
     time_window: str
     target_date: str
+    period: str
+    period_selection_reason: str
     overall_delay_risk_score: float  # 0 to 100
     overall_delay_risk_level: str  # "LOW", "MODERATE", "ELEVATED", "HIGH"
     legs: list[FlightLegRisk]
@@ -269,8 +315,16 @@ class PassengerJourneyEngine:
         "AZA": "ITA Airways",
     }
 
-    def __init__(self, dataset: FlightDataset | None = None) -> None:
-        self.dataset = dataset or FlightDataset()
+    def __init__(self, dataset: FlightDataset | None = None, period: str | None = "auto") -> None:
+        if dataset is not None:
+            self.dataset = dataset
+            self._auto_period = False
+        else:
+            self._auto_period = (str(period).lower().strip() in ("auto", "none", ""))
+            if self._auto_period:
+                self.dataset = FlightDataset(period="auto")
+            else:
+                self.dataset = FlightDataset(period=str(period))
         self._airport_cache: dict[str, dict[str, Any]] = {}
         self._runway_cache: dict[str, list[dict[str, Any]]] = {}
 
@@ -619,17 +673,18 @@ class PassengerJourneyEngine:
         explicitly accounting for intermediate airport arrival holding and departure taxi weather impacts.
         """
         hub_clean = hub.strip().upper()
-        hub_meta = HUB_MCT_DATABASE.get(
-            hub_clean,
-            {
-                "name": f"Airport {hub_clean}",
+        apt_info = self._get_airport_info(hub_clean)
+        hub_meta = HUB_MCT_DATABASE.get(hub_clean)
+        resolved_hub_name = hub_meta.get("name") if hub_meta else apt_info.get("name", f"Airport {hub_clean}")
+        if not hub_meta:
+            hub_meta = {
+                "name": resolved_hub_name,
                 "same_terminal_mct_min": 50,
                 "inter_terminal_mct_min": 75,
                 "luggage_safe_buffer_min": 60,
                 "terminal_mapping": {},
                 "transfer_guidance": "Standard airport terminal transfer.",
-            },
-        )
+            }
 
         in_op = (inbound_op or inbound_leg.dominant_operator).strip().upper()
         out_op = (outbound_op or (outbound_leg.dominant_operator if outbound_leg else "BAW")).strip().upper()
@@ -915,6 +970,7 @@ class PassengerJourneyEngine:
         time_window: str = "morning",
         scheduled_layover_min: int = 75,
         target_date: str | None = None,
+        period: str | None = None,
         inbound_op: str | None = None,
         outbound_op: str | None = None,
     ) -> PassengerItineraryAssessment:
@@ -924,13 +980,40 @@ class PassengerJourneyEngine:
         dow_int = DAY_NAME_TO_INT.get(str(day_of_week).lower().strip(), 2)
         day_name = INT_TO_DAY_NAME.get(dow_int, "Tuesday")
 
+        # Resolve target flight date and optimal baseline period
+        target_dt, _ = FlightDataset.parse_flight_date(target_date, day_name)
+        resolved_date_str = target_dt.isoformat()
+
+        # Check if period should be auto-selected
+        if period is not None and str(period).lower().strip() not in ("auto", "none", ""):
+            effective_period = str(period).strip()
+            if hasattr(self.dataset, "period_selection_reason") and getattr(self.dataset, "period", None) == effective_period:
+                period_reason = self.dataset.period_selection_reason
+            else:
+                period_reason = f"Archive {effective_period}"
+        elif self._auto_period or not self.dataset.period or self.dataset.period == "auto":
+            effective_period, period_reason = FlightDataset.find_best_period(
+                target_date=resolved_date_str,
+                day_of_week=day_name,
+                parquet_dir=self.dataset.parquet_dir,
+            )
+        else:
+            effective_period = self.dataset.period
+            period_reason = getattr(self.dataset, "period_selection_reason", f"Configured engine dataset: {effective_period}")
+
+        # Ensure dataset matches the resolved period
+        if self.dataset.period != effective_period:
+            self.dataset = FlightDataset(period=effective_period, parquet_dir=self.dataset.parquet_dir)
+            self._airport_cache.clear()
+            self._runway_cache.clear()
+
         legs: list[FlightLegRisk] = []
         conn_risk: ConnectionRisk | None = None
 
         if hub and hub.strip().upper() != origin.strip().upper() and hub.strip().upper() != destination.strip().upper():
             hub_clean = hub.strip().upper()
-            leg1 = self.assess_leg(origin, hub_clean, dow_int, time_window, target_date)
-            leg2 = self.assess_leg(hub_clean, destination, dow_int, time_window, target_date)
+            leg1 = self.assess_leg(origin, hub_clean, dow_int, time_window, resolved_date_str)
+            leg2 = self.assess_leg(hub_clean, destination, dow_int, time_window, resolved_date_str)
             legs = [leg1, leg2]
             conn_risk = self.evaluate_connection_risk(
                 hub=hub_clean,
@@ -941,7 +1024,7 @@ class PassengerJourneyEngine:
                 outbound_op=outbound_op,
             )
         else:
-            leg = self.assess_leg(origin, destination, dow_int, time_window, target_date)
+            leg = self.assess_leg(origin, destination, dow_int, time_window, resolved_date_str)
             legs = [leg]
 
         rights = self.calculate_passenger_rights(origin, destination, hub)
@@ -968,6 +1051,14 @@ class PassengerJourneyEngine:
 
         # Generate actionable advice
         recommendations = []
+        recommendations.append(
+            f"📅 Eurocontrol Archive: {period_reason}"
+        )
+        for leg in legs:
+            if leg.dominant_operator in self.CARGO_AND_GA_OPERATORS:
+                recommendations.append(
+                    f"ℹ️ Charter Route Advisory: No scheduled commercial airline service found directly on {leg.origin} ➔ {leg.destination}. Historical figures reflect private/charter aviation ({leg.dominant_operator}). For commercial passenger travel, routing via a major transfer hub is recommended."
+                )
         if conn_risk and conn_risk.misconnect_probability_pct > 30.0:
             recommendations.append(
                 f"🚨 High Misconnection Risk ({conn_risk.misconnect_probability_pct:.0f}%): Your {scheduled_layover_min} min layover at {conn_risk.hub} is tight against the {conn_risk.effective_mct_min:.0f} min Effective MCT (accounting for weather). If possible, rebook to a connection with ≥ 90–120 min buffer."
@@ -1004,7 +1095,7 @@ class PassengerJourneyEngine:
                     f"✈️ Departure Reliability: Flights on this route maintain relatively consistent reliability across the day (best: {best_w.wave_name} at {best_w.on_time_pct:.1f}% on-time)."
                 )
 
-        itinerary_id = f"{origin.upper()}_{hub.upper() if hub else 'DIRECT'}_{destination.upper()}_{day_name[:3]}_{target_date or 'TGT'}"
+        itinerary_id = f"{origin.upper()}_{hub.upper() if hub else 'DIRECT'}_{destination.upper()}_{day_name[:3]}_{resolved_date_str}_P{effective_period}"
 
         return PassengerItineraryAssessment(
             itinerary_id=itinerary_id,
@@ -1013,7 +1104,9 @@ class PassengerJourneyEngine:
             destination=destination.upper(),
             day_of_week=day_name,
             time_window=time_window,
-            target_date=target_date or legs[0].origin_weather.date_str,
+            target_date=target_date or resolved_date_str,
+            period=effective_period,
+            period_selection_reason=period_reason,
             overall_delay_risk_score=overall_score,
             overall_delay_risk_level=overall_level,
             legs=legs,

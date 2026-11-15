@@ -2542,23 +2542,35 @@ def trip_risk_cmd(
     day: str = typer.Option("tuesday", "--day", help="Day of the week (e.g. tuesday, monday)"),
     time: str = typer.Option("morning", "--time", help="Departure wave ('morning', 'midday', 'afternoon', 'evening')"),
     layover: int = typer.Option(75, "--layover", "-l", help="Scheduled connection layover at hub in minutes"),
-    date: str = typer.Option(None, "--date", help="Target flight date YYYY-MM-DD (defaults to live 7-day forecast)"),
-    period: str = typer.Option("202510", "--period", help="Eurocontrol baseline data period"),
+    date: str = typer.Option(None, "--date", help="Target flight date YYYY-MM-DD (defaults to upcoming date/7-day forecast)"),
+    period: str = typer.Option("auto", "--period", help="Eurocontrol baseline data period (default: 'auto' to select the best fitting archive for the flight date)"),
 ) -> None:
     """Assess flight journey delay risk, missed connection probability, weather impact, and EU261 compensation for the travelling public."""
     from flightml.eval.passenger_journey import PassengerJourneyEngine
     from rich.panel import Panel
 
-    dataset = FlightDataset(period=period)
-    engine = PassengerJourneyEngine(dataset)
     clean_hub = hub.strip().upper() if hub and hub.strip().upper() not in (origin.strip().upper(), dest.strip().upper(), "NONE") else None
+
+    # Resolve target flight date and optimal baseline period
+    parsed_date, _ = FlightDataset.parse_flight_date(date, day)
+    resolved_date_str = parsed_date.isoformat()
+
+    if str(period).lower().strip() in ("auto", "none", ""):
+        resolved_period, period_reason = FlightDataset.find_best_period(target_date=resolved_date_str, day_of_week=day)
+    else:
+        resolved_period = str(period).strip()
+        period_reason = f"Explicitly requested by user: {resolved_period}"
+
+    dataset = FlightDataset(period=resolved_period)
+    engine = PassengerJourneyEngine(dataset)
 
     console.print(Panel(
         f"[bold cyan]🧳 Passenger Journey & Delay Risk Copilot[/bold cyan]\n"
         f"Route: [bold yellow]{origin.upper()}[/bold yellow] ➔ "
         f"{'[bold yellow]' + clean_hub + '[/bold yellow] (Hub) ➔ ' if clean_hub else ''}"
         f"[bold yellow]{dest.upper()}[/bold yellow] | "
-        f"Day: [green]{day.capitalize()}[/green] | Wave: [green]{time.capitalize()}[/green] | Period: [magenta]{period}[/magenta]",
+        f"Flight Date: [bold green]{resolved_date_str}[/bold green] ({day.capitalize()}) | Wave: [green]{time.capitalize()}[/green]\n"
+        f"Data Period: [magenta]{resolved_period}[/magenta] [dim]({period_reason})[/dim]",
         title="FlightML Public Travel Advisory",
         border_style="cyan",
     ))
@@ -2571,7 +2583,8 @@ def trip_risk_cmd(
             day_of_week=day,
             time_window=time,
             scheduled_layover_min=layover,
-            target_date=date,
+            target_date=resolved_date_str,
+            period=resolved_period,
         )
 
     # 1. Legs Breakdown Table

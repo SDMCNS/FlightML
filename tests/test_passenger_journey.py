@@ -170,3 +170,61 @@ def test_mcp_passenger_itinerary_tool():
     assert res.origin == "EINN"
     assert res.destination == "EBBR"
     assert res.connection is not None
+
+
+def test_find_best_period_seasonality_and_recency():
+    """Verify intelligent seasonal and modernity matching for Eurocontrol periods."""
+    # November 2026 -> Closest modern autumn archive is 202510
+    p_nov26, reason_nov26 = FlightDataset.find_best_period(target_date="2026-11-17")
+    assert p_nov26 == "202510"
+    assert "October 2025" in reason_nov26
+
+    # Exact calendar matches
+    assert FlightDataset.find_best_period(target_date="2025-06-12")[0] == "202506"
+    assert FlightDataset.find_best_period(target_date="2024-02-15")[0] == "202402"
+    assert FlightDataset.find_best_period(target_date="2024-10-20")[0] == "202410"
+
+    # Future dates map to closest seasonal modern archive
+    assert FlightDataset.find_best_period(target_date="2026-07-20")[0] == "202506"
+    assert FlightDataset.find_best_period(target_date="2026-01-10")[0] == "202502"
+
+    # Historical baseline
+    assert FlightDataset.find_best_period(target_date="2016-11-05")[0] == "201611"
+
+
+def test_parse_flight_date_flexible_formats():
+    """Verify flexible flight date parsing across ISO formats and relative phrases."""
+    d_iso, src_iso = FlightDataset.parse_flight_date("2026-11-17")
+    assert d_iso.isoformat() == "2026-11-17"
+    assert src_iso == "explicit_date"
+
+    d_euro, _ = FlightDataset.parse_flight_date("17/11/2026")
+    assert d_euro.isoformat() == "2026-11-17"
+
+    d_month, _ = FlightDataset.parse_flight_date("2025-06")
+    assert d_month.year == 2025 and d_month.month == 6
+
+    d_today, src_today = FlightDataset.parse_flight_date("today")
+    assert src_today == "today"
+
+    d_tomorrow, src_tomorrow = FlightDataset.parse_flight_date("tomorrow")
+    assert src_tomorrow == "tomorrow"
+
+    # Day of week fallback
+    d_dow, src_dow = FlightDataset.parse_flight_date(None, day_of_week="tuesday")
+    assert d_dow.weekday() == 1  # Tuesday is 1
+
+
+def test_passenger_itinerary_auto_period_selection():
+    """Verify that PassengerJourneyEngine automatically assigns the best fitting archive to the assessment."""
+    engine = PassengerJourneyEngine()
+    res = engine.assess_itinerary(
+        origin="EHAM",
+        destination="LFPG",
+        target_date="2025-06-12",
+        time_window="morning",
+    )
+    assert res.period == "202506"
+    assert "202506" in res.period_selection_reason
+    assert any("202506" in rec for rec in res.actionable_recommendations)
+
