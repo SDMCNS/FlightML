@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Optional, Any
 from pathlib import Path
 import pandas as pd
 import typer
@@ -3336,6 +3337,133 @@ def cmd_fra_forecast(
         )
 
     console.print(table)
+
+
+# =============================================================================
+# Flight Operational Notes & Anomaly Explanations
+# =============================================================================
+@app.command(name="flight-notes-list")
+def cli_flight_notes_list(
+    category: str | None = typer.Option(None, "--category", "-c", help="Filter by anomaly category"),
+    search: str | None = typer.Option(None, "--search", "-s", help="Search keyword across title, notes, and tags"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """List persistent operational notes and anomaly explanations attached to Flight IDs."""
+    from flightml.eval.flight_notes import get_notes_manager
+
+    mgr = get_notes_manager()
+    notes = mgr.list_notes(category=category, search_query=search)
+
+    if json_output:
+        import json
+        console.print_json(json.dumps([n.to_dict() for n in notes]))
+        return
+
+    table = Table(
+        title="📝 Persistent Flight Operational Notes & Anomaly Explanations",
+        header_style="bold cyan",
+        show_lines=True,
+    )
+    table.add_column("Flight ID", style="bold yellow", width=12)
+    table.add_column("Category", style="cyan", width=26)
+    table.add_column("Title / Summary", style="bold white", width=38)
+    table.add_column("Route", style="green", width=14)
+    table.add_column("Author", style="dim white", width=14)
+    table.add_column("Updated", style="dim", width=12)
+
+    for n in notes:
+        m = n.cached_metadata or {}
+        route = f"{m.get('adep', '—')} ➔ {m.get('ades', '—')}"
+        table.add_row(
+            str(n.ectrl_id),
+            n.category,
+            n.title,
+            route,
+            n.author,
+            n.updated_at[:10],
+        )
+
+    console.print(table)
+
+
+@app.command(name="flight-notes-get")
+def cli_flight_notes_get(
+    ectrl_id: int = typer.Argument(..., help="Eurocontrol Flight ID"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """Retrieve persistent operational notes, anomaly context, and citations for a Flight ID."""
+    from flightml.eval.flight_notes import get_notes_manager
+
+    mgr = get_notes_manager()
+    note = mgr.get_note(ectrl_id)
+
+    if not note:
+        console.print(f"[yellow]No notes found for Flight ID {ectrl_id}.[/yellow]")
+        return
+
+    if json_output:
+        import json
+        console.print_json(json.dumps(note.to_dict()))
+        return
+
+    console.print(Panel(
+        f"[bold cyan]Category:[/bold cyan] {note.category}\n"
+        f"[bold cyan]Author:[/bold cyan] {note.author} | [bold cyan]Updated:[/bold cyan] {note.updated_at[:19]} UTC\n"
+        f"[bold cyan]Source URL:[/bold cyan] {note.source_url or 'None'}\n"
+        f"[bold cyan]Tags:[/bold cyan] {', '.join(note.tags) if note.tags else 'None'}\n\n"
+        f"[bold white]Detailed Explanation & Notes:[/bold white]\n{note.note}",
+        title=f"📝 Flight Note: {note.title} (Flight ID: {note.ectrl_id})",
+        border_style="green",
+    ))
+
+
+@app.command(name="flight-notes-set")
+def cli_flight_notes_set(
+    ectrl_id: int = typer.Argument(..., help="Eurocontrol Flight ID"),
+    title: str = typer.Option(..., "--title", "-t", help="Headline / summary of the note"),
+    note: str = typer.Option(..., "--note", "-n", help="Detailed markdown explanation / quotes"),
+    category: str = typer.Option("Operational Oddity / Unknown", "--category", "-c", help="Anomaly category"),
+    author: str = typer.Option("Analyst", "--author", "-a", help="Author of the note"),
+    source_url: str | None = typer.Option(None, "--source", "-u", help="URL reference or article citation"),
+    tags: str | None = typer.Option(None, "--tags", help="Comma-separated tags"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol archive period to resolve metadata"),
+) -> None:
+    """Add or update a persistent operational note for a Flight ID."""
+    from flightml.eval.flight_notes import get_notes_manager
+
+    mgr = get_notes_manager()
+    ds = None
+    try:
+        ds = FlightDataset(period=period)
+    except Exception:
+        pass
+
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    saved = mgr.save_note(
+        ectrl_id=ectrl_id,
+        title=title,
+        note=note,
+        category=category,
+        author=author,
+        tags=tag_list,
+        source_url=source_url,
+        dataset=ds,
+    )
+    console.print(f"[bold green]✓ Flight note successfully saved for Flight ID {ectrl_id}:[/bold green] {saved.title}")
+
+
+@app.command(name="flight-notes-delete")
+def cli_flight_notes_delete(
+    ectrl_id: int = typer.Argument(..., help="Eurocontrol Flight ID to delete note for"),
+) -> None:
+    """Delete a persistent operational note for a Flight ID."""
+    from flightml.eval.flight_notes import get_notes_manager
+
+    mgr = get_notes_manager()
+    if mgr.delete_note(ectrl_id):
+        console.print(f"[bold green]✓ Note for Flight ID {ectrl_id} deleted successfully.[/bold green]")
+    else:
+        console.print(f"[yellow]No note found for Flight ID {ectrl_id}.[/yellow]")
 
 
 if __name__ == "__main__":

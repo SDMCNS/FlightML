@@ -83,6 +83,12 @@ from flightml.eval.surface_taxi import (
     analyze_airport_taxi_out_performance,
     analyze_flight_taxi_out,
 )
+from flightml.eval.flight_notes import (
+    FlightNote,
+    FlightNotesManager,
+    NOTE_CATEGORIES,
+    get_notes_manager,
+)
 from flightml.eval.jet_fuel_prices import get_all_weekly_fuel_prices_df
 from flightml.viz.map_builder import (
     create_trajectory_map,
@@ -464,6 +470,7 @@ st.markdown(
     tab_cat_econ,
     tab_cat_ai_lab,
     tab_cat_passenger,
+    tab_cat_notes,
 ) = st.tabs(
     [
         "✈️ Single Aircraft / Flight Views",
@@ -474,6 +481,7 @@ st.markdown(
         "💶 General Economic Views (€)",
         "🧪 Experimental AI & Machine Learning Lab",
         "🧳 Passenger Travel Copilot & Itinerary Risk",
+        "📝 Flight Annotations & Anomaly Notes",
     ]
 )
 
@@ -486,12 +494,13 @@ with tab_cat_single:
         "delay root-cause diagnostics, and environmental/LTO emissions accounting for the selected active flight."
     )
     render_page_export_bar("single_flight", "cat_single")
-    sf_sub1, sf_sub2, sf_sub3, sf_sub4 = st.tabs(
+    sf_sub1, sf_sub2, sf_sub3, sf_sub4, sf_sub5 = st.tabs(
         [
             "🗺️ 4D Trajectory & RNP Profile",
             "📉 Vertical Profile: CDO & CCO",
             "🩺 Delay & Runway Diagnostics",
             "🌱 Fuel, Carbon & Surface LTO",
+            "📝 Flight Notes & Anomaly Explanations",
         ]
     )
 
@@ -1206,7 +1215,91 @@ with tab_cat_single:
             else:
                 st.dataframe(all_fuel_df, use_container_width=True)
 
-        # ----------------- TAB 7: Twin-Flight Efficiency Benchmarking -----------------
+        # ----------------- TAB 5: Flight Notes & Anomaly Explanations -----------------
+    with sf_sub5:
+        st.header("📝 Flight Operational Notes & Anomaly Explanations")
+        st.caption(
+            f"Attach persistent qualitative explanations, diplomatic/overflight permission issues, weather diversions, "
+            f"or operational oddities to Flight ID `{active_flight_id}`."
+        )
+        notes_mgr = get_notes_manager()
+        cur_note = notes_mgr.get_note(int(active_flight_id))
+        if cur_note:
+            st.success(f"📌 **Documented Anomaly Explanation Active:** `{cur_note.title}`")
+            col_cn1, col_cn2, col_cn3 = st.columns(3)
+            col_cn1.markdown(f"**Category:** `{cur_note.category}`")
+            col_cn2.markdown(f"**Author:** {cur_note.author}")
+            col_cn3.markdown(f"**Last Updated:** {cur_note.updated_at[:19].replace('T', ' ')} UTC")
+            if cur_note.source_url:
+                st.markdown(f"🔗 **Primary Source / Reference:** [{cur_note.source_url}]({cur_note.source_url})")
+            if cur_note.tags:
+                st.markdown("🏷️ **Tags:** " + " ".join([f"`{t}`" for t in cur_note.tags]))
+            st.markdown("---")
+            st.markdown(cur_note.note)
+            st.markdown("---")
+            with st.expander("✏️ Edit This Flight Note", expanded=False):
+                with st.form(f"form_edit_note_{active_flight_id}"):
+                    e_title = st.text_input("Title / Summary:", value=cur_note.title)
+                    e_cat = st.selectbox(
+                        "Category:",
+                        options=NOTE_CATEGORIES,
+                        index=NOTE_CATEGORIES.index(cur_note.category) if cur_note.category in NOTE_CATEGORIES else 0,
+                    )
+                    e_author = st.text_input("Author:", value=cur_note.author)
+                    e_source = st.text_input("Source URL (optional):", value=cur_note.source_url or "")
+                    e_tags_str = st.text_input("Tags (comma separated):", value=", ".join(cur_note.tags))
+                    e_note_text = st.text_area("Detailed Notes & Context (Markdown supported):", value=cur_note.note, height=200)
+                    btn_save_edit = st.form_submit_button("💾 Update Note")
+                    if btn_save_edit and e_title.strip() and e_note_text.strip():
+                        e_tags = [t.strip() for t in e_tags_str.split(",") if t.strip()]
+                        notes_mgr.save_note(
+                            ectrl_id=int(active_flight_id),
+                            title=e_title,
+                            note=e_note_text,
+                            category=e_cat,
+                            author=e_author,
+                            tags=e_tags,
+                            source_url=e_source or None,
+                            dataset=ds,
+                        )
+                        st.success("Note successfully updated!")
+                        st.rerun()
+            if st.button("🗑️ Delete Note", key=f"btn_del_note_{active_flight_id}"):
+                notes_mgr.delete_note(int(active_flight_id))
+                st.warning("Note deleted.")
+                st.rerun()
+        else:
+            st.info(f"No operational notes recorded yet for Flight ID `{active_flight_id}`.")
+            with st.expander(f"➕ Add Operational Note / Anomaly Explanation for Flight {active_flight_id}", expanded=True):
+                with st.form(f"form_add_note_{active_flight_id}"):
+                    flight_meta = ds.get_flight(int(active_flight_id)) or {}
+                    fl_call = flight_meta.get("ac_operator", "")
+                    default_title = f"{fl_call} {flight_meta.get('adep', '')} ➔ {flight_meta.get('ades', '')} Anomaly / Routing Note"
+                    n_title = st.text_input("Title / Short Summary:", value=default_title)
+                    n_cat = st.selectbox("Primary Anomaly Category:", options=NOTE_CATEGORIES, index=0)
+                    n_author = st.text_input("Author:", value="Aviation Analyst")
+                    n_source = st.text_input("Source URL / Documentation Reference (optional):", value="")
+                    n_tags_str = st.text_input("Tags (comma separated):", value=f"{fl_call.lower()}, {flight_meta.get('adep', '').lower()}, routing")
+                    n_note_text = st.text_area(
+                        "Detailed Explanation (Markdown supported):",
+                        placeholder="Document the reasons for this routing detour, administrative issue, weather divergence, or operational oddity...",
+                        height=180,
+                    )
+                    btn_save_new = st.form_submit_button("💾 Save Persistent Flight Note")
+                    if btn_save_new and n_title.strip() and n_note_text.strip():
+                        n_tags = [t.strip() for t in n_tags_str.split(",") if t.strip()]
+                        notes_mgr.save_note(
+                            ectrl_id=int(active_flight_id),
+                            title=n_title,
+                            note=n_note_text,
+                            category=n_cat,
+                            author=n_author,
+                            tags=n_tags,
+                            source_url=n_source or None,
+                            dataset=ds,
+                        )
+                        st.success(f"Persistent note saved for Flight ID {active_flight_id}!")
+                        st.rerun()
 
 # =============================================================================
 # 2. SYSTEM-LEVEL SUMMARY & ANALYSIS VIEWS
@@ -5420,5 +5513,244 @@ with tab_cat_passenger:
             if dbg.get("passenger_rights_audit"):
                 with st.expander("⚖️ Statutory Passenger Rights & Geodesic Calculation Audit", expanded=True):
                     st.json(dbg["passenger_rights_audit"])
+
+# =============================================================================
+# 9. FLIGHT ANNOTATIONS & ANOMALY NOTES
+# =============================================================================
+with tab_cat_notes:
+    st.header("📝 Flight Operational Annotations & Anomaly Knowledgebase")
+    st.caption(
+        "Persistent qualitative repository explaining anomalous radar trajectories, diplomatic overflight re-routings, "
+        "geopolitical airspace closures, extreme weather diversions, and seasonal scheduling coordination artifacts. "
+        "Allows aviation analysts to document, search, and preserve root-cause explanations for specific Flight IDs."
+    )
+
+    notes_mgr = get_notes_manager()
+    all_notes = notes_mgr.list_notes()
+
+    # 1. KPI summary cards
+    kpi_c1, kpi_c2, kpi_c3 = st.columns(3)
+    kpi_c1.metric("Annotated Flights", len(all_notes))
+    categories_present = {n.category for n in all_notes}
+    kpi_c2.metric("Anomaly Categories", len(categories_present))
+    most_recent = all_notes[0].updated_at[:10] if all_notes else "None"
+    kpi_c3.metric("Latest Updated", most_recent)
+
+    # 2. Spotlight Case Study Banner (Lufthansa LH574 Munich -> Cape Town)
+    spotlight_id = 292222833
+    spotlight_note = notes_mgr.get_note(spotlight_id)
+    if spotlight_note:
+        st.markdown(
+            """
+            <div style="background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); padding: 18px 24px; border-radius: 10px; color: white; margin-bottom: 20px;">
+                <h3 style="margin-top:0; color: #f1c40f;">🌟 Featured Anomaly Case Study: Lufthansa LH574 Atlantic Detour</h3>
+                <p style="font-size: 14.5px; line-height: 1.5; margin-bottom: 8px;">
+                    <b>Flight ID 292222833:</b> On 25 October 2025, Lufthansa's A350-900 (D-AIXS) from Munich (EDDM) to Cape Town (FACT)
+                    avoided central Africa completely, flying an extraordinary 13-hour Atlantic coastal routing past Spain, the Canary Islands, and Dakar Oceanic.
+                    The cause was an administrative transition error on the first day of the IATA winter schedule regarding overflight permissions.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # 3. Filter and Action Toolbar
+    col_flt1, col_flt2, col_flt3 = st.columns([1.5, 2.5, 1.2])
+    with col_flt1:
+        cat_choices = ["All Categories"] + NOTE_CATEGORIES
+        sel_cat = st.selectbox("Filter Category:", options=cat_choices, index=0, key="notes_cat_filter")
+    with col_flt2:
+        search_kw = st.text_input(
+            "🔍 Search Flight ID, Callsign, Operator, Airport, or Keyword:",
+            placeholder="e.g. 292222833, Lufthansa, FACT, permission...",
+            key="notes_search_input",
+        )
+    with col_flt3:
+        st.write("")
+        st.write("")
+        show_add_new = st.checkbox("➕ Add New Note", value=False, key="notes_toggle_add_form")
+
+    # 4. Add Note Form (if toggled)
+    if show_add_new:
+        with st.expander("➕ Create New Flight Operational Annotation", expanded=True):
+            with st.form("form_create_standalone_note"):
+                st.markdown("#### Document an Anomalous Flight Route / Operational Explanation")
+                c_fid1, c_fid2 = st.columns([1, 2])
+                with c_fid1:
+                    new_fid = st.number_input("Target Flight ID (ectrl_id):", min_value=1, value=292222833, step=1)
+                with c_fid2:
+                    new_title = st.text_input("Annotation Title / Headline:", placeholder="e.g. British Airways BA123 - Volcanic Ash Avoidance Detour")
+
+                c_meta1, c_meta2 = st.columns(2)
+                with c_meta1:
+                    new_category = st.selectbox("Category:", options=NOTE_CATEGORIES, index=0)
+                    new_author = st.text_input("Author:", value="Aviation Analyst")
+                with c_meta2:
+                    new_source = st.text_input("Source URL / Documentation Reference (optional):", placeholder="https://...")
+                    new_tags = st.text_input("Tags (comma separated):", placeholder="overflight, diversion, weather, unapproved")
+
+                new_body = st.text_area(
+                    "Detailed Explanation & Evidence (Markdown supported):",
+                    placeholder="Provide full context, quotes from airline spokespersons, route breakdown, why it diverged from normal airways...",
+                    height=220,
+                )
+                btn_save_standalone = st.form_submit_button("💾 Save Flight Note")
+                if btn_save_standalone:
+                    if not new_title.strip() or not new_body.strip():
+                        st.error("Please provide both a Title and Detailed Explanation.")
+                    else:
+                        t_list = [t.strip() for t in new_tags.split(",") if t.strip()]
+                        notes_mgr.save_note(
+                            ectrl_id=int(new_fid),
+                            title=new_title,
+                            note=new_body,
+                            category=new_category,
+                            author=new_author,
+                            tags=t_list,
+                            source_url=new_source or None,
+                            dataset=ds,
+                        )
+                        st.success(f"Persistent flight note saved for Flight ID {new_fid}!")
+                        st.rerun()
+
+    # 5. Filtered Notes List
+    filtered_notes = notes_mgr.list_notes(category=sel_cat, search_query=search_kw)
+
+    if not filtered_notes:
+        st.info("No flight notes match the active filter criteria. Try clearing the search or category filter.")
+    else:
+        table_rows = []
+        for n in filtered_notes:
+            m = n.cached_metadata or {}
+            table_rows.append({
+                "Flight ID": n.ectrl_id,
+                "Title / Summary": n.title,
+                "Category": n.category,
+                "Route": f"{m.get('adep', '—')} ➔ {m.get('ades', '—')}",
+                "Operator / Aircraft": f"{m.get('ac_operator', '—')} ({m.get('ac_type', '—')})",
+                "Author": n.author,
+                "Last Updated": n.updated_at[:10],
+            })
+        st.markdown("#### 📋 Documented Flight Anomalies")
+        st.dataframe(pd.DataFrame(table_rows), use_container_width=True)
+
+        # 6. Selected Note Detailed Inspection Card
+        st.markdown("#### 📖 Inspect Documented Flight Note & Telemetry")
+        note_options = {n.ectrl_id: f"Flight {n.ectrl_id}: {n.title} [{n.category}]" for n in filtered_notes}
+        default_index = 0
+        if spotlight_id in note_options:
+            default_index = list(note_options.keys()).index(spotlight_id)
+
+        sel_note_fid = st.selectbox(
+            "Select Flight to Inspect Detailed Notes & Radar Trajectory:",
+            options=list(note_options.keys()),
+            format_func=lambda fid: note_options[fid],
+            index=default_index,
+            key="notes_detail_selectbox",
+        )
+
+        sel_note = notes_mgr.get_note(sel_note_fid)
+        if sel_note:
+            c_det_main, c_det_meta = st.columns([2.5, 1.0])
+            with c_det_main:
+                st.subheader(f"📌 {sel_note.title}")
+                st.caption(f"Category: **{sel_note.category}** | Author: **{sel_note.author}** | Last Modified: `{sel_note.updated_at[:19].replace('T', ' ')} UTC`")
+                if sel_note.source_url:
+                    st.markdown(f"🔗 **Primary Source Citation:** [{sel_note.source_url}]({sel_note.source_url})")
+                if sel_note.tags:
+                    st.markdown("🏷️ **Tags:** " + " ".join([f"`{t}`" for t in sel_note.tags]))
+                st.markdown("---")
+                st.markdown(sel_note.note)
+
+            with c_det_meta:
+                st.markdown("##### ✈️ Telemetry Summary")
+                m_meta = sel_note.cached_metadata or {}
+                fl_fresh = ds.get_flight(sel_note.ectrl_id)
+                if fl_fresh:
+                    m_meta = {**m_meta, **fl_fresh}
+                st.markdown(f"**Flight ID:** `{sel_note.ectrl_id}`")
+                st.markdown(f"**Route:** `{m_meta.get('adep', 'N/A')} ➔ {m_meta.get('ades', 'N/A')}`")
+                st.markdown(f"**Operator:** `{m_meta.get('ac_operator', 'N/A')}`")
+                st.markdown(f"**Aircraft:** `{m_meta.get('ac_type', 'N/A')}` (`{m_meta.get('ac_reg', 'N/A')}`)")
+                st.markdown(f"**Departure:** `{str(m_meta.get('actual_off_block_time', 'N/A'))[:16]}`")
+                if m_meta.get("actual_distance_nm"):
+                    st.markdown(f"**Actual Distance:** `{m_meta.get('actual_distance_nm'):,} NM`")
+                if m_meta.get("actual_air_time_min"):
+                    st.markdown(f"**Air Time:** `{m_meta.get('actual_air_time_min')} min` (~{m_meta.get('actual_air_time_min')/60:.1f} hrs)")
+
+                with st.expander("✏️ Edit Note"):
+                    with st.form(f"form_inline_edit_{sel_note.ectrl_id}"):
+                        ed_t = st.text_input("Title:", value=sel_note.title)
+                        ed_c = st.selectbox(
+                            "Category:",
+                            options=NOTE_CATEGORIES,
+                            index=NOTE_CATEGORIES.index(sel_note.category) if sel_note.category in NOTE_CATEGORIES else 0,
+                        )
+                        ed_a = st.text_input("Author:", value=sel_note.author)
+                        ed_s = st.text_input("Source URL:", value=sel_note.source_url or "")
+                        ed_g = st.text_input("Tags:", value=", ".join(sel_note.tags))
+                        ed_b = st.text_area("Body:", value=sel_note.note, height=180)
+                        if st.form_submit_button("Save"):
+                            t_list = [t.strip() for t in ed_g.split(",") if t.strip()]
+                            notes_mgr.save_note(
+                                ectrl_id=sel_note.ectrl_id,
+                                title=ed_t,
+                                note=ed_b,
+                                category=ed_c,
+                                author=ed_a,
+                                tags=t_list,
+                                source_url=ed_s or None,
+                                dataset=ds,
+                            )
+                            st.success("Updated!")
+                            st.rerun()
+
+                if st.button("🗑️ Delete", key=f"btn_del_master_{sel_note.ectrl_id}"):
+                    notes_mgr.delete_note(sel_note.ectrl_id)
+                    st.warning("Deleted!")
+                    st.rerun()
+
+            # 7. Radar Trajectory & FIR Traversal Inspection for the Selected Note
+            st.markdown("---")
+            st.markdown(f"#### 🗺️ Radar Trajectory & Airspace Traversal Breakdown (Flight {sel_note.ectrl_id})")
+            trajs = ds.get_trajectory(sel_note.ectrl_id)
+            actual_df = trajs.get("actual", pd.DataFrame())
+
+            if not actual_df.empty:
+                col_m1, col_m2 = st.columns([2, 1])
+                with col_m1:
+                    traj_map = create_trajectory_map(
+                        flight_info=ds.get_flight(sel_note.ectrl_id) or m_meta,
+                        actual_df=actual_df,
+                        planned_df=trajs.get("planned", pd.DataFrame()),
+                        show_navaids=False,
+                    )
+                    st_folium(traj_map, width=800, height=450, returned_objects=[], key=f"notes_map_{sel_note.ectrl_id}")
+                with col_m2:
+                    if ds.has_fir_traversals():
+                        firs_df = ds.get_flight_fir_traversals(sel_note.ectrl_id)
+                        if not firs_df.empty:
+                            st.markdown("##### ⏱️ FIR Dwell Times (Sequential)")
+                            st.dataframe(
+                                firs_df[["seq_num", "fir_id", "dwell_min", "entry_time", "exit_time"]],
+                                height=420,
+                                use_container_width=True,
+                            )
+            else:
+                st.info(f"Trajectory telemetry for Flight ID {sel_note.ectrl_id} is located in another archive cycle (e.g. `202510`).")
+
+    # 8. Export / Download Notes JSON
+    st.markdown("---")
+    c_dn1, c_dn2 = st.columns([1, 2])
+    with c_dn1:
+        notes_json_str = json.dumps([n.to_dict() for n in all_notes], indent=2, ensure_ascii=False)
+        st.download_button(
+            "📥 Download Flight Notes (JSON)",
+            data=notes_json_str,
+            file_name="flightml_flight_notes.json",
+            mime="application/json",
+            key="dl_flight_notes_json",
+            help="Export all saved persistent flight notes, theories, and citations for backup or team sharing.",
+        )
 
 

@@ -1228,6 +1228,100 @@ def create_mcp_server() -> FastMCP:
         )
         return _safe_json(forecast)
 
+    # -------------------------------------------------------------------------
+    # TOOL: get_flight_note
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def get_flight_note(flight_id: str | int) -> str:
+        """Retrieve persistent operational notes, anomaly explanations, and citations for a flight.
+
+        Allows analysts to look up qualitative background (e.g. diplomatic overflight permissions,
+        convective weather diversions, schedule transition issues) attached to a specific Flight ID.
+
+        Args:
+            flight_id: Eurocontrol Flight ID (ectrl_id).
+        """
+        from flightml.eval.flight_notes import get_notes_manager
+
+        mgr = get_notes_manager()
+        note = mgr.get_note(int(flight_id))
+        if not note:
+            return _safe_json({"found": False, "flight_id": int(flight_id), "message": "No operational notes recorded."})
+        res = note.to_dict()
+        res["found"] = True
+        return _safe_json(res)
+
+    # -------------------------------------------------------------------------
+    # TOOL: save_flight_note
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def save_flight_note(
+        flight_id: str | int,
+        title: str,
+        note: str,
+        category: str = "Operational Oddity / Unknown",
+        author: str = "Aviation Analyst",
+        source_url: str = "",
+        tags: str = "",
+        period: str = "202510",
+    ) -> str:
+        """Create or update a persistent operational note, anomaly context, or citation for a Flight ID.
+
+        Args:
+            flight_id: Eurocontrol Flight ID (ectrl_id).
+            title: Headline or summary describing the anomaly.
+            note: Detailed explanation (markdown supported, quotes, facts).
+            category: Anomaly category (e.g. 'Diplomatic / Overflight Rights', 'Weather Diversion', 'Airspace Closure').
+            author: Author or analyst identifier.
+            source_url: External news, NOTAM, or airline citation URL.
+            tags: Comma-separated tags (e.g. 'lufthansa, lh574, overflight').
+            period: Eurocontrol archive month to resolve telemetry metadata.
+        """
+        from flightml.eval.flight_notes import get_notes_manager
+
+        mgr = get_notes_manager()
+        ds = None
+        try:
+            ds = get_dataset(period)
+        except Exception:
+            pass
+
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+        saved = mgr.save_note(
+            ectrl_id=int(flight_id),
+            title=title,
+            note=note,
+            category=category,
+            author=author,
+            tags=tag_list,
+            source_url=source_url or None,
+            dataset=ds,
+        )
+        return _safe_json({"saved": True, "note": saved.to_dict()})
+
+    # -------------------------------------------------------------------------
+    # TOOL: list_flight_notes
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def list_flight_notes(
+        category: str = "",
+        search: str = "",
+    ) -> str:
+        """List all persistent flight notes and documented anomaly explanations.
+
+        Args:
+            category: Filter by category (e.g. 'Diplomatic / Overflight Rights').
+            search: Search keyword across title, notes, tags, operator, and route.
+        """
+        from flightml.eval.flight_notes import get_notes_manager
+
+        mgr = get_notes_manager()
+        notes = mgr.list_notes(
+            category=category if category else None,
+            search_query=search if search else None,
+        )
+        return _safe_json({"total_notes": len(notes), "notes": [n.to_dict() for n in notes]})
+
     return server
 
 
