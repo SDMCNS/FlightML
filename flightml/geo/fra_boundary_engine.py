@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 
 from flightml.data.dataset import FlightDataset
-from flightml.geo.geodesy import haversine_vectorized_nm
+from flightml.geo.geodesy import haversine_nm, haversine_vectorized_nm
 
 # Standard European Jet-A fuel and environmental constants
 JET_A_PRICE_EUR_PER_KG = 0.6421  # Eurocontrol standard benchmark (€/kg)
@@ -213,6 +213,53 @@ def _get_country_cache(ds: FlightDataset) -> dict[str, str]:
     return _COUNTRY_CACHE
 
 
+# -------------------------------------------------------------------------
+# European Civil Aviation Conference (ECAC) Airspace Definitions
+# -------------------------------------------------------------------------
+# ECAC comprises 44 European Member States. Free Route Airspace (FRA)
+# under SESAR / CP1 (EU 2021/116 ATM Functionality 3) applies strictly within
+# ECAC Member State airspace. Non-ECAC FIRs (oceanic FIRs, North Africa,
+# Middle East, North America, etc.) are excluded from European FRA assessment.
+# -------------------------------------------------------------------------
+
+ECAC_PREFIXES: set[str] = {
+    "EB", "ED", "EE", "EF", "EG", "EH", "EI", "EK", "EL", "EN",
+    "EP", "ES", "EV", "EY", "LA", "LB", "LC", "LD", "LE", "LF",
+    "LG", "LH", "LI", "LJ", "LK", "LM", "LO", "LP", "LQ", "LR",
+    "LS", "LT", "LU", "LW", "LY", "LZ", "UB", "UD", "UG", "UK",
+    "GC", "BI", "BK",
+}
+
+NON_ECAC_SPECIFIC_FIRS: set[str] = {
+    "EGGXFIR", "EGGX", "LPPOFIR", "LPPO", "ENOBFIR", "ENOB", "BGGLFIR", "BGGL", "BODO"
+}
+
+
+def is_ecac_fir(fir_id: str | None) -> bool:
+    """
+    Check if an FIR identifier belongs to an ECAC Member State participating in European FRA.
+    Excludes oceanic sectors (e.g. Shanwick EGGX, Santa Maria LPPO, Bodo ENOB) and non-European FIRs.
+    """
+    if not fir_id:
+        return False
+    clean = str(fir_id).strip().upper()
+    if clean in NON_ECAC_SPECIFIC_FIRS or "TAXI" in clean or "UNK" in clean:
+        return False
+    return clean[:2] in ECAC_PREFIXES
+
+
+def is_ecac_airport(icao: str | None) -> bool:
+    """Check if an airport ICAO code is located within the ECAC area."""
+    if not icao:
+        return False
+    clean = str(icao).strip().upper()
+    if len(clean) < 2:
+        return False
+    if clean[:2] in ECAC_PREFIXES:
+        return True
+    return clean[0] in ("E", "L")
+
+
 def _resolve_country(ds: FlightDataset, fir_id: str) -> str:
     """Resolve full Country/State name for an FIR identifier."""
     clean = fir_id.replace("UIR", "").replace("FIR", "").strip().upper()
@@ -238,8 +285,8 @@ def _resolve_country(ds: FlightDataset, fir_id: str) -> str:
         "LD": "Croatia", "LJ": "Slovenia", "LQ": "Bosnia and Herzegovina",
         "LY": "Serbia & Montenegro", "LW": "North Macedonia", "LA": "Albania",
         "EI": "Ireland", "EE": "Estonia", "EV": "Latvia", "EY": "Lithuania",
-        "GM": "Morocco", "DA": "Algeria", "DT": "Tunisia", "LC": "Cyprus",
-        "LL": "Israel", "HE": "Egypt", "BK": "Kosovo", "BI": "Iceland",
+        "LC": "Cyprus", "BK": "Kosovo", "BI": "Iceland", "UB": "Azerbaijan",
+        "UD": "Armenia", "UG": "Georgia", "UK": "Ukraine", "LU": "Moldova",
     }
     for pfx, name in prefix_map.items():
         if clean.startswith(pfx):
@@ -325,6 +372,11 @@ def analyze_fir_boundary_inefficiencies(
     for _, row in flow_df.iterrows():
         f_from = str(row["from_fir"]).strip()
         f_to = str(row["to_fir"]).strip()
+
+        # Enforce ECAC scope: Free Route Airspace (FRA) only applies within ECAC Member States
+        if not (is_ecac_fir(f_from) and is_ecac_fir(f_to)):
+            continue
+
         cnt = int(row["flow_count"])
         d_prior = float(row["avg_prior_dwell"] or 15.0)
         d_next = float(row["avg_next_dwell"] or 15.0)
@@ -815,85 +867,203 @@ def get_worst_flights_for_boundary(
     if df.empty:
         return []
 
-    df["great_circle_nm"] = haversine_vectorized_nm(
-        df["adep_lat"], df["adep_lon"], df["ades_lat"], df["ades_lon"]
-    )
-    df = df[df["great_circle_nm"] >= 30.0].copy()
-
-    if max_gc_dist_nm:
-        df = df[df["great_circle_nm"] <= max_gc_dist_nm].copy()
-
-    if df.empty:
+    cand_ids = [int(x) for x in df["ectrl_id"].tolist()[:150]]
+    if not cand_ids:
         return []
 
-    df["detour_nm"] = df["actual_distance_nm"] - df["great_circle_nm"]
-    df["detour_pct"] = (df["detour_nm"] / df["great_circle_nm"]) * 100.0
-    df["directness_pct"] = (df["great_circle_nm"] / df["actual_distance_nm"]) * 100.0
+    in_clause = ",".join(map(str, cand_ids))
 
-    top_df = df.sort_values("detour_nm", ascending=False).head(limit)
+    # 1. Fetch FIR traversals to determine ECAC entry and exit time window
+    firs_by_flight: dict[int, list[dict[str, Any]]] = {}
+    try:
+        f_sql = f"""
+            SELECT ectrl_id, seq_num, fir_id, entry_time, exit_time
+            FROM flight_firs_actual
+            WHERE ectrl_id IN ({in_clause}) AND fir_id NOT LIKE 'TAXI%'
+            ORDER BY ectrl_id, seq_num ASC;
+        """
+        f_df = dataset.cursor.execute(f_sql).df()
+        for fid, grp in f_df.groupby("ectrl_id"):
+            firs_by_flight[int(fid)] = grp.to_dict(orient="records")
+    except Exception:
+        firs_by_flight = {}
 
-    worst_flights: list[dict[str, Any]] = []
-    ectrl_ids = [int(x) for x in top_df["ectrl_id"].tolist()]
-
+    # 2. Fetch actual radar trajectories
     trajectories_map: dict[int, list[dict[str, Any]]] = {}
-    if include_trajectories and ectrl_ids:
-        in_clause = ",".join(map(str, ectrl_ids))
+    try:
         t_sql = f"""
-            SELECT ectrl_id, seq_num, latitude, longitude, flight_level
+            SELECT ectrl_id, seq_num, time_over, latitude, longitude, flight_level
             FROM trajectory_actual
             WHERE ectrl_id IN ({in_clause})
             ORDER BY ectrl_id, seq_num ASC;
         """
-        try:
-            t_df = dataset.cursor.execute(t_sql).df()
-            for fid, grp in t_df.groupby("ectrl_id"):
-                trajectories_map[int(fid)] = grp[["latitude", "longitude", "flight_level"]].to_dict(orient="records")
-        except Exception:
-            trajectories_map = {}
+        t_df = dataset.cursor.execute(t_sql).df()
+        for fid, grp in t_df.groupby("ectrl_id"):
+            trajectories_map[int(fid)] = grp[["latitude", "longitude", "flight_level", "time_over"]].to_dict(orient="records")
+    except Exception:
+        trajectories_map = {}
 
-    for idx, row in enumerate(top_df.to_dict(orient="records"), start=1):
-        fid = int(row["ectrl_id"])
-        detour_nm = float(row["detour_nm"])
+    evaluated_cands: list[dict[str, Any]] = []
+    df_rows = {int(r["ectrl_id"]): r.to_dict() for _, r in df.iterrows()}
+
+    for fid in cand_ids:
+        row = df_rows.get(fid)
+        if row is None:
+            continue
+        adep = str(row["adep"])
+        ades = str(row["ades"])
+        raw_adep_lat = float(row["adep_lat"]) if row.get("adep_lat") is not None else None
+        raw_adep_lon = float(row["adep_lon"]) if row.get("adep_lon") is not None else None
+        raw_ades_lat = float(row["ades_lat"]) if row.get("ades_lat") is not None else None
+        raw_ades_lon = float(row["ades_lon"]) if row.get("ades_lon") is not None else None
+
+        f_firs = firs_by_flight.get(fid, [])
+        ecac_firs = [rf for rf in f_firs if is_ecac_fir(rf.get("fir_id"))]
+        t_pts = trajectories_map.get(fid, [])
+
+        # ECAC Airspace Boundary Scoping:
+        # If flight has FIR traversals, slice strictly to the ECAC entry and exit window.
+        if ecac_firs and t_pts:
+            entry_t = str(ecac_firs[0]["entry_time"])
+            exit_t = str(ecac_firs[-1]["exit_time"])
+            entry_fir = str(ecac_firs[0]["fir_id"])
+            exit_fir = str(ecac_firs[-1]["fir_id"])
+
+            ecac_pts = [p for p in t_pts if entry_t <= str(p.get("time_over", "")) <= exit_t]
+            if len(ecac_pts) < 2:
+                ecac_pts = t_pts
+
+            adep_ecac = is_ecac_airport(adep)
+            ades_ecac = is_ecac_airport(ades)
+
+            if adep_ecac and raw_adep_lat is not None and raw_adep_lon is not None:
+                orig_lat, orig_lon = raw_adep_lat, raw_adep_lon
+                orig_lbl = adep
+                is_adep_apt = True
+            else:
+                orig_lat = float(ecac_pts[0]["latitude"])
+                orig_lon = float(ecac_pts[0]["longitude"])
+                orig_lbl = f"{adep} (ECAC In: {entry_fir})"
+                is_adep_apt = False
+
+            if ades_ecac and raw_ades_lat is not None and raw_ades_lon is not None:
+                dest_lat, dest_lon = raw_ades_lat, raw_ades_lon
+                dest_lbl = ades
+                is_ades_apt = True
+            else:
+                dest_lat = float(ecac_pts[-1]["latitude"])
+                dest_lon = float(ecac_pts[-1]["longitude"])
+                dest_lbl = f"{ades} (ECAC Out: {exit_fir})"
+                is_ades_apt = False
+
+            act_dist = sum(
+                haversine_nm(
+                    float(ecac_pts[i]["latitude"]),
+                    float(ecac_pts[i]["longitude"]),
+                    float(ecac_pts[i + 1]["latitude"]),
+                    float(ecac_pts[i + 1]["longitude"]),
+                )
+                for i in range(len(ecac_pts) - 1)
+            )
+            gc_dist = haversine_nm(orig_lat, orig_lon, dest_lat, dest_lon)
+            final_pts = ecac_pts
+        else:
+            # Fallback for synthetic / un-traversed data
+            if raw_adep_lat is None or raw_ades_lat is None:
+                continue
+            orig_lat, orig_lon = raw_adep_lat, raw_adep_lon
+            dest_lat, dest_lon = raw_ades_lat, raw_ades_lon
+            orig_lbl, dest_lbl = adep, ades
+            is_adep_apt, is_ades_apt = True, True
+            entry_fir, exit_fir = "", ""
+            gc_dist = float(haversine_nm(orig_lat, orig_lon, dest_lat, dest_lon))
+            act_dist = float(row.get("actual_distance_nm") or gc_dist)
+            final_pts = t_pts
+
+        if gc_dist < 15.0 or act_dist < 15.0:
+            continue
+        if max_gc_dist_nm and gc_dist > max_gc_dist_nm:
+            continue
+
+        detour_nm = max(0.0, act_dist - gc_dist)
+        detour_pct = (detour_nm / max(1.0, gc_dist)) * 100.0
+        directness_pct = min(100.0, (gc_dist / max(1.0, act_dist)) * 100.0)
+        max_fl = max([float(pt.get("flight_level", 0.0)) for pt in final_pts], default=0.0)
+
+        evaluated_cands.append({
+            "ectrl_id": fid,
+            "period_id": str(row.get("period_id") or dataset.period),
+            "adep": adep,
+            "ades": ades,
+            "adep_label": orig_lbl,
+            "ades_label": dest_lbl,
+            "is_adep_ecac": is_adep_apt,
+            "is_ades_ecac": is_ades_apt,
+            "ecac_entry_fir": entry_fir if not is_adep_apt else "",
+            "ecac_exit_fir": exit_fir if not is_ades_apt else "",
+            "adep_lat": orig_lat,
+            "adep_lon": orig_lon,
+            "ades_lat": dest_lat,
+            "ades_lon": dest_lon,
+            "ac_operator": str(row.get("ac_operator") or "Unknown"),
+            "ac_type": str(row.get("ac_type") or "Unknown"),
+            "ac_reg": str(row.get("ac_reg") or ""),
+            "actual_off_block_time": str(row.get("actual_off_block_time") or ""),
+            "actual_distance_nm": round(act_dist, 1),
+            "great_circle_nm": round(gc_dist, 1),
+            "detour_nm": round(detour_nm, 1),
+            "detour_pct": round(detour_pct, 1),
+            "directness_pct": round(directness_pct, 1),
+            "max_cruise_fl": round(max_fl, 0),
+            "trajectory_points": final_pts if include_trajectories else [],
+            "fra_direct_path": interpolate_great_circle(orig_lat, orig_lon, dest_lat, dest_lon, num_points=12),
+        })
+
+    # Sort strictly by descending European detour NM
+    evaluated_cands.sort(key=lambda x: x["detour_nm"], reverse=True)
+    top_cands = evaluated_cands[:limit]
+
+    worst_flights: list[dict[str, Any]] = []
+    for idx, f in enumerate(top_cands, start=1):
+        detour_nm = f["detour_nm"]
         fuel_kg = round(detour_nm * KG_FUEL_PER_NM_CRUISE, 1)
         fuel_tonnes = round(fuel_kg / 1000.0, 2)
         cost_eur = round(fuel_kg * JET_A_PRICE_EUR_PER_KG, 2)
         co2_tonnes = round(fuel_tonnes * CO2_PER_KG_FUEL, 2)
 
-        adep_lat = float(row["adep_lat"])
-        adep_lon = float(row["adep_lon"])
-        ades_lat = float(row["ades_lat"])
-        ades_lon = float(row["ades_lon"])
-
-        fra_direct_pts = interpolate_great_circle(adep_lat, adep_lon, ades_lat, ades_lon, num_points=12)
-        pts = trajectories_map.get(fid, [])
-        max_fl = max([float(pt.get("flight_level", 0.0)) for pt in pts], default=0.0)
-
         worst_flights.append({
             "rank": idx,
-            "period_id": str(row.get("period_id") or dataset.period),
-            "ectrl_id": fid,
-            "adep": str(row["adep"]),
-            "ades": str(row["ades"]),
-            "adep_lat": adep_lat,
-            "adep_lon": adep_lon,
-            "ades_lat": ades_lat,
-            "ades_lon": ades_lon,
-            "ac_operator": str(row.get("ac_operator") or "Unknown"),
-            "ac_type": str(row.get("ac_type") or "Unknown"),
-            "ac_reg": str(row.get("ac_reg") or ""),
-            "actual_off_block_time": str(row.get("actual_off_block_time") or ""),
-            "actual_distance_nm": round(float(row["actual_distance_nm"]), 1),
-            "great_circle_nm": round(float(row["great_circle_nm"]), 1),
-            "detour_nm": round(detour_nm, 1),
-            "detour_pct": round(float(row["detour_pct"]), 1),
-            "directness_pct": round(float(row["directness_pct"]), 1),
-            "max_cruise_fl": round(max_fl, 0),
+            "period_id": f["period_id"],
+            "ectrl_id": f["ectrl_id"],
+            "adep": f["adep"],
+            "ades": f["ades"],
+            "adep_label": f["adep_label"],
+            "ades_label": f["ades_label"],
+            "is_adep_ecac": f["is_adep_ecac"],
+            "is_ades_ecac": f["is_ades_ecac"],
+            "ecac_entry_fir": f["ecac_entry_fir"],
+            "ecac_exit_fir": f["ecac_exit_fir"],
+            "is_ecac_bounded": True,
+            "adep_lat": f["adep_lat"],
+            "adep_lon": f["adep_lon"],
+            "ades_lat": f["ades_lat"],
+            "ades_lon": f["ades_lon"],
+            "ac_operator": f["ac_operator"],
+            "ac_type": f["ac_type"],
+            "ac_reg": f["ac_reg"],
+            "actual_off_block_time": f["actual_off_block_time"],
+            "actual_distance_nm": f["actual_distance_nm"],
+            "great_circle_nm": f["great_circle_nm"],
+            "detour_nm": detour_nm,
+            "detour_pct": f["detour_pct"],
+            "directness_pct": f["directness_pct"],
+            "max_cruise_fl": f["max_cruise_fl"],
             "excess_fuel_kg": fuel_kg,
             "excess_fuel_tonnes": fuel_tonnes,
             "excess_cost_eur": cost_eur,
             "excess_co2_tonnes": co2_tonnes,
-            "trajectory_points": pts,
-            "fra_direct_path": fra_direct_pts,
+            "fra_direct_path": f["fra_direct_path"],
+            "trajectory_points": f["trajectory_points"],
         })
 
     return worst_flights

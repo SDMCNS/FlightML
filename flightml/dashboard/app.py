@@ -2085,7 +2085,11 @@ with tab_cat_system:
                         )
                         st_folium(fra_map, width=1200, height=520, returned_objects=[])
 
-                        st.markdown("#### 📋 Top 10 Detoured Flights Metric Summary")
+                        st.markdown("#### 📋 Top 10 Detoured Flights Metric Summary (ECAC Airspace Envelope)")
+                        st.caption(
+                            "🇪🇺 **ECAC Airspace Envelope:** Free Route Airspace (FRA) is evaluated strictly within European Civil Aviation Conference airspace. "
+                            "Flights originating or terminating outside ECAC are assessed from their ECAC Entry Point to their destination or ECAC Exit Point."
+                        )
                         summary_rows = []
                         for f in worst_flts:
                             summary_rows.append({
@@ -2093,10 +2097,10 @@ with tab_cat_system:
                                 "Flight ID": f["ectrl_id"],
                                 "Callsign / Operator": f"{f['ac_operator']} ({f['ac_type']})",
                                 "Max FL": f"FL{int(f.get('max_cruise_fl', 0))}" if f.get("max_cruise_fl") else "—",
-                                "Route": f"{f['adep']} ➔ {f['ades']}",
+                                "Route (ECAC Envelope)": f"{f.get('adep_label', f['adep'])} ➔ {f.get('ades_label', f['ades'])}",
                                 "Off-Block": f["actual_off_block_time"][:16] if f.get("actual_off_block_time") else "N/A",
-                                "Actual (NM)": f"{f['actual_distance_nm']:,.0f}",
-                                "Direct (NM)": f"{f['great_circle_nm']:,.0f}",
+                                "ECAC Actual (NM)": f"{f['actual_distance_nm']:,.0f}",
+                                "ECAC Direct (NM)": f"{f['great_circle_nm']:,.0f}",
                                 "Detour (NM)": f"+{f['detour_nm']:,.1f}",
                                 "Detour (%)": f"+{f['detour_pct']:.1f}%",
                                 "Excess Fuel": f"{f['excess_fuel_kg']:,.0f} kg ({f['excess_fuel_tonnes']:.2f} t)",

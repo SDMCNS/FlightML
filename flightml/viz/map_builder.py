@@ -999,6 +999,8 @@ def create_fra_boundary_map(
     fra_group = folium.FeatureGroup(name="Direct Free Route (FRA) Chords", show=True).add_to(m)
     for f in worst_flights:
         fra_pts = f.get("fra_direct_path", [])
+        ad_lbl = f.get("adep_label", f.get("adep", "ADEP"))
+        as_lbl = f.get("ades_label", f.get("ades", "ADES"))
         clean_fra_pts = [
             (float(p[0]), float(p[1]))
             for p in fra_pts
@@ -1011,12 +1013,12 @@ def create_fra_boundary_map(
                 weight=2.5,
                 dash_array="7, 7",
                 opacity=0.85,
-                tooltip=f"Direct FRA Benchmark: {f.get('adep', 'ADEP')} ➔ {f.get('ades', 'ADES')} ({f.get('great_circle_nm', 0):.0f} NM)",
+                tooltip=f"Direct FRA Benchmark: {ad_lbl} ➔ {as_lbl} ({f.get('great_circle_nm', 0):.0f} NM)",
             ).add_to(fra_group)
 
     # 4. Actual Radar Trajectories (Worst Inefficient Flights)
     traj_group = folium.FeatureGroup(name="Actual Radar Trajectories (Severe Detour)", show=True).add_to(m)
-    airports_group = folium.FeatureGroup(name="Airports (ADEP / ADES)", show=True).add_to(m)
+    airports_group = folium.FeatureGroup(name="Airports & ECAC Boundary Points", show=True).add_to(m)
 
     palette = [
         "#e74c3c", "#9b59b6", "#e67e22", "#16a085", "#2980b9",
@@ -1034,6 +1036,10 @@ def create_fra_boundary_map(
         fid = f["ectrl_id"]
         adep = f["adep"]
         ades = f["ades"]
+        adep_lbl = f.get("adep_label", adep)
+        ades_lbl = f.get("ades_label", ades)
+        is_adep_apt = f.get("is_adep_ecac", True)
+        is_ades_apt = f.get("is_ades_ecac", True)
         op = f["ac_operator"]
         ac = f["ac_type"]
         reg = f.get("ac_reg", "")
@@ -1053,16 +1059,16 @@ def create_fra_boundary_map(
         ]
         if len(pts) >= 2:
             tooltip_txt = (
-                f"#{rank} {adep} ➔ {ades} | Flight {fid} [{op} {ac}] | "
+                f"#{rank} {adep_lbl} ➔ {ades_lbl} | Flight {fid} [{op} {ac}] | "
                 f"Detour: +{detour:.1f} NM (+{detour_pct:.1f}%) | "
                 f"Waste: €{cost:,.0f} EUR"
             )
             popup_html = f"""
-            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 12px; min-width: 220px;">
+            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 12px; min-width: 240px;">
                 <div style="font-size: 13.5px; font-weight: bold; color: {col}; margin-bottom: 4px;">
                     Flight {fid} (#{rank})
                 </div>
-                <b>Route:</b> {adep} &rarr; {ades}<br>
+                <b>Route:</b> {adep_lbl} &rarr; {ades_lbl}<br>
                 <b>Operator:</b> {op} | <b>Aircraft:</b> {ac}{reg_str}<br>
                 <hr style="margin: 5px 0; border: 0; border-top: 1px solid #e0e0e0;">
                 <b>Actual Distance:</b> <b>{act_dist:.0f} NM</b><br>
@@ -1079,12 +1085,13 @@ def create_fra_boundary_map(
                 weight=3.5,
                 opacity=0.9,
                 tooltip=tooltip_txt,
-                popup=folium.Popup(popup_html, max_width=300),
+                popup=folium.Popup(popup_html, max_width=320),
             ).add_to(traj_group)
 
-        # Mark ADEP & ADES
+        # Mark ADEP & ADES (or ECAC entry/exit points)
         adep_lat, adep_lon = f.get("adep_lat"), f.get("adep_lon")
         if _is_finite_coord(adep_lat) and _is_finite_coord(adep_lon):
+            orig_tooltip = f"Departure: {adep_lbl} (Flight {fid})" if is_adep_apt else f"ECAC Entry Point: {adep_lbl} (Flight {fid})"
             folium.CircleMarker(
                 location=[float(adep_lat), float(adep_lon)],
                 radius=5,
@@ -1092,11 +1099,12 @@ def create_fra_boundary_map(
                 fill=True,
                 fill_color="#2ecc71",
                 fill_opacity=0.9,
-                tooltip=f"Departure: {adep} (Flight {fid})",
+                tooltip=orig_tooltip,
             ).add_to(airports_group)
 
         ades_lat, ades_lon = f.get("ades_lat"), f.get("ades_lon")
         if _is_finite_coord(ades_lat) and _is_finite_coord(ades_lon):
+            dest_tooltip = f"Destination: {ades_lbl} (Flight {fid})" if is_ades_apt else f"ECAC Exit Point: {ades_lbl} (Flight {fid})"
             folium.CircleMarker(
                 location=[float(ades_lat), float(ades_lon)],
                 radius=5,
@@ -1104,7 +1112,7 @@ def create_fra_boundary_map(
                 fill=True,
                 fill_color="#e74c3c",
                 fill_opacity=0.9,
-                tooltip=f"Destination: {ades} (Flight {fid})",
+                tooltip=dest_tooltip,
             ).add_to(airports_group)
 
     folium.LayerControl(position="topright", collapsed=True).add_to(m)

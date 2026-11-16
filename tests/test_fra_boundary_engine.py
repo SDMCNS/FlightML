@@ -324,3 +324,43 @@ def test_fra_forecast_12m_full_year_mode():
     h = fc["horizons"]
     assert h[1]["cumulative_crossings"] > 6_000_000
     assert h[20]["cumulative_crossings"] > h[5]["cumulative_crossings"] > h[1]["cumulative_crossings"]
+
+
+def test_ecac_scope_and_trajectory_clipping():
+    """Verify that FRA assessment is strictly constrained to the European Civil Aviation Conference (ECAC) area."""
+    from flightml.geo.fra_boundary_engine import is_ecac_fir, is_ecac_airport
+
+    # 1. FIR ECAC verification
+    assert is_ecac_fir("EGTTUIR") is True
+    assert is_ecac_fir("LFFFUIR") is True
+    assert is_ecac_fir("EDUUUIR") is True
+    assert is_ecac_fir("LOVVFIR") is True
+    assert is_ecac_fir("EGGXFIR") is False  # Shanwick Oceanic
+    assert is_ecac_fir("LPPOFIR") is False  # Santa Maria Oceanic
+    assert is_ecac_fir("DAAAFIR") is False  # Algiers
+    assert is_ecac_fir("GMMMFIR") is False  # Casablanca
+    assert is_ecac_fir("KZNYFIR") is False  # New York
+
+    # 2. Airport ECAC verification
+    assert is_ecac_airport("EGLL") is True  # London Heathrow
+    assert is_ecac_airport("LFPG") is True  # Paris CDG
+    assert is_ecac_airport("KJFK") is False  # New York JFK
+    assert is_ecac_airport("OMDB") is False  # Dubai
+
+    # 3. Verify boundary report contains ONLY pure ECAC boundaries
+    ds = FlightDataset("202510")
+    report = analyze_fir_boundary_inefficiencies(ds, min_flights=2000, limit=50)
+    for b in report.boundaries:
+        assert is_ecac_fir(b.fir_a) is True, f"Non-ECAC FIR found: {b.fir_a}"
+        assert is_ecac_fir(b.fir_b) is True, f"Non-ECAC FIR found: {b.fir_b}"
+
+    # 4. Verify worst flights are bounded to ECAC envelope
+    worst = get_worst_flights_for_boundary(ds, "EGTTUIR <-> LFFFUIR", limit=5, include_trajectories=True)
+    assert len(worst) > 0
+    for f in worst:
+        assert f.get("is_ecac_bounded") is True
+        assert "adep_label" in f
+        assert "ades_label" in f
+        # Distance within European sector must be realistic European en-route distance (< 2500 NM)
+        assert f["actual_distance_nm"] < 2500.0, f"Unclipped intercontinental distance found: {f['actual_distance_nm']}"
+        assert f["great_circle_nm"] < 2500.0
