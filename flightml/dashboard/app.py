@@ -5731,8 +5731,23 @@ with tab_cat_notes:
                         firs_df = ds.get_flight_fir_traversals(sel_note.ectrl_id)
                         if not firs_df.empty:
                             st.markdown("##### ⏱️ FIR Dwell Times (Sequential)")
+                            preferred_cols = [
+                                ("seq_num", "#"),
+                                ("fir_id", "Airspace"),
+                                ("actual_dwell_min", "Actual (min)"),
+                                ("filed_dwell_min", "Filed (min)"),
+                                ("dwell_diff_min", "Diff (min)"),
+                                ("actual_entry", "Entry Time"),
+                                ("actual_exit", "Exit Time"),
+                            ]
+                            cols_present = [orig for orig, _ in preferred_cols if orig in firs_df.columns]
+                            if cols_present:
+                                rename_map = {orig: disp for orig, disp in preferred_cols if orig in firs_df.columns}
+                                disp_df = firs_df[cols_present].rename(columns=rename_map)
+                            else:
+                                disp_df = firs_df
                             st.dataframe(
-                                firs_df[["seq_num", "fir_id", "dwell_min", "entry_time", "exit_time"]],
+                                disp_df,
                                 height=420,
                                 use_container_width=True,
                             )
