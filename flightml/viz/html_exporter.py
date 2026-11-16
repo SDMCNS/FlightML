@@ -1215,14 +1215,17 @@ def _build_fra_boundary_section(
     mb_12m = forecast.get("monthly_breakdown", [])
     mb_12m_html = ""
     if mb_12m:
+        season_col = "season" if "season" in mb_12m[0] else "season_cluster"
         mb_12m_df = pd.DataFrame(mb_12m)[
-            ["month_name", "season_cluster", "flights_eurocontrol", "crossings_scaled", "fuel_saved_tonnes", "co2_mitigated_tonnes", "cost_saved_eur", "detour_deviation_pct"]
+            ["month_name", season_col, "flights_eurocontrol", "flights_archive", "crossings_raw", "crossings_scaled", "fuel_saved_tonnes", "co2_mitigated_tonnes", "cost_saved_eur", "detour_deviation_pct"]
         ].rename(
             columns={
                 "month_name": "Month",
-                "season_cluster": "Season",
-                "flights_eurocontrol": "European Flights",
-                "crossings_scaled": "Scoped Crossings",
+                season_col: "Season",
+                "flights_eurocontrol": "Eurocontrol Flights",
+                "flights_archive": "Archive Flights",
+                "crossings_raw": "Raw Crossings",
+                "crossings_scaled": "Calibrated Crossings",
                 "fuel_saved_tonnes": "Fuel Saved (t)",
                 "co2_mitigated_tonnes": "CO₂ Mitigated (t)",
                 "cost_saved_eur": "Operating Value (€ EUR)",

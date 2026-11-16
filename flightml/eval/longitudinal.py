@@ -371,7 +371,13 @@ class LongitudinalEngine:
         yoy_periods = []
         for p in self.available_periods:
             m = PeriodMetadata.from_period_id(p)
-            if len(periods_by_month.get(m.month, [])) >= 2:
+            same_month_periods = periods_by_month.get(m.month, [])
+            # A period is strictly YoY-capable if there is another period for the same month with a 1-year delta
+            has_adjacent_year = any(
+                abs(PeriodMetadata.from_period_id(other).year - m.year) == 1
+                for other in same_month_periods if other != p
+            )
+            if has_adjacent_year:
                 yoy_periods.append(p)
 
         return sorted(yoy_periods)
@@ -395,13 +401,14 @@ class LongitudinalEngine:
                 p_targ = s_plist[i + 1]
                 meta_base = PeriodMetadata.from_period_id(p_base)
                 meta_targ = PeriodMetadata.from_period_id(p_targ)
-                pairs.append({
-                    "baseline": p_base,
-                    "target": p_targ,
-                    "season": meta_targ.season_label,
-                    "month": str(month),
-                    "label": f"{meta_targ.season_label}: {p_base} ➔ {p_targ}",
-                })
+                if meta_targ.year - meta_base.year == 1:
+                    pairs.append({
+                        "baseline": p_base,
+                        "target": p_targ,
+                        "season": meta_targ.season_label,
+                        "month": str(month),
+                        "label": f"{meta_targ.season_label}: {p_base} ➔ {p_targ}",
+                    })
         return pairs
 
     def get_timeline_dataframe(self, cohort: str = "all") -> pd.DataFrame:

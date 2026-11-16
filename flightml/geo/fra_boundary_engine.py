@@ -71,11 +71,21 @@ SEASONAL_MONTH_CLUSTERS = {
 
 # Empirical flight counts recorded in historical FlightML DuckDB/Parquet monthly archives
 ARCHIVE_TOTAL_FLIGHTS: dict[str, int] = {
+    "201611": 718244,
     "202402": 641952,
     "202406": 935934,
     "202410": 891648,
+    "202411": 714083,
+    "202412": 732074,
+    "202501": 691278,
     "202502": 656458,
+    "202503": 759566,
+    "202504": 848673,
+    "202505": 926106,
     "202506": 957457,
+    "202507": 1019405,
+    "202508": 1027054,
+    "202509": 968854,
     "202510": 934141,
 }
 
@@ -702,10 +712,12 @@ def get_worst_flights_for_boundary(
     limit: int = 10,
     max_gc_dist_nm: float | None = None,
     include_trajectories: bool = True,
+    min_fl: float | None = 305.0,
 ) -> list[dict[str, Any]]:
     """
     Identify and return the worst flights (highest routing detour vs direct Free Route geodesic)
     navigating across a specific FIR boundary interface.
+    Optionally filters flights to those reaching at least `min_fl` (default: FL305 per CP1 mandate).
 
     Returns flight metadata, actual vs great-circle distances, detour NM, excess fuel waste in € EUR,
     along with radar trajectory coordinates and direct FRA benchmark paths.
@@ -719,42 +731,86 @@ def get_worst_flights_for_boundary(
 
     fir_a, fir_b = parts[0], parts[1]
 
-    # Query flights crossing the boundary
-    sql = """
-        WITH boundary_crossings AS (
-            SELECT DISTINCT ectrl_id
-            FROM (
-                SELECT
-                    ectrl_id,
-                    fir_id,
-                    lead(fir_id) OVER (PARTITION BY ectrl_id ORDER BY seq_num) AS next_fir_id
-                FROM flight_firs_actual
-                WHERE fir_id NOT LIKE 'TAXI%'
+    # Query flights crossing the boundary (optionally filtered by cruising flight level >= min_fl)
+    if min_fl is not None:
+        sql = f"""
+            WITH boundary_crossings AS (
+                SELECT DISTINCT ectrl_id
+                FROM (
+                    SELECT
+                        ectrl_id,
+                        fir_id,
+                        lead(fir_id) OVER (PARTITION BY ectrl_id ORDER BY seq_num) AS next_fir_id
+                    FROM flight_firs_actual
+                    WHERE fir_id NOT LIKE 'TAXI%'
+                )
+                WHERE next_fir_id IS NOT NULL
+                  AND ((fir_id = ? AND next_fir_id = ?) OR (fir_id = ? AND next_fir_id = ?))
+            ),
+            fl_filtered AS (
+                SELECT b.ectrl_id
+                FROM boundary_crossings b
+                JOIN trajectory_actual t ON b.ectrl_id = t.ectrl_id
+                GROUP BY b.ectrl_id
+                HAVING MAX(t.flight_level) >= {float(min_fl)}
             )
-            WHERE next_fir_id IS NOT NULL
-              AND ((fir_id = ? AND next_fir_id = ?) OR (fir_id = ? AND next_fir_id = ?))
-        )
-        SELECT
-            f.period_id,
-            f.ectrl_id,
-            f.adep,
-            f.ades,
-            f.adep_lat,
-            f.adep_lon,
-            f.ades_lat,
-            f.ades_lon,
-            f.ac_operator,
-            f.ac_type,
-            f.ac_reg,
-            f.actual_off_block_time,
-            f.actual_distance_nm
-        FROM flights f
-        JOIN boundary_crossings b ON f.ectrl_id = b.ectrl_id
-        WHERE f.actual_distance_nm IS NOT NULL
-          AND f.actual_distance_nm > 30
-          AND f.adep_lat IS NOT NULL
-          AND f.ades_lat IS NOT NULL;
-    """
+            SELECT
+                f.period_id,
+                f.ectrl_id,
+                f.adep,
+                f.ades,
+                f.adep_lat,
+                f.adep_lon,
+                f.ades_lat,
+                f.ades_lon,
+                f.ac_operator,
+                f.ac_type,
+                f.ac_reg,
+                f.actual_off_block_time,
+                f.actual_distance_nm
+            FROM flights f
+            JOIN fl_filtered b ON f.ectrl_id = b.ectrl_id
+            WHERE f.actual_distance_nm IS NOT NULL
+              AND f.actual_distance_nm > 30
+              AND f.adep_lat IS NOT NULL
+              AND f.ades_lat IS NOT NULL;
+        """
+    else:
+        sql = """
+            WITH boundary_crossings AS (
+                SELECT DISTINCT ectrl_id
+                FROM (
+                    SELECT
+                        ectrl_id,
+                        fir_id,
+                        lead(fir_id) OVER (PARTITION BY ectrl_id ORDER BY seq_num) AS next_fir_id
+                    FROM flight_firs_actual
+                    WHERE fir_id NOT LIKE 'TAXI%'
+                )
+                WHERE next_fir_id IS NOT NULL
+                  AND ((fir_id = ? AND next_fir_id = ?) OR (fir_id = ? AND next_fir_id = ?))
+            )
+            SELECT
+                f.period_id,
+                f.ectrl_id,
+                f.adep,
+                f.ades,
+                f.adep_lat,
+                f.adep_lon,
+                f.ades_lat,
+                f.ades_lon,
+                f.ac_operator,
+                f.ac_type,
+                f.ac_reg,
+                f.actual_off_block_time,
+                f.actual_distance_nm
+            FROM flights f
+            JOIN boundary_crossings b ON f.ectrl_id = b.ectrl_id
+            WHERE f.actual_distance_nm IS NOT NULL
+              AND f.actual_distance_nm > 30
+              AND f.adep_lat IS NOT NULL
+              AND f.ades_lat IS NOT NULL;
+        """
     df = dataset.cursor.execute(sql, [fir_a, fir_b, fir_b, fir_a]).df()
     if df.empty:
         return []
@@ -809,6 +865,8 @@ def get_worst_flights_for_boundary(
         ades_lon = float(row["ades_lon"])
 
         fra_direct_pts = interpolate_great_circle(adep_lat, adep_lon, ades_lat, ades_lon, num_points=12)
+        pts = trajectories_map.get(fid, [])
+        max_fl = max([float(pt.get("flight_level", 0.0)) for pt in pts], default=0.0)
 
         worst_flights.append({
             "rank": idx,
@@ -829,11 +887,12 @@ def get_worst_flights_for_boundary(
             "detour_nm": round(detour_nm, 1),
             "detour_pct": round(float(row["detour_pct"]), 1),
             "directness_pct": round(float(row["directness_pct"]), 1),
+            "max_cruise_fl": round(max_fl, 0),
             "excess_fuel_kg": fuel_kg,
             "excess_fuel_tonnes": fuel_tonnes,
             "excess_cost_eur": cost_eur,
             "excess_co2_tonnes": co2_tonnes,
-            "trajectory_points": trajectories_map.get(fid, []),
+            "trajectory_points": pts,
             "fra_direct_path": fra_direct_pts,
         })
 
@@ -1054,9 +1113,23 @@ def calculate_fra_long_term_forecast(
         for p in CONTIGUOUS_12M_PERIODS:
             rep = full_year_reports[p]
             m_str = p[4:]
-            off_fl = monthly_dict.get(m_str, 927020)
+            if p.startswith("2024"):
+                off_fl = EUROCONTROL_OFFICIAL_MONTHLY_FLIGHTS_2024.get(m_str, 780000)
+            else:
+                off_fl = EUROCONTROL_OFFICIAL_MONTHLY_FLIGHTS_2025.get(m_str, 927020)
             arch_fl = ARCHIVE_TOTAL_FLIGHTS.get(p, 850000)
             s_m = off_fl / max(1, arch_fl)
+            arch_cov_pct = round((arch_fl / max(1, off_fl)) * 100.0, 1)
+
+            # Natural meteorological season
+            if m_str in ("12", "01", "02"):
+                cal_season = "Winter"
+            elif m_str in ("03", "04", "05"):
+                cal_season = "Spring"
+            elif m_str in ("06", "07", "08"):
+                cal_season = "Summer"
+            else:
+                cal_season = "Autumn"
 
             scoped = filter_scoped(rep.boundaries)
             c_raw = sum(b.total_crossings for b in scoped)
@@ -1091,9 +1164,11 @@ def calculate_fra_long_term_forecast(
             monthly_breakdown.append({
                 "period": p,
                 "month_name": month_names.get(p, p),
+                "season": cal_season,
                 "season_cluster": c_key,
                 "flights_eurocontrol": off_fl,
                 "flights_archive": arch_fl,
+                "archive_coverage_pct": arch_cov_pct,
                 "coverage_scale_factor": round(s_m, 4),
                 "crossings_raw": c_raw,
                 "crossings_scaled": c_scaled,
@@ -1618,16 +1693,38 @@ def calculate_fra_long_term_forecast(
         "05": "May", "06": "June", "07": "July", "08": "August",
         "09": "September", "10": "October", "11": "November", "12": "December"
     }
-    cal_monthly_breakdown = [
-        {
+    cal_monthly_breakdown = []
+    for m in sorted(monthly_dict.keys()):
+        # Meteorological season
+        if m in ("12", "01", "02"):
+            m_season = "Winter (Low Season)"
+        elif m in ("03", "04", "05"):
+            m_season = "Spring (Shoulder)"
+        elif m in ("06", "07", "08"):
+            m_season = "Summer (Peak)"
+        else:
+            m_season = "Autumn (Trunk)"
+
+        if is_12m_active:
+            # Direct empirical archive period
+            period_str = f"2024{m}" if m in ("11", "12") else f"2025{m}"
+            arch_label = period_str
+        else:
+            # Synthetic 3-anchor mapping
+            if m in ("01", "02", "03", "12"):
+                arch_label = f"{year_baseline}02 (Winter/Early Spring Anchor)"
+            elif m in ("06", "07", "08", "09"):
+                arch_label = f"{year_baseline}06 (Summer Peak Anchor)"
+            else:
+                arch_label = f"{year_baseline}10 (Shoulder/Autumn Anchor)"
+
+        cal_monthly_breakdown.append({
             "month_num": m,
             "month_name": month_names_dict[m],
             "official_flights": monthly_dict[m],
-            "seasonal_cluster": "Winter/Spring" if m in SEASONAL_MONTH_CLUSTERS["spring"] else ("Summer Peak" if m in SEASONAL_MONTH_CLUSTERS["summer"] else "Autumn Shoulder"),
-            "anchor_represented": f"{year_baseline}02" if m in SEASONAL_MONTH_CLUSTERS["spring"] else (f"{year_baseline}06" if m in SEASONAL_MONTH_CLUSTERS["summer"] else f"{year_baseline}10"),
-        }
-        for m in sorted(monthly_dict.keys())
-    ]
+            "seasonal_cluster": m_season,
+            "anchor_represented": arch_label,
+        })
 
     return {
         "scope": scope,

@@ -737,11 +737,19 @@ with tab_cat_single:
             fra_rep = analyze_flight_fra_adherence(ds, int(active_flight_id))
             if fra_rep:
                 st.markdown("#### 🛣️ Free Route Airspace (FRA) vs. Structured ATS Airway Snapping")
-                fr1, fr2, fr3, fr4 = st.columns(4)
-                fr1.metric("FRA Directness Index", f"{fra_rep.fra_directness_index_pct:.1f}%", f"{fra_rep.fra_direct_distance_nm:.0f} nm DCT")
-                fr2.metric("ATS Airway Adherence", f"{fra_rep.ats_airway_adherence_pct:.1f}%", f"{fra_rep.ats_airway_distance_nm:.0f} nm")
-                fr3.metric("Snapped ATS Airways", f"{len(fra_rep.distinct_airways_used)}", ", ".join(fra_rep.distinct_airways_used[:4]) or "DCT Only")
-                fr4.metric("Snapped 5-Letter Fixes", f"{len(fra_rep.sample_snapped_fixes)}", ", ".join(fra_rep.sample_snapped_fixes[:4]) or "—")
+                st.caption(
+                    "ℹ️ **Single European Sky CP1 Mandate (EU 2021/116):** Free Route Airspace (FRA) is formally operational and required "
+                    "at or above **FL305** (30,500 ft). Flights below FL305 navigate structured ATS airways and terminal transitions."
+                )
+                fr1, fr2, fr3, fr4, fr5 = st.columns(5)
+                fr1.metric("En-Route Directness", f"{fra_rep.fra_directness_index_pct:.1f}%", f"{fra_rep.fra_direct_distance_nm:.0f} nm DCT")
+                if fra_rep.fl305_enroute_distance_nm > 0:
+                    fr2.metric("Cruise Directness (≥FL305)", f"{fra_rep.fl305_fra_directness_index_pct:.1f}%", f"{fra_rep.fl305_fra_direct_distance_nm:.0f} nm DCT")
+                else:
+                    fr2.metric("Cruise Directness (≥FL305)", "N/A", "Below FL305")
+                fr3.metric("ATS Airway Adherence", f"{fra_rep.ats_airway_adherence_pct:.1f}%", f"{fra_rep.ats_airway_distance_nm:.0f} nm")
+                fr4.metric("Snapped ATS Airways", f"{len(fra_rep.distinct_airways_used)}", ", ".join(fra_rep.distinct_airways_used[:4]) or "DCT Only")
+                fr5.metric("Snapped 5-Letter Fixes", f"{len(fra_rep.sample_snapped_fixes)}", ", ".join(fra_rep.sample_snapped_fixes[:4]) or "—")
 
             if ds.has_fir_traversals():
                 st.markdown("#### 🧭 En-Route Sector Traversal & Dwell Efficiency")
@@ -1755,6 +1763,11 @@ with tab_cat_system:
             "Detects active cross-border Free Route Airspace (FRA) implementations, spotlights prime candidate "
             "boundaries for immediate FRA rollout, and ranks all European boundary interfaces in descending order of priority."
         )
+        st.info(
+            "ℹ️ **Regulatory Baseline (EU 2021/116 - Common Project 1 AF3):** Free Route Airspace (FRA) is formally "
+            "mandated and operational across the Single European Sky **at and above FL305** (30,500 ft). "
+            "Airspace below FL305 remains governed by structured ATS airways, terminal routing (SIDs/STARs), and military airspace reservations."
+        )
 
         render_page_export_bar("fra_boundaries", "tab_fra_bnd")
 
@@ -2031,7 +2044,7 @@ with tab_cat_system:
                         "against its direct geodesic Free Route Airspace benchmark path (dashed emerald green line)."
                     )
 
-                    col_m1, col_m2 = st.columns([1, 2])
+                    col_m1, col_m2 = st.columns([1, 1])
                     with col_m1:
                         geo_scope = st.radio(
                             "Flight Distance Scope:",
@@ -2041,6 +2054,15 @@ with tab_cat_system:
                         )
                     max_gc = 2500.0 if "Intra-European" in geo_scope else None
 
+                    with col_m2:
+                        fl_scope = st.radio(
+                            "Altitude Stratum:",
+                            ["Cruising at or above FL305 (Mandatory FRA Stratum)", "All Flight Levels"],
+                            index=0,
+                            key=f"fra_fl_scope_{sel_pair}",
+                        )
+                    min_fl_val = 305.0 if "FL305" in fl_scope else None
+
                     with st.spinner(f"Querying radar trajectories for top 10 detoured flights across {sel_pair}..."):
                         worst_flts = get_worst_flights_for_boundary(
                             fra_ds,
@@ -2048,10 +2070,11 @@ with tab_cat_system:
                             limit=10,
                             max_gc_dist_nm=max_gc,
                             include_trajectories=True,
+                            min_fl=min_fl_val,
                         )
 
                     if not worst_flts:
-                        st.info(f"No flight trajectories found crossing {sel_pair} matching the distance filter.")
+                        st.info(f"No flight trajectories found crossing {sel_pair} matching the active distance and altitude filters.")
                     else:
                         parts = [p.strip() for p in sel_pair.split("<->")]
                         fir_polys = fra_ds.get_fir_boundaries(parts)
@@ -2069,6 +2092,7 @@ with tab_cat_system:
                                 "Rank": f"#{f['rank']}",
                                 "Flight ID": f["ectrl_id"],
                                 "Callsign / Operator": f"{f['ac_operator']} ({f['ac_type']})",
+                                "Max FL": f"FL{int(f.get('max_cruise_fl', 0))}" if f.get("max_cruise_fl") else "—",
                                 "Route": f"{f['adep']} ➔ {f['ades']}",
                                 "Off-Block": f["actual_off_block_time"][:16] if f.get("actual_off_block_time") else "N/A",
                                 "Actual (NM)": f"{f['actual_distance_nm']:,.0f}",
@@ -2276,37 +2300,109 @@ with tab_cat_system:
             )
 
             if fc_res.get("is_12m_full_year") and fc_res.get("monthly_breakdown"):
-                st.success("🗓️ **Full Contiguous 12-Month Empirical Baseline Active (Nov 2024 – Oct 2025):** 12 individual Eurocontrol monthly archives evaluated with month-by-month empirical routing detours & crossings.")
+                st.success(
+                    "🗓️ **Full Contiguous 12-Month Empirical Baseline Active (Nov 2024 – Oct 2025):** "
+                    f"Evaluates all 12 consecutive Eurocontrol monthly archives (10,235,149 ingested flights) "
+                    f"calibrated against official Eurocontrol traffic (11,061,273 flights) across {fc_res['total_boundaries_evaluated']} scoped boundary interfaces."
+                )
                 with st.expander("📊 Contiguous 12-Month Empirical Monthly Breakdown (Nov 2024 – Oct 2025)", expanded=True):
                     m_breakdown = fc_res["monthly_breakdown"]
                     m_df = pd.DataFrame(m_breakdown)
 
-                    st.markdown("#### Monthly Crossings & Jet-A Conserved Progression")
+                    st.markdown("#### 📊 Monthly Scoped Crossings & Jet-A Conserved Progression (Nov 2024 – Oct 2025)")
+                    st.caption(
+                        f"Displays verified empirical progression across the 12 contiguous months for the **{fc_res['total_boundaries_evaluated']} scoped boundary interfaces** "
+                        f"(Scope: `{fc_scope}`). Crossings follow natural European airline seasonality from the winter trough (~402k/mo in Jan–Feb) "
+                        f"to the summer peak (~638k/mo in Jul–Aug), calibrated against official Eurocontrol traffic with a verified ~92.5% archive capture rate."
+                    )
+                    chronological_months = list(m_df["month_name"])
                     c_chart1, c_chart2 = st.columns(2)
                     with c_chart1:
-                        st.caption("Monthly Scoped Crossings Across Bottlenecks")
-                        st.bar_chart(m_df.set_index("month_name")["crossings_scaled"])
+                        st.caption("Monthly Scoped Crossings Across Bottlenecks (Chronological)")
+                        chart_crossings = (
+                            alt.Chart(m_df)
+                            .mark_bar(color="#3498db")
+                            .encode(
+                                x=alt.X(
+                                    "month_name:N",
+                                    title="Chronological Month (Nov 2024 – Oct 2025)",
+                                    sort=chronological_months,
+                                    axis=alt.Axis(labelAngle=-45),
+                                ),
+                                y=alt.Y(
+                                    "crossings_scaled:Q",
+                                    title="Calibrated Crossings",
+                                    axis=alt.Axis(format="~s"),
+                                ),
+                                tooltip=[
+                                    alt.Tooltip("month_name:N", title="Month"),
+                                    alt.Tooltip("season:N", title="Season"),
+                                    alt.Tooltip("flights_eurocontrol:Q", title="Eurocontrol Flights", format=","),
+                                    alt.Tooltip("flights_archive:Q", title="Archive Flights", format=","),
+                                    alt.Tooltip("archive_coverage_pct:Q", title="Coverage", format=".1f"),
+                                    alt.Tooltip("crossings_raw:Q", title="Raw Crossings", format=","),
+                                    alt.Tooltip("crossings_scaled:Q", title="Calibrated Crossings", format=","),
+                                    alt.Tooltip("fuel_saved_tonnes:Q", title="Jet-A Saved (t)", format=",.1f"),
+                                    alt.Tooltip("cost_saved_eur:Q", title="Value (€ EUR)", format=",.2f"),
+                                ],
+                            )
+                            .properties(height=280)
+                        )
+                        st.altair_chart(chart_crossings, use_container_width=True)
+
                     with c_chart2:
-                        st.caption("Monthly Jet-A Fuel Saved (Tonnes)")
-                        st.line_chart(m_df.set_index("month_name")["fuel_saved_tonnes"])
+                        st.caption("Monthly Jet-A Fuel Saved in Tonnes (Chronological)")
+                        chart_fuel = (
+                            alt.Chart(m_df)
+                            .mark_line(color="#2ecc71", strokeWidth=2.5, point=alt.OverlayMarkDef(color="#27ae60", size=60))
+                            .encode(
+                                x=alt.X(
+                                    "month_name:N",
+                                    title="Chronological Month (Nov 2024 – Oct 2025)",
+                                    sort=chronological_months,
+                                    axis=alt.Axis(labelAngle=-45),
+                                ),
+                                y=alt.Y(
+                                    "fuel_saved_tonnes:Q",
+                                    title="Jet-A Saved (Tonnes)",
+                                    axis=alt.Axis(format="~s"),
+                                ),
+                                tooltip=[
+                                    alt.Tooltip("month_name:N", title="Month"),
+                                    alt.Tooltip("season:N", title="Season"),
+                                    alt.Tooltip("fuel_saved_tonnes:Q", title="Jet-A Saved (t)", format=",.1f"),
+                                    alt.Tooltip("co2_mitigated_tonnes:Q", title="CO₂ Mitigated (t)", format=",.1f"),
+                                    alt.Tooltip("cost_saved_eur:Q", title="Operating Value (€)", format=",.2f"),
+                                    alt.Tooltip("crossings_scaled:Q", title="Calibrated Crossings", format=","),
+                                ],
+                            )
+                            .properties(height=280)
+                        )
+                        st.altair_chart(chart_fuel, use_container_width=True)
 
                     rename_cols = {
                         "month_name": "Month",
-                        "season_cluster": "Season",
-                        "flights_eurocontrol": "European Flights",
+                        "season": "Season",
+                        "flights_eurocontrol": "Eurocontrol Flights",
                         "flights_archive": "Archive Flights",
-                        "crossings_scaled": "Scoped Crossings",
+                        "archive_coverage_pct": "Coverage (%)",
+                        "coverage_scale_factor": "Scale Factor",
+                        "crossings_raw": "Raw Crossings",
+                        "crossings_scaled": "Calibrated Crossings",
                         "fuel_saved_tonnes": "Fuel Saved (t)",
                         "co2_mitigated_tonnes": "CO₂ Mitigated (t)",
                         "cost_saved_eur": "Operating Value (€ EUR)",
                         "detour_deviation_pct": "Mean Detour (%)",
                     }
-                    display_m_df = m_df[list(rename_cols.keys())].rename(columns=rename_cols)
+                    display_m_df = m_df[[c for c in rename_cols.keys() if c in m_df.columns]].rename(columns=rename_cols)
                     st.dataframe(
                         display_m_df.style.format({
-                            "European Flights": "{:,}",
+                            "Eurocontrol Flights": "{:,}",
                             "Archive Flights": "{:,}",
-                            "Scoped Crossings": "{:,}",
+                            "Coverage (%)": "{:.1f}%",
+                            "Scale Factor": "{:.4f}x",
+                            "Raw Crossings": "{:,}",
+                            "Calibrated Crossings": "{:,}",
                             "Fuel Saved (t)": "{:,.1f}",
                             "CO₂ Mitigated (t)": "{:,.1f}",
                             "Operating Value (€ EUR)": "€{:,.2f}",
@@ -2315,20 +2411,21 @@ with tab_cat_system:
                         use_container_width=True,
                     )
 
-            with st.expander("📅 Official Eurocontrol Monthly Flight Breakdown (Full 12-Month Calendar)", expanded=False):
-                mb_df = pd.DataFrame(fc_res.get("eurocontrol_monthly_breakdown", []))
-                if not mb_df.empty:
-                    mb_rename = {
-                        "month_num": "Month #",
-                        "month_name": "Month",
-                        "official_flights": "Official Eurocontrol Flights",
-                        "seasonal_cluster": "Seasonal Synthesis Cluster",
-                        "anchor_represented": "Anchor Archive Period",
-                    }
-                    st.dataframe(
-                        mb_df.rename(columns=mb_rename).style.format({"Official Eurocontrol Flights": "{:,}"}),
-                        use_container_width=True,
-                    )
+            if not fc_res.get("is_12m_full_year"):
+                with st.expander("📅 3-Anchor Seasonal Synthesis Mapping (How 3 Archives Extrapolate 12 Months)", expanded=False):
+                    mb_df = pd.DataFrame(fc_res.get("eurocontrol_monthly_breakdown", []))
+                    if not mb_df.empty:
+                        mb_rename = {
+                            "month_num": "Month #",
+                            "month_name": "Month",
+                            "official_flights": "Official Eurocontrol Flights",
+                            "seasonal_cluster": "Season Category",
+                            "anchor_represented": "Representing Archive Anchor",
+                        }
+                        st.dataframe(
+                            mb_df.rename(columns=mb_rename).style.format({"Official Eurocontrol Flights": "{:,}"}),
+                            use_container_width=True,
+                        )
 
             # Seasonal Realization Profiles Card
             sb = fc_res.get("seasonal_breakdown", {})

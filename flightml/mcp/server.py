@@ -610,19 +610,27 @@ def create_mcp_server() -> FastMCP:
         flight_id: str | int,
         period: str = "202510",
         direct_dct_tolerance_nm: float = 5.0,
+        min_flight_level: float = 305.0,
     ) -> str:
         """Evaluate Free Route Airspace (FRA) adherence, DCT direct waypoint shortcuts, and mileage savings vs structured airways.
+        Specifically evaluates both overall en-route directness and the mandated upper FRA stratum (>= FL305 per Single European Sky CP1).
 
         Args:
             flight_id: Eurocontrol unique flight identifier (ectrl_id).
             period: Eurocontrol archive month (e.g. '202510').
             direct_dct_tolerance_nm: Cross-track tolerance in NM for direct segment detection (default: 5.0).
+            min_flight_level: Minimum flight level for mandatory FRA stratum evaluation (default: 305.0).
         """
         try:
             from flightml.geo.fra_analyzer import analyze_flight_fra_adherence
             ds = get_dataset(period)
             fid = int(str(flight_id).strip())
-            res = analyze_flight_fra_adherence(ds, ectrl_id=fid, snap_tolerance_nm=direct_dct_tolerance_nm)
+            res = analyze_flight_fra_adherence(
+                ds,
+                ectrl_id=fid,
+                snap_tolerance_nm=direct_dct_tolerance_nm,
+                min_fl=min_flight_level,
+            )
             if not res:
                 return json.dumps({"error": f"Flight {flight_id} not found in period {period}."}, indent=2)
             return _safe_json(res)
@@ -1141,14 +1149,17 @@ def create_mcp_server() -> FastMCP:
         period: str = "202510",
         limit: int = 10,
         max_distance_nm: float | None = None,
+        min_flight_level: float | None = 305.0,
     ) -> str:
         """Query the most detoured flights across a specific FIR boundary interface vs direct Free Route Airspace.
+        Filters flights cruising at or above `min_flight_level` (default: FL305 per European CP1 mandate).
 
         Args:
             boundary_pair: Canonical FIR boundary pair (e.g. 'EGTTUIR <-> LFFFUIR' or 'EDUUUIR <-> LOVVFIR').
             period: Eurocontrol archive month (e.g. '202510' or '202410').
             limit: Maximum flights to return (default: 10).
             max_distance_nm: Optional filter to focus on intra-European flights (e.g. 2500.0).
+            min_flight_level: Minimum cruising flight level (default: 305.0 per CP1 mandate).
         """
         ds = get_dataset(period)
         flights = get_worst_flights_for_boundary(
@@ -1157,6 +1168,7 @@ def create_mcp_server() -> FastMCP:
             limit=limit,
             max_gc_dist_nm=max_distance_nm,
             include_trajectories=False,
+            min_fl=min_flight_level,
         )
         return _safe_json(flights)
 

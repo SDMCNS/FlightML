@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 from datetime import datetime, date, timedelta, timezone
 import calendar
+import math
 import duckdb
 import pandas as pd
 
@@ -602,7 +603,16 @@ class FlightDataset:
             df = self.cursor.execute(sql, clean_ids).df()
             res: dict[str, list[tuple[float, float]]] = {}
             for fid, group in df.groupby("fir_id"):
-                coords = list(zip(group["lat"], group["lon"]))
+                clean_group = group.dropna(subset=["lat", "lon"])
+                coords: list[tuple[float, float]] = []
+                for _, r in clean_group.iterrows():
+                    try:
+                        la = float(r["lat"])
+                        lo = float(r["lon"])
+                        if math.isfinite(la) and math.isfinite(lo):
+                            coords.append((la, lo))
+                    except (TypeError, ValueError):
+                        continue
                 if len(coords) >= 3:
                     res[str(fid)] = coords
             return res

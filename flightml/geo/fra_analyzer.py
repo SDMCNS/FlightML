@@ -55,6 +55,9 @@ class FRAReport:
     distinct_airways_used: list[str]
     sample_snapped_fixes: list[str]
     waypoints: list[SnappedWaypoint]
+    fl305_enroute_distance_nm: float = 0.0
+    fl305_fra_direct_distance_nm: float = 0.0
+    fl305_fra_directness_index_pct: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -64,6 +67,7 @@ def analyze_flight_fra_adherence(
     dataset: FlightDataset,
     ectrl_id: int,
     snap_tolerance_nm: float = 2.5,
+    min_fl: float = 305.0,
 ) -> FRAReport | None:
     """
     Match each 4D waypoint of a flight against published ATS Airways (`raw_routes`),
@@ -222,6 +226,11 @@ def analyze_flight_fra_adherence(
     airway_dist_total = 0.0
     fra_dct_dist_total = 0.0
 
+    # Specifically for upper airspace at or above min_fl (FL305 per Single European Sky CP1 mandate)
+    fl305_enroute_dist = 0.0
+    fl305_airway_dist_total = 0.0
+    fl305_fra_dct_dist_total = 0.0
+
     for j in range(len(snapped_wps) - 1):
         w1 = snapped_wps[j]
         w2 = snapped_wps[j + 1]
@@ -229,10 +238,20 @@ def analyze_flight_fra_adherence(
             continue
         seg_nm = haversine_nm(w1.latitude, w1.longitude, w2.latitude, w2.longitude)
         enroute_dist += seg_nm
-        if w1.classification == "ATS_AIRWAY" or w2.classification == "ATS_AIRWAY":
+        is_airway = (w1.classification == "ATS_AIRWAY" or w2.classification == "ATS_AIRWAY")
+        if is_airway:
             airway_dist_total += seg_nm
         else:
             fra_dct_dist_total += seg_nm
+
+        # Track upper FRA stratum (>= min_fl, default FL305)
+        avg_fl = (w1.flight_level + w2.flight_level) / 2.0
+        if avg_fl >= min_fl:
+            fl305_enroute_dist += seg_nm
+            if is_airway:
+                fl305_airway_dist_total += seg_nm
+            else:
+                fl305_fra_dct_dist_total += seg_nm
 
     if enroute_dist <= 0.1:
         # Fallback for short-haul terminal flights
@@ -242,6 +261,12 @@ def analyze_flight_fra_adherence(
 
     fra_pct = (fra_dct_dist_total / enroute_dist) * 100.0
     airway_pct = (airway_dist_total / enroute_dist) * 100.0
+
+    fl305_fra_pct = (
+        round((fl305_fra_dct_dist_total / fl305_enroute_dist) * 100.0, 1)
+        if fl305_enroute_dist > 0.1
+        else round(fra_pct, 1)
+    )
 
     return FRAReport(
         ectrl_id=int(ectrl_id),
@@ -262,6 +287,9 @@ def analyze_flight_fra_adherence(
         distinct_airways_used=airways_used[:15],
         sample_snapped_fixes=fixes_used[:15],
         waypoints=snapped_wps,
+        fl305_enroute_distance_nm=round(fl305_enroute_dist, 1),
+        fl305_fra_direct_distance_nm=round(fl305_fra_dct_dist_total, 1),
+        fl305_fra_directness_index_pct=fl305_fra_pct,
     )
 
 
@@ -269,10 +297,12 @@ def compare_fra_evolution(
     period1: str = "201611",
     period2: str = "202510",
     sample_flights: int = 300,
+    min_fl: float = 305.0,
 ) -> dict[str, Any]:
     """
     Compare Free Route Airspace (FRA) adoption and off-airway Direct (DCT) waypoint share
     between two Eurocontrol periods (e.g., Nov 2016 vs. Oct 2025).
+    Evaluates waypoints at or above `min_fl` (default: FL305 per Single European Sky CP1 mandate).
     """
     results: dict[str, Any] = {}
     for pid in (period1, period2):
@@ -291,7 +321,7 @@ def compare_fra_evolution(
                     round(t.longitude, 2) AS lon_grid
                 FROM trajectory_actual t
                 JOIN sample_flts s ON t.ectrl_id = s.ectrl_id
-                WHERE t.flight_level >= 240
+                WHERE t.flight_level >= {float(min_fl)}
             ),
             route_grid AS (
                 SELECT DISTINCT

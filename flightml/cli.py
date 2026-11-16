@@ -2149,11 +2149,12 @@ def fra_analysis_cmd(
     ectrl_id: int = typer.Argument(..., help="Eurocontrol Flight ID"),
     period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period (e.g. 201611, 202510)"),
     tolerance: float = typer.Option(2.5, "--tolerance", "-t", help="Waypoint snap tolerance in nm"),
+    min_fl: float = typer.Option(305.0, "--min-fl", help="Minimum flight level for mandated FRA stratum (default: FL305)"),
 ) -> None:
     """Snap 4D waypoints to ATS airways (raw_routes), RNAV fixes (fix.dat), and navaids (nav.dat) to measure Free Route Airspace (FRA) directness."""
     with console.status(f"[cyan]Snapping 4D waypoints & evaluating Free Route Airspace (FRA) adherence for flight {ectrl_id}..."):
         ds = FlightDataset(period=period)
-        rep = analyze_flight_fra_adherence(ds, ectrl_id=ectrl_id, snap_tolerance_nm=tolerance)
+        rep = analyze_flight_fra_adherence(ds, ectrl_id=ectrl_id, snap_tolerance_nm=tolerance, min_fl=min_fl)
 
     if not rep:
         console.print(f"[red]Flight {ectrl_id} not found in period {period}[/red]")
@@ -2164,9 +2165,14 @@ def fra_analysis_cmd(
         f"({rep.adep} ➔ {rep.ades}, {rep.ac_type})"
     )
     console.print(
-        f"FRA Directness Index: [bold cyan]{rep.fra_directness_index_pct:.1f}%[/bold cyan] ({rep.fra_direct_distance_nm:.1f} nm DCT) | "
+        f"Overall En-Route Directness: [bold cyan]{rep.fra_directness_index_pct:.1f}%[/bold cyan] ({rep.fra_direct_distance_nm:.1f} nm DCT) | "
         f"Structured ATS Airway Adherence: [yellow]{rep.ats_airway_adherence_pct:.1f}%[/yellow] ({rep.ats_airway_distance_nm:.1f} nm)"
     )
+    if rep.fl305_enroute_distance_nm > 0:
+        console.print(
+            f"Upper Mandated FRA Stratum (≥FL{min_fl:.0f}) Directness: [bold green]{rep.fl305_fra_directness_index_pct:.1f}%[/bold green] "
+            f"({rep.fl305_fra_direct_distance_nm:.1f} nm DCT of {rep.fl305_enroute_distance_nm:.1f} nm enroute)"
+        )
     console.print(
         f"En-Route Waypoints: {rep.total_enroute_waypoints} "
         f"(Airway: {rep.airway_waypoints_count}, FRA Fix DCT: {rep.fra_fix_dct_waypoints_count}, Radar DCT: {rep.tactical_dct_waypoints_count})"
@@ -3122,6 +3128,7 @@ def cmd_fra_worst_flights(
     boundary: str = typer.Argument("EGTTUIR <-> LFFFUIR", help="Boundary pair (e.g. 'EGTTUIR <-> LFFFUIR')"),
     period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol archive period month"),
     limit: int = typer.Option(10, "--limit", "-l", help="Number of worst detoured flights to return"),
+    min_fl: float | None = typer.Option(305.0, "--min-fl", help="Minimum cruising flight level (default: 305 per CP1 mandate)"),
     json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON"),
 ) -> None:
     """List the worst flights (highest lateral detour vs direct Free Route Airspace) crossing a FIR boundary."""
@@ -3131,12 +3138,14 @@ def cmd_fra_worst_flights(
         console.print(f"[bold red]❌ Failed to load dataset period {period}: {exc}[/bold red]")
         raise typer.Exit(1)
 
-    with console.status(f"[cyan]Analyzing radar trajectories for worst flights across {boundary}..."):
+    fl_desc = f" (≥FL{min_fl:.0f})" if min_fl is not None else ""
+    with console.status(f"[cyan]Analyzing radar trajectories for worst flights{fl_desc} across {boundary}..."):
         worst = get_worst_flights_for_boundary(
             dataset=ds,
             boundary_pair=boundary,
             limit=limit,
             include_trajectories=False,
+            min_fl=min_fl,
         )
 
     if json_output:
@@ -3149,7 +3158,8 @@ def cmd_fra_worst_flights(
 
     console.print(Panel(
         f"[bold cyan]Worst Flights vs. Direct Free Route Airspace (FRA) Benchmark[/bold cyan]\n"
-        f"Boundary: [yellow]{boundary}[/yellow] | Period: [yellow]{period}[/yellow] | Limit: [yellow]{limit}[/yellow]",
+        f"Boundary: [yellow]{boundary}[/yellow] | Period: [yellow]{period}[/yellow] | "
+        f"Stratum: [green]{'≥FL' + str(int(min_fl)) if min_fl else 'All Altitudes'}[/green] | Limit: [yellow]{limit}[/yellow]",
         title="✈️ Flight Detour Intelligence",
     ))
 
@@ -3162,6 +3172,7 @@ def cmd_fra_worst_flights(
     table.add_column("Flight ID", style="bold white", width=11)
     table.add_column("Operator", style="yellow", width=8)
     table.add_column("Type", style="magenta", width=6)
+    table.add_column("Max FL", style="blue", width=7)
     table.add_column("Route", style="white", width=14)
     table.add_column("Actual (NM)", justify="right", style="white", width=11)
     table.add_column("Direct (NM)", justify="right", style="green", width=11)
@@ -3175,6 +3186,7 @@ def cmd_fra_worst_flights(
             str(f["ectrl_id"]),
             f["ac_operator"],
             f["ac_type"],
+            f"FL{int(f.get('max_cruise_fl', 0))}" if f.get("max_cruise_fl") else "—",
             f"{f['adep']} ➔ {f['ades']}",
             f"{f['actual_distance_nm']:,.0f}",
             f"{f['great_circle_nm']:,.0f}",

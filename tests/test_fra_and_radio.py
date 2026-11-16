@@ -27,12 +27,15 @@ def test_analyze_flight_fra_adherence():
     assert row is not None
     ectrl_id = int(row[0])
 
-    rep = analyze_flight_fra_adherence(ds, ectrl_id=ectrl_id, snap_tolerance_nm=3.0)
+    rep = analyze_flight_fra_adherence(ds, ectrl_id=ectrl_id, snap_tolerance_nm=3.0, min_fl=305.0)
     assert rep is not None
     assert rep.ectrl_id == ectrl_id
     assert rep.enroute_distance_nm > 0.0
     assert 0.0 <= rep.fra_directness_index_pct <= 100.0
     assert abs((rep.fra_directness_index_pct + rep.ats_airway_adherence_pct) - 100.0) <= 0.5
+    assert hasattr(rep, "fl305_fra_directness_index_pct")
+    assert 0.0 <= rep.fl305_fra_directness_index_pct <= 100.0
+    assert rep.fl305_enroute_distance_nm >= 0.0
     assert len(rep.waypoints) > 0
 
 

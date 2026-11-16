@@ -149,6 +149,7 @@ def test_get_worst_flights_and_map():
     assert "excess_fuel_kg" in f0
     assert "excess_cost_eur" in f0
     assert "fra_direct_path" in f0
+    assert "max_cruise_fl" in f0
     assert len(f0["fra_direct_path"]) > 0
 
     # Verify descending detour
@@ -164,6 +165,52 @@ def test_get_worst_flights_and_map():
     )
     import folium
     assert isinstance(m, folium.Map)
+
+
+def test_fra_boundary_map_handles_nans_gracefully():
+    """Verify create_fra_boundary_map handles NaN and None coordinates in flights and FIR polygons without raising ValueError."""
+    import folium
+    import math
+
+    nan_flight = {
+        "rank": 1,
+        "ectrl_id": 99999999,
+        "adep": "TEST",
+        "ades": "TEST",
+        "adep_lat": float("nan"),
+        "adep_lon": None,
+        "ades_lat": float("nan"),
+        "ades_lon": float("nan"),
+        "ac_operator": "TEST",
+        "ac_type": "A320",
+        "actual_distance_nm": 500.0,
+        "great_circle_nm": 400.0,
+        "detour_nm": 100.0,
+        "detour_pct": 25.0,
+        "directness_pct": 80.0,
+        "excess_cost_eur": 500.0,
+        "excess_fuel_tonnes": 0.5,
+        "excess_co2_tonnes": 1.5,
+        "fra_direct_path": [(float("nan"), 10.0), (50.0, float("nan"))],
+        "trajectory_points": [
+            {"latitude": float("nan"), "longitude": 2.0},
+            {"latitude": 49.0, "longitude": float("nan")},
+        ],
+    }
+
+    nan_fir_polys = {
+        "TEST_FIR": [(float("nan"), 2.0), (49.0, float("nan")), (float("nan"), float("nan"))]
+    }
+
+    # Should not raise ValueError: Location values cannot contain NaNs.
+    m = create_fra_boundary_map(
+        boundary_pair="TEST_FIR <-> TEST_FIR2",
+        worst_flights=[nan_flight],
+        fir_polygons=nan_fir_polys,
+    )
+    assert isinstance(m, folium.Map)
+    assert math.isfinite(m.location[0])
+    assert math.isfinite(m.location[1])
 
 
 def test_calculate_fra_long_term_forecast():

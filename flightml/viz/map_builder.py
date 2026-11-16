@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 import folium
 import pandas as pd
 
 from flightml.geo.trajectory import analyze_trajectory
+
+
+def _is_finite_coord(val: Any) -> bool:
+    """Check if a coordinate or numeric value is non-null and a finite float."""
+    if val is None:
+        return False
+    try:
+        f = float(val)
+        return math.isfinite(f)
+    except (TypeError, ValueError):
+        return False
 
 
 def create_trajectory_map(
@@ -32,14 +44,21 @@ def create_trajectory_map(
     ac = flight_info.get("ac_type", "AC")
 
     # Center map on mid-point
-    if not actual_df.empty:
-        center_lat = float(actual_df["latitude"].mean())
-        center_lon = float(actual_df["longitude"].mean())
-    elif not planned_df.empty:
-        center_lat = float(planned_df["latitude"].mean())
-        center_lon = float(planned_df["longitude"].mean())
-    else:
-        center_lat, center_lon = 50.0, 10.0
+    center_lat, center_lon = 50.0, 10.0
+    if not actual_df.empty and "latitude" in actual_df.columns and "longitude" in actual_df.columns:
+        valid_act = actual_df.dropna(subset=["latitude", "longitude"])
+        if not valid_act.empty:
+            c_lat = float(valid_act["latitude"].mean())
+            c_lon = float(valid_act["longitude"].mean())
+            if _is_finite_coord(c_lat) and _is_finite_coord(c_lon):
+                center_lat, center_lon = c_lat, c_lon
+    elif not planned_df.empty and "latitude" in planned_df.columns and "longitude" in planned_df.columns:
+        valid_plan = planned_df.dropna(subset=["latitude", "longitude"])
+        if not valid_plan.empty:
+            c_lat = float(valid_plan["latitude"].mean())
+            c_lon = float(valid_plan["longitude"].mean())
+            if _is_finite_coord(c_lat) and _is_finite_coord(c_lon):
+                center_lat, center_lon = c_lat, c_lon
 
     # Initialize map with no default tile layer to prevent API key or blocked tile warnings
     m = folium.Map(
@@ -432,12 +451,17 @@ def create_conflict_map(
     for ev in proximity_events or []:
         d = ev.to_dict() if hasattr(ev, "to_dict") else (ev if isinstance(ev, dict) else ev.__dict__)
         parsed_events.append(d)
-        lats.append(float(d["latitude"]))
-        lons.append(float(d["longitude"]))
+        lat = d.get("latitude")
+        lon = d.get("longitude")
+        if _is_finite_coord(lat) and _is_finite_coord(lon):
+            lats.append(float(lat))
+            lons.append(float(lon))
 
     if lats and lons:
-        center_lat = sum(lats) / len(lats)
-        center_lon = sum(lons) / len(lons)
+        c_lat = sum(lats) / len(lats)
+        c_lon = sum(lons) / len(lons)
+        center_lat = float(c_lat) if _is_finite_coord(c_lat) else 48.5
+        center_lon = float(c_lon) if _is_finite_coord(c_lon) else 10.0
     else:
         center_lat, center_lon = 48.5, 10.0
 
@@ -659,14 +683,21 @@ def create_flight_fir_charge_map(
         crco_report = compute_flight_crco_charges(dataset, ectrl_id)
 
     # Center map on mid-point
-    if not actual_df.empty:
-        center_lat = float(actual_df["latitude"].mean())
-        center_lon = float(actual_df["longitude"].mean())
-    elif not planned_df.empty:
-        center_lat = float(planned_df["latitude"].mean())
-        center_lon = float(planned_df["longitude"].mean())
-    else:
-        center_lat, center_lon = 50.0, 10.0
+    center_lat, center_lon = 50.0, 10.0
+    if not actual_df.empty and "latitude" in actual_df.columns and "longitude" in actual_df.columns:
+        valid_act = actual_df.dropna(subset=["latitude", "longitude"])
+        if not valid_act.empty:
+            c_lat = float(valid_act["latitude"].mean())
+            c_lon = float(valid_act["longitude"].mean())
+            if _is_finite_coord(c_lat) and _is_finite_coord(c_lon):
+                center_lat, center_lon = c_lat, c_lon
+    elif not planned_df.empty and "latitude" in planned_df.columns and "longitude" in planned_df.columns:
+        valid_plan = planned_df.dropna(subset=["latitude", "longitude"])
+        if not valid_plan.empty:
+            c_lat = float(valid_plan["latitude"].mean())
+            c_lon = float(valid_plan["longitude"].mean())
+            if _is_finite_coord(c_lat) and _is_finite_coord(c_lon):
+                center_lat, center_lon = c_lat, c_lon
 
     m = folium.Map(
         location=[center_lat, center_lon],
@@ -869,24 +900,32 @@ def create_fra_boundary_map(
 
     if fir_polygons:
         for pts in fir_polygons.values():
-            for lat, lon in pts:
-                all_lats.append(lat)
-                all_lons.append(lon)
+            for pt in pts:
+                if len(pt) >= 2 and _is_finite_coord(pt[0]) and _is_finite_coord(pt[1]):
+                    all_lats.append(float(pt[0]))
+                    all_lons.append(float(pt[1]))
 
     for f in worst_flights:
         for pt in f.get("trajectory_points", []):
-            all_lats.append(pt["latitude"])
-            all_lons.append(pt["longitude"])
-        if "adep_lat" in f and "adep_lon" in f:
-            all_lats.append(f["adep_lat"])
-            all_lons.append(f["adep_lon"])
-        if "ades_lat" in f and "ades_lon" in f:
-            all_lats.append(f["ades_lat"])
-            all_lons.append(f["ades_lon"])
+            lat = pt.get("latitude")
+            lon = pt.get("longitude")
+            if _is_finite_coord(lat) and _is_finite_coord(lon):
+                all_lats.append(float(lat))
+                all_lons.append(float(lon))
+        ad_lat, ad_lon = f.get("adep_lat"), f.get("adep_lon")
+        if _is_finite_coord(ad_lat) and _is_finite_coord(ad_lon):
+            all_lats.append(float(ad_lat))
+            all_lons.append(float(ad_lon))
+        as_lat, as_lon = f.get("ades_lat"), f.get("ades_lon")
+        if _is_finite_coord(as_lat) and _is_finite_coord(as_lon):
+            all_lats.append(float(as_lat))
+            all_lons.append(float(as_lon))
 
     if all_lats and all_lons:
-        center_lat = float(sum(all_lats) / len(all_lats))
-        center_lon = float(sum(all_lons) / len(all_lons))
+        c_lat = sum(all_lats) / len(all_lats)
+        c_lon = sum(all_lons) / len(all_lons)
+        center_lat = float(c_lat) if _is_finite_coord(c_lat) else 48.5
+        center_lon = float(c_lon) if _is_finite_coord(c_lon) else 4.0
     else:
         center_lat, center_lon = 48.5, 4.0
 
@@ -938,30 +977,41 @@ def create_fra_boundary_map(
         colors = {fir_a: ("#2980b9", "#3498db"), fir_b: ("#d35400", "#e67e22")}
         for fid, poly in fir_polygons.items():
             border_c, fill_c = colors.get(fid, ("#7f8c8d", "#bdc3c7"))
-            folium.Polygon(
-                locations=poly,
-                color=border_c,
-                weight=2.5,
-                fill=True,
-                fill_color=fill_c,
-                fill_opacity=0.12,
-                dash_array="5, 5",
-                tooltip=f"FIR Airspace Sector: {fid}",
-                popup=folium.Popup(f"<b>FIR Airspace Sector</b><br>{fid}", max_width=250),
-            ).add_to(fir_group)
+            clean_poly = [
+                (float(lat), float(lon))
+                for lat, lon in poly
+                if _is_finite_coord(lat) and _is_finite_coord(lon)
+            ]
+            if len(clean_poly) >= 3:
+                folium.Polygon(
+                    locations=clean_poly,
+                    color=border_c,
+                    weight=2.5,
+                    fill=True,
+                    fill_color=fill_c,
+                    fill_opacity=0.12,
+                    dash_array="5, 5",
+                    tooltip=f"FIR Airspace Sector: {fid}",
+                    popup=folium.Popup(f"<b>FIR Airspace Sector</b><br>{fid}", max_width=250),
+                ).add_to(fir_group)
 
     # 3. Direct Free Route Airspace Paths (Geodesic Chords)
     fra_group = folium.FeatureGroup(name="Direct Free Route (FRA) Chords", show=True).add_to(m)
     for f in worst_flights:
         fra_pts = f.get("fra_direct_path", [])
-        if fra_pts:
+        clean_fra_pts = [
+            (float(p[0]), float(p[1]))
+            for p in fra_pts
+            if len(p) >= 2 and _is_finite_coord(p[0]) and _is_finite_coord(p[1])
+        ]
+        if len(clean_fra_pts) >= 2:
             folium.PolyLine(
-                locations=fra_pts,
+                locations=clean_fra_pts,
                 color="#27ae60",
                 weight=2.5,
                 dash_array="7, 7",
                 opacity=0.85,
-                tooltip=f"Direct FRA Benchmark: {f['adep']} ➔ {f['ades']} ({f['great_circle_nm']:.0f} NM)",
+                tooltip=f"Direct FRA Benchmark: {f.get('adep', 'ADEP')} ➔ {f.get('ades', 'ADES')} ({f.get('great_circle_nm', 0):.0f} NM)",
             ).add_to(fra_group)
 
     # 4. Actual Radar Trajectories (Worst Inefficient Flights)
@@ -996,8 +1046,12 @@ def create_fra_boundary_map(
         fuel_t = f["excess_fuel_tonnes"]
         co2_t = f["excess_co2_tonnes"]
 
-        pts = [(pt["latitude"], pt["longitude"]) for pt in f.get("trajectory_points", [])]
-        if pts:
+        pts = [
+            (float(pt["latitude"]), float(pt["longitude"]))
+            for pt in f.get("trajectory_points", [])
+            if _is_finite_coord(pt.get("latitude")) and _is_finite_coord(pt.get("longitude"))
+        ]
+        if len(pts) >= 2:
             tooltip_txt = (
                 f"#{rank} {adep} ➔ {ades} | Flight {fid} [{op} {ac}] | "
                 f"Detour: +{detour:.1f} NM (+{detour_pct:.1f}%) | "
@@ -1029,9 +1083,10 @@ def create_fra_boundary_map(
             ).add_to(traj_group)
 
         # Mark ADEP & ADES
-        if "adep_lat" in f and "adep_lon" in f:
+        adep_lat, adep_lon = f.get("adep_lat"), f.get("adep_lon")
+        if _is_finite_coord(adep_lat) and _is_finite_coord(adep_lon):
             folium.CircleMarker(
-                location=[f["adep_lat"], f["adep_lon"]],
+                location=[float(adep_lat), float(adep_lon)],
                 radius=5,
                 color="#27ae60",
                 fill=True,
@@ -1040,9 +1095,10 @@ def create_fra_boundary_map(
                 tooltip=f"Departure: {adep} (Flight {fid})",
             ).add_to(airports_group)
 
-        if "ades_lat" in f and "ades_lon" in f:
+        ades_lat, ades_lon = f.get("ades_lat"), f.get("ades_lon")
+        if _is_finite_coord(ades_lat) and _is_finite_coord(ades_lon):
             folium.CircleMarker(
-                location=[f["ades_lat"], f["ades_lon"]],
+                location=[float(ades_lat), float(ades_lon)],
                 radius=5,
                 color="#c0392b",
                 fill=True,

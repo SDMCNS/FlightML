@@ -174,19 +174,20 @@ def test_mcp_passenger_itinerary_tool():
 
 def test_find_best_period_seasonality_and_recency():
     """Verify intelligent seasonal and modernity matching for Eurocontrol periods."""
-    # November 2026 -> Closest modern autumn archive is 202510
+    # November 2026 -> Closest modern autumn archive matching November is 202411
     p_nov26, reason_nov26 = FlightDataset.find_best_period(target_date="2026-11-17")
-    assert p_nov26 == "202510"
-    assert "October 2025" in reason_nov26
+    assert p_nov26 == "202411"
+    assert "November" in reason_nov26
+    assert "2024" in reason_nov26
 
     # Exact calendar matches
     assert FlightDataset.find_best_period(target_date="2025-06-12")[0] == "202506"
     assert FlightDataset.find_best_period(target_date="2024-02-15")[0] == "202402"
     assert FlightDataset.find_best_period(target_date="2024-10-20")[0] == "202410"
 
-    # Future dates map to closest seasonal modern archive
-    assert FlightDataset.find_best_period(target_date="2026-07-20")[0] == "202506"
-    assert FlightDataset.find_best_period(target_date="2026-01-10")[0] == "202502"
+    # Future dates map to matching seasonal modern archive
+    assert FlightDataset.find_best_period(target_date="2026-07-20")[0] == "202507"
+    assert FlightDataset.find_best_period(target_date="2026-01-10")[0] == "202501"
 
     # Historical baseline
     assert FlightDataset.find_best_period(target_date="2016-11-05")[0] == "201611"
