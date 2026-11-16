@@ -139,93 +139,56 @@ In Cursor, go to **Settings** $\to$ **Features** $\to$ **MCP Servers** $\to$ **A
 
 ## 3. Tool Reference Catalog
 
-The FlightML MCP server exposes 9 specialized tools covering European air traffic operations:
+The FlightML FastMCP server exposes **35 specialized tools** returning structured JSON across European air traffic operations:
 
-### 1. `get_flight_details`
-Retrieves verified 4D radar telemetry for a specific flight by its Eurocontrol unique identifier (`ectrl_id`).
-- **Arguments**:
-  - `flight_id` (*str | int*, required): Unique flight ID (e.g. `'291262156'`).
-  - `period` (*str*, optional, default `'202510'`): Eurocontrol archive period.
-- **Returns**: JSON object containing ADEP, ADES, aircraft type, operator, registration tail (`ac_reg`), stage distance, delays, flight level, and actual/filed timestamps.
+### A. Core Flight Telemetry & Twins
+1. **`get_flight_details(flight_id, period)`**: Verified 4D radar telemetry (ADEP, ADES, type, operator, delays, FL, timestamps).
+2. **`search_flights(ades, adep, operator, date_str, limit, period)`**: Query and filter flights matching operational criteria.
+3. **`find_operational_twins(flight_id, top_k, period)`**: Retrieve nearest 128D Flight2Vec twin flights with cosine similarity ($\ge 0.98$) and domain explanations.
 
-### 2. `search_flights`
-Filters scheduled and operated flights by destination, origin, operator code, and date.
-- **Arguments**:
-  - `ades` (*str*, optional, default `'EGLL'`): Arrival airport ICAO.
-  - `adep` (*str*, optional): Departure airport ICAO.
-  - `operator` (*str*, optional): Airline operator ICAO (e.g. `'BAW'`, `'DLH'`).
-  - `date_str` (*str*, optional, default `'2025-10-15'`): Date (YYYY-MM-DD).
-  - `limit` (*int*, optional, default `10`): Max results (1–50).
-  - `period` (*str*, optional, default `'202510'`): Archive period.
-- **Returns**: JSON list of candidate flights matching the operational query.
+### B. Physics & Flight Efficiency (Eurocontrol PRU / ICAO GANP)
+4. **`get_pru_scorecard(flight_id, period)`**: Full ICAO GANP & Eurocontrol PRU scorecard (KPI04 KEP en-route horizontal inefficiency, KPI05 KEA actual en-route inefficiency, tactical ATC shortcut delta, KPI08 ASMA 40 NM terminal arrival holding, and KPI19 cruise level-capping).
+5. **`get_cdo_descent_profile(flight_id, period)`**: Continuous Descent Operations (CDO) compliance score, Top of Descent (TOD), low-altitude level segments (<10,000 ft), and noise/fuel penalties.
+6. **`get_cco_climb_profile(flight_id, period)`**: Continuous Climb Operations (CCO) compliance score, departure SID level-offs, and climb profile efficiency.
+7. **`get_fra_adherence(flight_id, period, direct_dct_tolerance_nm)`**: Free Route Airspace (FRA) adherence, DCT direct waypoint shortcuts, and mileage savings vs structured airway network.
+8. **`diagnose_flight_bottlenecks(flight_id, period)`**: 360-degree bottleneck diagnostic: departure surface delay, en-route ATFM re-routing, arrival terminal holding, and weather attribution.
 
-### 3. `find_operational_twins`
-Searches the 128D Flight2Vec hypersphere space to find identical and near-identical operational twin flights.
-- **Arguments**:
-  - `flight_id` (*str | int*, required): Target flight identifier.
-  - `top_k` (*int*, optional, default `5`): Number of twins to retrieve.
-  - `period` (*str*, optional, default `'202510'`): Archive period.
-- **Returns**: Cosine similarity scores ($\ge 0.98$), distance deltas, cruise flight level matches, and human-readable operational explanations for each match.
+### C. Route Economics & Eurocontrol Charges (€ EUR)
+9. **`get_flight_doc(flight_id, period, time_cost_eur_per_hr)`**: Total Direct Operating Cost ($\text{DOC} = \text{Fuel } € + \text{Crew/Time } € + \text{CRCO Charges } €$) and route charge avoidance incentive ratio (€/NM).
+10. **`get_crco_charges(flight_id, period)`**: Eurocontrol Central Route Charges Office (CRCO) En-Route Navigation Charges in Euros (€ EUR), Service Units ($d \times w$), distance factor, weight factor, and FIR billing zones.
+11. **`scan_route_charge_avoidance(period, min_flights, detour_nm_threshold, fee_saved_threshold_eur, limit)`**: Scan European network city pairs for systematic FIR route charge avoidance detours.
+12. **`get_fuel_and_emissions(flight_id, period, jet_a_price_eur_per_kg)`**: OpenAP kinematic fuel burn, ICAO engine emissions ($\text{CO}_2$, $\text{NO}_x$), and Jet-A expenditure in Euros (€ EUR).
+13. **`get_jet_fuel_prices(period)`**: Weekly European Jet-A spot fuel prices from IATA / Platts benchmarks in Euros (€/kg, €/tonne).
 
-### 4. `simulate_delay_contagion`
-Simulates spatio-temporal delay propagation from an airport disruption across European hubs using the Spatio-Temporal Graph WaveNet (ST-GNN) engine.
-- **Arguments**:
-  - `shock_origin` (*str*, optional, default `'EGLL'`): ICAO airport code.
-  - `injected_delay_min` (*float*, optional, default `60.0`): Delay shock in minutes.
-  - `shock_date` (*str*, optional, default `'2025-10-15'`): Event date.
-  - `shock_time_hour` (*int*, optional, default `10`): UTC start hour (0–23).
-  - `shock_duration_hours` (*float*, optional, default `2.0`): Event duration.
-- **Returns**: Runway saturation %, spare recovery capacity, multi-horizon delay escalation matrix ($t=0\text{h}, 1\text{h}, 2\text{h}, 4\text{h}, 6\text{h}$), ranked downstream vulnerable hubs, and physical turnaround airframe rotations transmitting reactionary delays.
+### D. Airspace, FIR Sectors & Conflicts
+14. **`get_fir_saturation(fir_id, date, period, threshold_pct, limit)`**: Hourly FIR airspace entry volume, capacity limits, peak utilization %, and ATFM delay severity.
+15. **`get_flight_fir_dwell(flight_id, period)`**: Flight-level sector-by-sector entry/exit timestamps, dwell durations, and dwell inefficiency delays.
+16. **`get_fra_boundary_rankings(period, min_flights, limit, cross_border_only)`**: Analyze European FIR boundary Free Route Airspace (FRA) routing inefficiencies, detect active cross-border Free Route Airspace implementations, and rank boundaries in descending order of priority for FRA rollout.
+17. **`diagnose_fra_boundary(boundary_pair, period)`**: Detailed operational diagnostic for an individual FIR boundary interface (e.g. `EGTTUIR <-> LFFFUIR`), including directional flow balance, 24-hour diurnal crossing congestion profile, and top impacted airlines.
+18. **`get_fra_worst_flights(boundary_pair, period, limit, max_distance_nm)`**: List the most detoured flights across a specific boundary interface vs direct Free Route Airspace geodesic benchmarks.
+19. **`forecast_fra_benefits(period, annual_growth_rate_pct, realization_rate_pct, scope, jet_a_price_eur_per_kg)`**: Multi-horizon long-term forecast (1, 5, 20 years) of accumulated crossings, detour NM avoided, Jet-A fuel conserved, CO₂ mitigated, and direct operating cost savings strictly in Euros (€ EUR).
+20. **`locate_fir(lat, lon, flight_level)`**: Determine which European FIR/UIR airspace sector contains a given 3D/4D coordinate.
+21. **`scan_airspace_conflicts(date, hour, horiz_nm, vert_fl, period, limit)`**: Scan European airspace for 4D radar proximity events (<5 NM, <1000 ft) and sector complexity index.
+22. **`estimate_radio_workload(airport_icao, date, period)`**: ATC VHF radio frequency transmission workload, peak communications load, and channel occupancy.
 
-### 5. `simulate_fir_closure`
-Models counterfactual tactical rerouting and economic disruption caused by a temporary Flight Information Region (FIR) closure.
-- **Arguments**:
-  - `target_fir` (*str*, optional, default `'LSASFIR'`): Closed FIR code (e.g. `'LSASFIR'`, `'EDUUUIR'`, `'LFFFFIR'`).
-  - `closure_date` (*str*, optional, default `'2025-10-15'`): Date of closure.
-  - `start_hour` (*int*, optional, default `10`): UTC start hour.
-  - `duration_hours` (*float*, optional, default `3.0`): Duration of closure.
-- **Returns**: Total flights impacted, rerouted flights count, detour nautical miles, extra fuel burned (tonnes), airline financial losses (€ EUR), and post-reopening bottleneck recovery backlog curve.
+### E. Airport Surface & Safety
+23. **`get_airport_taxi_out(airport_icao, date, period, min_flights, limit)`**: Airport surface taxi-out performance: unimpeded baseline duration (UTOT p20) vs actual off-block to takeoff time and excess queue delays (ATOT).
+24. **`get_flight_taxi_out(flight_id, period)`**: Single-flight taxi-out surface duration, unimpeded reference, excess minutes, and ICAO EDB v32B LTO idle emissions.
+25. **`calculate_runway_winds(airport, wind_dir, wind_speed, gust)`**: Headwind, crosswind, and tailwind components for all available runways at an airport.
+26. **`assess_runway_safety(flight_id, period)`**: Runway safety & operational wind limits: crosswind/tailwind limits, wet runway braking action code, and stopping distance margin.
+27. **`get_airport_capacity(airport_icao)`**: Nominal hourly runway movement capacity and operational profile.
 
-### 6. `simulate_marl_slot_gaming`
-Runs a Multi-Agent Reinforcement Learning (MARL) Air Traffic Flow Management (ATFM) simulation modeling strategic slot gaming and Nash equilibrium.
-- **Arguments**:
-  - `regulated_airport` (*str*, optional, default `'EGLL'`): Bottleneck airport.
-  - `capacity_cut_pct` (*float*, optional, default `40.0`): Capacity reduction %.
-  - `regulation_date` (*str*, optional, default `'2025-10-15'`): Regulation date.
-  - `start_hour` (*int*, optional, default `10`): Start hour (UTC).
-  - `duration_hours` (*float*, optional, default `3.0`): Regulation duration.
-  - `iterations` (*int*, optional, default `50`): Simulation iterations.
-- **Returns**: 10-step chronological decision log, infilled domain assumptions (connecting passengers, load factors, EU261 exposure, EASA crew duty limits), and per-airline net gains/losses balance sheets in Euros (€ EUR).
+### F. Network Contagion, Swaps & Simulations
+28. **`simulate_delay_contagion(shock_origin, injected_delay_min, shock_date, shock_time_hour, shock_duration_hours)`**: Spatio-Temporal Graph WaveNet (ST-GNN) delay propagation simulation across European hubs.
+29. **`simulate_fir_closure(target_fir, closure_date, start_hour, duration_hours)`**: Counterfactual tactical rerouting, detour nautical miles, extra fuel burn, and airline losses from closed airspace sectors.
+30. **`simulate_marl_slot_gaming(regulated_airport, capacity_cut_pct, regulation_date, start_hour, duration_hours, iterations)`**: Multi-Agent Reinforcement Learning (MARL) ATFM slot gaming and strategic airline auctioning.
+31. **`analyze_reactionary_delay(operator, start_date, end_date, period)`**: Rotational airframe delay propagation, turnaround buffer slack absorption, and downstream reactionary multiplier.
+32. **`optimize_tail_swaps(operator, airport_icao, date, period)`**: Hub tail swap optimizer to break reactionary delay chains and preserve connecting passengers.
+33. **`evaluate_contrail_climate_forcing(temperature_c, rh_ice_pct, flight_level, rh_water_pct, bypass_ratio)`**: Schmidt-Appleman criterion, persistent contrail ISSR formation, and radiative forcing ($mW/m^2$).
 
-### 7. `evaluate_contrail_climate_forcing`
-Evaluates contrail formation and climate warming using a Physics-Informed Neural Network (PINN) surrogate.
-- **Arguments**:
-  - `temperature_c` (*float*, optional, default `-54.0`): Static air temperature (°C).
-  - `rh_ice_pct` (*float*, optional, default `120.0`): Relative humidity over ice (%).
-  - `flight_level` (*float*, optional, default `360.0`): Cruising altitude (FL).
-  - `rh_water_pct` (*float*, optional, default `75.0`): Relative humidity over water (%).
-  - `bypass_ratio` (*float*, optional, default `8.5`): Engine bypass ratio.
-- **Returns**: Schmidt-Appleman criterion satisfaction, persistent ISSR formation, optical depth ($\tau$), instantaneous radiative forcing ($mW/m^2$), and climate forcing severity classification.
-
-### 8. `get_airport_capacity`
-Returns nominal hourly movement capacity and operational profile for a European airport.
-- **Arguments**:
-  - `airport_icao` (*str*, optional, default `'EGLL'`): 4-letter ICAO code.
-- **Returns**: Nominal hourly movements and runway configuration profile.
-
-### 9. `assess_passenger_itinerary`
-Evaluates multi-leg flight journey delay risk, transfer hub missed connection probability (Minimum Connection Time MCT), live 7-day meteorological forecast impact, EU261/UK261 passenger statutory compensation, and departure wave optimization for the general travelling public.
-- **Arguments**:
-  - `origin` (*str*, optional, default `'EINN'`): Departure airport ICAO code.
-  - `destination` (*str*, optional, default `'EBBR'`): Arrival airport ICAO code.
-  - `hub` (*str*, optional, default `''`): Transfer connection hub ICAO code (or empty string for direct flights).
-  - `day_of_week` (*str*, optional, default `'tuesday'`): Planned day of departure.
-  - `time_window` (*str*, optional, default `'morning'`): Departure wave (`morning`, `midday`, `afternoon`, `evening`).
-  - `scheduled_layover_min` (*int*, optional, default `75`): Scheduled transfer layover duration in minutes.
-  - `target_date` (*str*, optional): Target date `YYYY-MM-DD` or relative keyword (`today`, `tomorrow`, `next tuesday`).
-  - `period` (*str*, optional, default `'auto'`): Eurocontrol archive period (`auto` automatically matches the closest seasonal and most modern contemporary archive).
-  - `debug` (*bool*, optional, default `False`): Set `True` to include full diagnostic audit accounting of DuckDB SQL queries, sample historical records, NWP endpoints, and MCT formulas.
-- **Returns**: Leg-by-leg delay distributions (mean, median, P90, % delayed > 15m), live airport weather forecasts (wind, gusts, rain %, crosswind), hub missed connection probability, luggage transfer risk, EU261 statutory rights, departure wave comparison, actionable passenger recommendations, and optional `debug_audit` dictionary.
+### G. Predictive ML & Passenger Copilot
+34. **`predict_flight_delay(adep, ades, operator, market_segment, requested_fl, distance_nm, hour, day_of_week)`**: Gradient-boosted ML delay predictor estimating arrival delay minutes and risk level.
+35. **`assess_passenger_itinerary(origin, destination, hub, day_of_week, time_window, scheduled_layover_min, target_date, period, debug)`**: Multi-leg journey risk, transfer hub missed connection probability (MCT buffer vs weather), Heathrow T5 20m gate conformance cutoff, EU261/UK261 compensation rights (€250–€600), and departure wave optimization.
 
 ---
 

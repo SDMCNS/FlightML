@@ -182,6 +182,12 @@ class CorpusGenerator:
                 sample = self.template_tools.generate(self.rng, tool_ctx)
                 tool_samples.append(sample)
 
+        # Thoroughly shuffle/jumble samples so tracks are evenly interleaved
+        combined = list(zip(sft_samples, dpo_pairs))
+        self.rng.shuffle(combined)
+        if combined:
+            sft_samples, dpo_pairs = map(list, zip(*combined))
+
         # 3. Export to Files
         exporter = CorpusExporter(output_dir=output_dir, train_split=train_split)
         export_summary: dict[str, Any] = {}

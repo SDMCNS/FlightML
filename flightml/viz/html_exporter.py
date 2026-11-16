@@ -37,6 +37,12 @@ from flightml.geo.conflict_scanner import (
     scan_airspace_proximity_events,
 )
 from flightml.geo.fra_analyzer import analyze_flight_fra_adherence
+from flightml.geo.fra_boundary_engine import (
+    analyze_fir_boundary_inefficiencies,
+    calculate_fra_long_term_forecast,
+    get_worst_flights_for_boundary,
+    interpolate_great_circle,
+)
 from flightml.geo.rnp_navaid_analyzer import (
     analyze_flight_navaids_and_rnp,
     query_unified_navaids,
@@ -55,10 +61,15 @@ REPORT_PAGE_KEYS = [
     "what_if_scenarios",
     "maps_navigation",
     "general_economics",
+    "longitudinal_trends",
     "airspace_overview",
+    "fra_boundaries",
     "trajectory_rnp",
     "global_navaids",
     "flight_performance_eco",
+    "vertical_cdo_cco",
+    "delay_diagnostics",
+    "fuel_carbon",
     "corridor_twin_benchmarks",
     "what_if_stress_tests",
     "macro_reference",
@@ -66,17 +77,22 @@ REPORT_PAGE_KEYS = [
 ]
 
 REPORT_PAGE_TITLES: dict[str, str] = {
-    # 5 Master Architectural Categories
+    # Master Architectural Categories
     "single_flight": "✈️ Single Flight & Aircraft Analysis Report",
     "system_summary": "🌐 System-Level Summary & Analysis Report",
+    "longitudinal_trends": "📈 Longitudinal & Predictive Trends Report",
     "what_if_scenarios": "🔮 What-If Scenarios & Operations Research Report",
     "maps_navigation": "🗺️ Information & Aeronautical Maps Report",
     "general_economics": "💶 General Aviation & Route Economics Report (€)",
     # Detailed sub-reports & bundle
     "airspace_overview": "🌐 Airspace & Sector Saturation Report",
+    "fra_boundaries": "🌐 Free Route Airspace (FRA) Boundary Analysis & Forecaster Report",
     "trajectory_rnp": "🗺️ 4D Trajectory, Active Navaids & RNP Report",
     "global_navaids": "📡 Global Radio Navaids World Map Report",
     "flight_performance_eco": "📐 Flight Performance, Delay & Eco (€) Report",
+    "vertical_cdo_cco": "📉 Vertical Profile & CDO/CCO Analysis Report",
+    "delay_diagnostics": "🩺 Delay Diagnostics & Runway Safety Report",
+    "fuel_carbon": "🌱 Fuel, Carbon & Surface LTO Report",
     "corridor_twin_benchmarks": "📊 Corridor & Twin-Flight Benchmarks Report",
     "what_if_stress_tests": "🔮 What-If Simulations & Stress Tests Report",
     "macro_reference": "📈 Macro Evolution & Methodology Reference Report",
@@ -956,6 +972,278 @@ def _build_macro_reference_section(ds: FlightDataset) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Section 8: Free Route Airspace (FRA) Boundary Bottlenecks & Long-Term Forecast
+# ---------------------------------------------------------------------------
+def _build_fra_boundary_section(
+    ds: FlightDataset,
+    boundary_pair: str | None = None,
+    min_flights: int = 500,
+    annual_growth_rate: float = 0.02,
+    realization_rate: float = 0.85,
+    jet_a_eur_per_kg: float = 0.6421,
+    fuel_growth_opt: float = 0.015,
+    fuel_growth_med: float = 0.035,
+    fuel_growth_shock: float = 0.065,
+) -> str:
+    """Build the Free Route Airspace (FRA) boundary inefficiencies and long-term forecast section."""
+    fra_rep = analyze_fir_boundary_inefficiencies(
+        dataset=ds,
+        min_flights=min_flights,
+        limit=60,
+        cross_border_only=True,
+    )
+
+    baseline_year = ds.period[:4] if (ds and ds.period and len(ds.period) >= 4) else "2025"
+    forecast = calculate_fra_long_term_forecast(
+        boundary_metrics=fra_rep.boundaries,
+        dataset=ds,
+        year_baseline=baseline_year,
+        use_seasonal_synthesis=True,
+        annual_growth_rate=annual_growth_rate,
+        realization_rate=realization_rate,
+        jet_a_eur_per_kg=jet_a_eur_per_kg,
+        fuel_growth_optimistic=fuel_growth_opt,
+        fuel_growth_median=fuel_growth_med,
+        fuel_growth_shock=fuel_growth_shock,
+    )
+
+    primes = [b for b in fra_rep.boundaries if "PRIME" in b.fra_classification]
+    likely = [b for b in fra_rep.boundaries if "LIKELY" in b.fra_classification]
+
+    sb = forecast.get("seasonal_breakdown") or {}
+    annual_base = sb.get("annual_blended") or {}
+    annual_crossings = annual_base.get("annual_crossings") or (sum(b.total_crossings for b in primes) * 4)
+    annual_fuel_t = annual_base.get("annual_fuel_saved_tonnes") or (fra_rep.total_network_excess_fuel_tonnes * 4 * realization_rate)
+    annual_co2_t = annual_base.get("annual_co2_mitigated_tonnes") or (annual_fuel_t * 3.16)
+    annual_cost_eur = annual_base.get("annual_cost_saved_eur") or (annual_fuel_t * 1000.0 * jet_a_eur_per_kg)
+    net_flts = forecast.get("network_total_flights", 11124247)
+    co2_mit_dev = forecast.get("co2_mitigation_deviation_pct", 0.0)
+    detour_dev = forecast.get("detour_deviation_pct", 0.0)
+
+    kpis = [
+        ("Eurocontrol Baseline", f"{net_flts:,} Flights", f"Total European flights in {baseline_year} baseline (+4.0% YoY)"),
+        ("Scoped Boundary Crossings", f"{annual_crossings:,} Crossings", f"{annual_crossings/1e6:.2f}M crossings generated across {baseline_year} flights ({len(primes)} prime bottlenecks)"),
+        ("Cross-Border Boundaries", f"{fra_rep.cross_border_boundaries_count:,}", f"From {fra_rep.total_boundaries_analyzed:,} total pairs"),
+        ("Prime Bottlenecks", f"{fra_rep.prime_candidate_count:,}", "Immediate FRA implementation priority"),
+        ("Likely Operating FRA", f"{fra_rep.likely_fra_boundaries_count:,}", "Harmonized cross-border directness"),
+        ("CO₂ Deviation Mitigated", f"-{co2_mit_dev:.2f}%", f"+{detour_dev:.2f}% excess detour deviation avoided"),
+        ("Synthesized Fuel Saved", f"{annual_fuel_t:,.0f} tonnes/yr", f"{annual_co2_t:,.0f}t gross CO₂ mitigated annually"),
+        ("Annual Baseline Value (€)", f"€{annual_cost_eur:,.0f} EUR", f"At baseline €{jet_a_eur_per_kg:.4f}/kg Jet-A"),
+    ]
+
+    # Plot 1: Prime Candidates Inefficiencies Bar Chart
+    fig1, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.5, 5.0), gridspec_kw={"width_ratios": [1.0, 1.0]})
+    display_primes = primes[:8] if primes else fra_rep.boundaries[:8]
+    pairs = [p.boundary_pair for p in display_primes]
+    detours = [p.mean_detour_nm for p in display_primes]
+    costs = [p.excess_cost_eur / 1e6 for p in display_primes]
+
+    ax1.barh(pairs[::-1], detours[::-1], color="#e74c3c", alpha=0.88)
+    ax1.set_xlabel("Mean Inefficiency Detour (NM per Crossing)")
+    ax1.set_title("Prime Candidate Inefficiency Detour (NM)", fontweight="bold")
+    ax1.grid(True, axis="x", linestyle="--", alpha=0.4)
+
+    ax2.barh(pairs[::-1], costs[::-1], color="#27ae60", alpha=0.88)
+    ax2.set_xlabel("Annual Inefficiency Cost (€ Millions EUR)")
+    ax2.set_title("Annual Economic Savings Opportunity (€M EUR)", fontweight="bold")
+    ax2.grid(True, axis="x", linestyle="--", alpha=0.4)
+    fig1.tight_layout()
+    chart1_html = _fig_to_base64_img(
+        fig1,
+        f"Figure 1: Prime Candidate FIR Boundary Routing Detours & Economic Inefficiency Penalties ({ds.period})",
+    )
+
+    # Plot 2: 20-Year Compounding Savings & Fuel Price Projections
+    prog = forecast.get("yearly_progression") or []
+    chart2_html = ""
+    if prog:
+        fig2, (ax3, ax4) = plt.subplots(1, 2, figsize=(13.5, 4.8), gridspec_kw={"width_ratios": [1.2, 0.9]})
+        years = [p["year"] for p in prog]
+        ax3.plot(years, [p["cum_savings_constant_eur"] / 1e6 for p in prog], label=f"Constant Fuel (€{jet_a_eur_per_kg:.4f}/kg)", color="#7f8c8d", linewidth=2.0, linestyle="--")
+        ax3.plot(years, [p["cum_savings_optimistic_eur"] / 1e6 for p in prog], label=f"Optimistic (+{fuel_growth_opt*100:.1f}%/yr)", color="#27ae60", linewidth=2.2)
+        ax3.plot(years, [p["cum_savings_median_eur"] / 1e6 for p in prog], label=f"Median Expected (+{fuel_growth_med*100:.1f}%/yr)", color="#f39c12", linewidth=2.5)
+        ax3.plot(years, [p["cum_savings_shock_eur"] / 1e6 for p in prog], label=f"Shock Pricing (+{fuel_growth_shock*100:.1f}%/yr)", color="#c0392b", linewidth=2.2)
+        ax3.set_xlabel("Years Ahead (1 to 20)")
+        ax3.set_ylabel("Cumulative Benefit (€ Millions EUR)")
+        ax3.set_title("20-Year Cumulative FRA Benefits across Energy Scenarios", fontweight="bold")
+        ax3.grid(True, linestyle="--", alpha=0.4)
+        ax3.legend(loc="upper left", fontsize=8.5, framealpha=0.9)
+
+        ax4.plot(years, [p["price_constant_eur"] for p in prog], label="Constant Baseline", color="#7f8c8d", linestyle="--", linewidth=1.8)
+        ax4.plot(years, [p["price_optimistic_eur"] for p in prog], label=f"Optimistic (+{fuel_growth_opt*100:.1f}%/yr)", color="#27ae60", linewidth=2.0)
+        ax4.plot(years, [p["price_median_eur"] for p in prog], label=f"Median (+{fuel_growth_med*100:.1f}%/yr)", color="#f39c12", linewidth=2.3)
+        ax4.plot(years, [p["price_shock_eur"] for p in prog], label=f"Shock (+{fuel_growth_shock*100:.1f}%/yr)", color="#c0392b", linewidth=2.0)
+        ax4.set_xlabel("Years Ahead (1 to 20)")
+        ax4.set_ylabel("Jet-A Price (€ / kg)")
+        ax4.set_title("Forward Fuel Price Escalation Paths (€/kg)", fontweight="bold")
+        ax4.grid(True, linestyle="--", alpha=0.4)
+        ax4.legend(loc="upper left", fontsize=8.5, framealpha=0.9)
+        fig2.tight_layout()
+        chart2_html = _fig_to_base64_img(
+            fig2,
+            "Figure 2: 20-Year Cumulative Economic Savings & Forward Fuel Price Escalation Regimes",
+        )
+
+    # Plot 3: Worst Flights Dog-Leg Radar Trajectory Visualizer Map
+    chart3_html = ""
+    target_pair = boundary_pair or (display_primes[0].boundary_pair if display_primes else None)
+    if target_pair:
+        worst_flights = get_worst_flights_for_boundary(ds, target_pair, limit=6, include_trajectories=True)
+        if worst_flights:
+            fig3, ax_map = plt.subplots(figsize=(13.0, 5.4))
+            ax_map.set_facecolor("#eef5f9")
+            palette = ["#e74c3c", "#8e44ad", "#d35400", "#16a085", "#2980b9", "#2c3e50"]
+            for idx, flt in enumerate(worst_flights):
+                traj = flt.get("trajectory") or []
+                if not traj:
+                    continue
+                lats = [pt[0] for pt in traj]
+                lons = [pt[1] for pt in traj]
+                c = palette[idx % len(palette)]
+                lbl = f"{flt.get('callsign', 'FLT')} (+{flt.get('excess_detour_nm', 0):.0f}nm | €{flt.get('excess_fuel_cost_eur', 0):.0f})"
+                ax_map.plot(lons, lats, color=c, linewidth=2.2, alpha=0.85, label=lbl)
+                gc = interpolate_great_circle(lats[0], lons[0], lats[-1], lons[-1], num_points=20)
+                ax_map.plot([p[1] for p in gc], [p[0] for p in gc], color=c, linestyle="--", linewidth=1.0, alpha=0.55)
+                ax_map.scatter([lons[0]], [lats[0]], color="#27ae60", s=40, zorder=5)
+                ax_map.scatter([lons[-1]], [lats[-1]], color="#c0392b", s=40, zorder=5)
+                ax_map.annotate(flt.get("adep", ""), (lons[0], lats[0]), fontsize=7.5, fontweight="bold", xytext=(3, 3), textcoords="offset points")
+                ax_map.annotate(flt.get("ades", ""), (lons[-1], lats[-1]), fontsize=7.5, fontweight="bold", xytext=(3, 3), textcoords="offset points")
+
+            ax_map.grid(True, linestyle="--", alpha=0.4)
+            ax_map.set_xlabel("Longitude (°E)")
+            ax_map.set_ylabel("Latitude (°N)")
+            ax_map.set_title(
+                f"Worst Detour Trajectories vs. Direct Chords Across Bottleneck Boundary: {target_pair}",
+                fontweight="bold",
+            )
+            h, l = ax_map.get_legend_handles_labels()
+            if h and l:
+                ax_map.legend(loc="best", fontsize=8.0, framealpha=0.92)
+            fig3.tight_layout()
+            chart3_html = _fig_to_base64_img(
+                fig3,
+                f"Figure 3: Worst Detoured Radar Tracks vs. Direct Geodesic Lines across {target_pair}",
+            )
+
+    # Tables
+    primes_df = pd.DataFrame(
+        [
+            {
+                "FIR Pair": b.boundary_pair,
+                "Countries": f"{b.country_a} ↔ {b.country_b}",
+                "Crossings": f"{b.total_crossings:,}",
+                "Mean Detour (NM)": f"{b.mean_detour_nm:.1f}",
+                "Directness": f"{b.directness_index_pct:.1f}%",
+                "Detour Dev (%)": f"+{b.detour_deviation_pct:.2f}%",
+                "CO₂ Excess Dev (%)": f"+{b.co2_deviation_pct:.2f}%",
+                "Fuel Penalty (t)": f"{b.excess_fuel_tonnes:.1f}",
+                "CO₂ Penalty (t)": f"{b.excess_co2_tonnes:.1f}",
+                "Excess Cost (€)": f"€{b.excess_cost_eur:,.0f}",
+                "Priority Score": f"{b.fra_priority_score:.1f}",
+            }
+            for b in primes
+        ]
+    )
+
+    likely_df = pd.DataFrame(
+        [
+            {
+                "FIR Pair": b.boundary_pair,
+                "Countries": f"{b.country_a} ↔ {b.country_b}",
+                "Crossings": f"{b.total_crossings:,}",
+                "Mean Detour (NM)": f"{b.mean_detour_nm:.1f}",
+                "Directness": f"{b.directness_index_pct:.1f}%",
+                "Detour Dev (%)": f"+{b.detour_deviation_pct:.2f}%",
+                "Classification": "🟢 Likely Operating FRA",
+            }
+            for b in likely[:15]
+        ]
+    )
+
+    hz_list = []
+    for h_key, h_data in forecast.get("horizons", {}).items():
+        cum_flts = h_data.get("cumulative_network_flights", 0)
+        hz_list.append(
+            {
+                "Horizon": f"{h_data.get('horizon_years')} Year(s)",
+                "Traffic Mult": f"{h_data.get('traffic_multiplier', 1.0):.3f}x",
+                "European Flights": f"~{cum_flts/1e6:.1f}M flts" if cum_flts else "N/A",
+                "Boundary Crossings": f"{h_data.get('cumulative_crossings', 0):,}",
+                "Detour Avoided": f"{h_data.get('cumulative_detour_nm_avoided', 0):,.0f} NM",
+                "Fuel Saved (t)": f"{h_data.get('cumulative_fuel_saved_tonnes', 0):,.0f}",
+                "Gross CO₂ Mitigated": f"{h_data.get('cumulative_co2_mitigated_tonnes', 0):,.0f} t",
+                "Net Lifecycle CO₂": f"{h_data.get('cumulative_net_lifecycle_co2_tonnes', 0):,.0f} t",
+                "CO₂ Mit Dev (%)": f"-{h_data.get('co2_mitigation_deviation_pct', 0.0):.2f}%",
+                "SAF Blend Share": f"{h_data.get('saf_mandate_pct', 0.0):.1f}% (-{h_data.get('lifecycle_carbon_intensity_reduction_pct', 0.0):.1f}% intensity)",
+                "Constant Fuel (€)": f"€{h_data.get('savings_constant_eur', 0):,.0f}",
+                "Optimistic (+1.5%/yr)": f"€{h_data.get('savings_optimistic_eur', 0):,.0f}",
+                "Median (+3.5%/yr)": f"€{h_data.get('savings_median_eur', 0):,.0f}",
+                "Shock (+6.5%/yr)": f"€{h_data.get('savings_shock_eur', 0):,.0f}",
+            }
+        )
+    hz_df = pd.DataFrame(hz_list)
+
+    month_df = pd.DataFrame(forecast.get("eurocontrol_monthly_breakdown", []))
+    if not month_df.empty:
+        month_df = month_df.rename(
+            columns={
+                "month_num": "Month #",
+                "month_name": "Month",
+                "official_flights": "Eurocontrol Flights",
+                "seasonal_cluster": "Seasonal Synthesis Cluster",
+                "anchor_represented": "Archive Anchor",
+            }
+        )
+
+    ranked_df = pd.DataFrame(
+        [
+            {
+                "Rank": b.priority_rank,
+                "FIR Boundary Pair": b.boundary_pair,
+                "Countries": f"{b.country_a} ↔ {b.country_b}",
+                "Crossings": f"{b.total_crossings:,}",
+                "Mean Detour (NM)": f"{b.mean_detour_nm:.1f}",
+                "Directness": f"{b.directness_index_pct:.1f}%",
+                "Detour Dev (%)": f"+{b.detour_deviation_pct:.2f}%",
+                "Classification": b.fra_classification,
+                "Priority Score": f"{b.fra_priority_score:.1f}",
+            }
+            for b in fra_rep.boundaries[:25]
+        ]
+    )
+
+    return f"""
+    <section class="report-section">
+        <h2>🌐 Free Route Airspace (FRA) Boundary Efficiency Analysis &amp; Long-Term Forecaster</h2>
+        <p>
+            Deterministic evaluation of Flight Information Region (FIR) boundary interfaces across European airspace.
+            Reconciles full 12-month Eurocontrol network traffic ({net_flts:,} flights in {baseline_year}) and tracks lateral routing
+            detours, directness indices, and exact percentage CO₂ deviations.
+        </p>
+        {_kpi_grid_html(kpis)}
+        {chart1_html}
+        <h3>🚨 Prime Candidates for Immediate Cross-Border FRA Implementation</h3>
+        {_df_to_html_table(primes_df)}
+        {chart2_html}
+        <h3>💰 Long-Term Compounding Benefit Horizons (1, 5, 20 Years) across Fuel Escalation Pathways</h3>
+        <p class="muted-note">
+            Calculated at {annual_growth_rate*100:.1f}% annual traffic growth and {realization_rate*100:.0f}% directness realization efficiency.
+            Tracks both Gross Tailpipe CO₂ and Net Lifecycle CO₂ under EU ReFuelEU Aviation SAF blending mandates (2% in 2025 -> 42% in 2045).
+            Energy pathways: Optimistic (+{fuel_growth_opt*100:.1f}%/yr), Median Expected ReFuelEU/ETS (+{fuel_growth_med*100:.1f}%/yr), and Shock Pricing (+{fuel_growth_shock*100:.1f}%/yr).
+        </p>
+        {_df_to_html_table(hz_df)}
+        <h3>📅 Official Eurocontrol Monthly Flight Statistics &amp; Seasonal Synthesis ({baseline_year})</h3>
+        {_df_to_html_table(month_df) if not month_df.empty else ""}
+        {chart3_html}
+        <h3>🟢 Likely Operating Cross-Border FRA (Harmonized Directness)</h3>
+        {_df_to_html_table(likely_df)}
+        <h3>🏆 Top 25 FIR Boundary Inefficiency League Table</h3>
+        {_df_to_html_table(ranked_df, max_rows=25)}
+    </section>
+    """
+
+
+# ---------------------------------------------------------------------------
 # Master Static HTML Report Generator
 # ---------------------------------------------------------------------------
 def generate_static_html_report(
@@ -981,6 +1269,14 @@ def generate_static_html_report(
     gdp_airport: str = "EGLL",
     gdp_aar: int = 25,
     gdp_date: str | None = None,
+    fra_boundary_pair: str | None = None,
+    fra_min_flights: int = 500,
+    fra_annual_growth: float = 0.02,
+    fra_realization: float = 0.85,
+    fra_fuel_price: float = 0.6421,
+    fra_fuel_opt: float = 0.015,
+    fra_fuel_med: float = 0.035,
+    fra_fuel_shock: float = 0.065,
     output_path: Path | str | None = None,
 ) -> str:
     """
@@ -998,8 +1294,9 @@ def generate_static_html_report(
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     sections: list[str] = []
-    # 5 Master Architectural Categories mapping
-    if page_key in ("single_flight", "trajectory_rnp", "flight_performance_eco", "full_executive_bundle"):
+
+    # 1. Single Flight Views
+    if page_key in ("single_flight", "trajectory_rnp", "full_executive_bundle"):
         sections.append(
             _build_trajectory_rnp_section(
                 ds,
@@ -1008,12 +1305,42 @@ def generate_static_html_report(
                 nav_type_filter=nav_type_filter,
             )
         )
+
+    if page_key in (
+        "single_flight",
+        "flight_performance_eco",
+        "vertical_cdo_cco",
+        "delay_diagnostics",
+        "fuel_carbon",
+        "full_executive_bundle",
+    ):
         sections.append(_build_flight_performance_eco_section(ds, flight_id=int(flight_id)))
 
+    # 2. System-Level Airspace Views
     if page_key in ("system_summary", "airspace_overview", "full_executive_bundle"):
         sections.append(_build_airspace_overview_section(ds, hour_utc=hour_utc))
+
+    # 3. Free Route Airspace (FRA) Boundary Views
+    if page_key in ("system_summary", "fra_boundaries", "full_executive_bundle"):
+        sections.append(
+            _build_fra_boundary_section(
+                ds,
+                boundary_pair=fra_boundary_pair,
+                min_flights=fra_min_flights,
+                annual_growth_rate=fra_annual_growth,
+                realization_rate=fra_realization,
+                jet_a_eur_per_kg=fra_fuel_price,
+                fuel_growth_opt=fra_fuel_opt,
+                fuel_growth_med=fra_fuel_med,
+                fuel_growth_shock=fra_fuel_shock,
+            )
+        )
+
+    # 4. Macro Period Evolution & Longitudinal Trends
+    if page_key in ("system_summary", "macro_reference", "longitudinal_trends", "full_executive_bundle"):
         sections.append(_build_macro_reference_section(ds))
 
+    # 5. What-If Scenarios & Operations Research
     if page_key in ("what_if_scenarios", "what_if_stress_tests", "full_executive_bundle"):
         sections.append(
             _build_what_if_stress_section(
@@ -1026,6 +1353,7 @@ def generate_static_html_report(
             )
         )
 
+    # 6. Aeronautical Maps & Navigation
     if page_key in ("maps_navigation", "global_navaids", "full_executive_bundle"):
         sections.append(
             _build_global_navaids_section(
@@ -1038,6 +1366,7 @@ def generate_static_html_report(
             )
         )
 
+    # 7. Route & Corridor Economics
     if page_key in ("general_economics", "corridor_twin_benchmarks", "full_executive_bundle"):
         sections.append(
             _build_corridor_twin_section(
@@ -1048,6 +1377,27 @@ def generate_static_html_report(
                 rec_adep=rec_adep,
                 rec_ades=rec_ades,
                 rec_op=rec_op,
+            )
+        )
+
+    # Robust Safety Fallback: Never return an empty report body!
+    if not sections:
+        sections.append(
+            f'<section class="report-section"><h2>📋 Operational Report Overview — {html.escape(title)}</h2>'
+            f'<p>Report generated for period <b>{html.escape(ds.period)}</b>. Key view: <code>{html.escape(page_key)}</code>.</p></section>'
+        )
+        sections.append(_build_airspace_overview_section(ds, hour_utc=hour_utc))
+        sections.append(
+            _build_fra_boundary_section(
+                ds,
+                boundary_pair=fra_boundary_pair,
+                min_flights=fra_min_flights,
+                annual_growth_rate=fra_annual_growth,
+                realization_rate=fra_realization,
+                jet_a_eur_per_kg=fra_fuel_price,
+                fuel_growth_opt=fra_fuel_opt,
+                fuel_growth_med=fra_fuel_med,
+                fuel_growth_shock=fra_fuel_shock,
             )
         )
 

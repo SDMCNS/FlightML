@@ -843,3 +843,244 @@ def create_flight_fir_charge_map(
 
     return m
 
+
+def create_fra_boundary_map(
+    boundary_pair: str,
+    worst_flights: list[dict[str, Any]],
+    fir_polygons: dict[str, list[tuple[float, float]]] | None = None,
+    output_html_path: Path | str | None = None,
+) -> folium.Map:
+    """
+    Generate an interactive Leaflet/Folium map visualizing the worst flights across a FIR boundary:
+    - Shaded bounding FIR airspace sectors (semi-transparent polygons with distinct borders).
+    - Actual radar flight paths (solid color-coded lines, highlighting severe dog-leg detours).
+    - Direct Free Route Airspace (FRA) benchmark paths (dashed emerald green geodesic chords).
+    - Departure (ADEP) and Arrival (ADES) airport circle pins.
+    - Interactive tooltips and popups detailing detour NM, excess fuel burn (kg), and penalty (€ EUR).
+    - Floating legend card and Folium LayerControl.
+    """
+    parts = [p.strip() for p in boundary_pair.split("<->")]
+    fir_a = parts[0] if len(parts) >= 1 else "FIR-A"
+    fir_b = parts[1] if len(parts) >= 2 else "FIR-B"
+
+    # Compute bounding center
+    all_lats: list[float] = []
+    all_lons: list[float] = []
+
+    if fir_polygons:
+        for pts in fir_polygons.values():
+            for lat, lon in pts:
+                all_lats.append(lat)
+                all_lons.append(lon)
+
+    for f in worst_flights:
+        for pt in f.get("trajectory_points", []):
+            all_lats.append(pt["latitude"])
+            all_lons.append(pt["longitude"])
+        if "adep_lat" in f and "adep_lon" in f:
+            all_lats.append(f["adep_lat"])
+            all_lons.append(f["adep_lon"])
+        if "ades_lat" in f and "ades_lon" in f:
+            all_lats.append(f["ades_lat"])
+            all_lons.append(f["ades_lon"])
+
+    if all_lats and all_lons:
+        center_lat = float(sum(all_lats) / len(all_lats))
+        center_lon = float(sum(all_lons) / len(all_lons))
+    else:
+        center_lat, center_lon = 48.5, 4.0
+
+    m = folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=5,
+        tiles=None,
+    )
+
+    # 1. Open tile layers
+    folium.TileLayer(
+        tiles="https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+        attr="&copy; OpenStreetMap contributors, Tiles style by Humanitarian OpenStreetMap Team hosted by OpenStreetMap France",
+        name="Humanitarian (Unblocked)",
+        subdomains="abc",
+        show=True,
+        control=True,
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png",
+        attr="&copy; OpenStreetMap France & OpenStreetMap contributors",
+        name="OSM France (Unblocked)",
+        subdomains="abc",
+        show=False,
+        control=True,
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}",
+        attr="USGS The National Map (Public Domain)",
+        name="USGS Topo (Unblocked)",
+        show=False,
+        control=True,
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+        attr="Map data: &copy; OpenStreetMap contributors, SRTM | Map style: &copy; OpenTopoMap",
+        name="OpenTopoMap",
+        subdomains="abc",
+        show=False,
+        control=True,
+    ).add_to(m)
+
+    # 2. Airspace FIR Sectors
+    fir_group = folium.FeatureGroup(name="Airspace FIR Boundaries", show=True).add_to(m)
+    if fir_polygons:
+        colors = {fir_a: ("#2980b9", "#3498db"), fir_b: ("#d35400", "#e67e22")}
+        for fid, poly in fir_polygons.items():
+            border_c, fill_c = colors.get(fid, ("#7f8c8d", "#bdc3c7"))
+            folium.Polygon(
+                locations=poly,
+                color=border_c,
+                weight=2.5,
+                fill=True,
+                fill_color=fill_c,
+                fill_opacity=0.12,
+                dash_array="5, 5",
+                tooltip=f"FIR Airspace Sector: {fid}",
+                popup=folium.Popup(f"<b>FIR Airspace Sector</b><br>{fid}", max_width=250),
+            ).add_to(fir_group)
+
+    # 3. Direct Free Route Airspace Paths (Geodesic Chords)
+    fra_group = folium.FeatureGroup(name="Direct Free Route (FRA) Chords", show=True).add_to(m)
+    for f in worst_flights:
+        fra_pts = f.get("fra_direct_path", [])
+        if fra_pts:
+            folium.PolyLine(
+                locations=fra_pts,
+                color="#27ae60",
+                weight=2.5,
+                dash_array="7, 7",
+                opacity=0.85,
+                tooltip=f"Direct FRA Benchmark: {f['adep']} ➔ {f['ades']} ({f['great_circle_nm']:.0f} NM)",
+            ).add_to(fra_group)
+
+    # 4. Actual Radar Trajectories (Worst Inefficient Flights)
+    traj_group = folium.FeatureGroup(name="Actual Radar Trajectories (Severe Detour)", show=True).add_to(m)
+    airports_group = folium.FeatureGroup(name="Airports (ADEP / ADES)", show=True).add_to(m)
+
+    palette = [
+        "#e74c3c", "#9b59b6", "#e67e22", "#16a085", "#2980b9",
+        "#d35400", "#c0392b", "#8e44ad", "#1abc9c", "#34495e"
+    ]
+
+    total_detour_nm = sum(f.get("detour_nm", 0.0) for f in worst_flights)
+    total_fuel_tonnes = sum(f.get("excess_fuel_tonnes", 0.0) for f in worst_flights)
+    total_cost_eur = sum(f.get("excess_cost_eur", 0.0) for f in worst_flights)
+    total_co2_tonnes = sum(f.get("excess_co2_tonnes", 0.0) for f in worst_flights)
+
+    for idx, f in enumerate(worst_flights):
+        col = palette[idx % len(palette)]
+        rank = f.get("rank", idx + 1)
+        fid = f["ectrl_id"]
+        adep = f["adep"]
+        ades = f["ades"]
+        op = f["ac_operator"]
+        ac = f["ac_type"]
+        reg = f.get("ac_reg", "")
+        reg_str = f" ({reg})" if reg and reg != "nan" else ""
+        detour = f["detour_nm"]
+        detour_pct = f["detour_pct"]
+        act_dist = f["actual_distance_nm"]
+        gc_dist = f["great_circle_nm"]
+        cost = f["excess_cost_eur"]
+        fuel_t = f["excess_fuel_tonnes"]
+        co2_t = f["excess_co2_tonnes"]
+
+        pts = [(pt["latitude"], pt["longitude"]) for pt in f.get("trajectory_points", [])]
+        if pts:
+            tooltip_txt = (
+                f"#{rank} {adep} ➔ {ades} | Flight {fid} [{op} {ac}] | "
+                f"Detour: +{detour:.1f} NM (+{detour_pct:.1f}%) | "
+                f"Waste: €{cost:,.0f} EUR"
+            )
+            popup_html = f"""
+            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 12px; min-width: 220px;">
+                <div style="font-size: 13.5px; font-weight: bold; color: {col}; margin-bottom: 4px;">
+                    Flight {fid} (#{rank})
+                </div>
+                <b>Route:</b> {adep} &rarr; {ades}<br>
+                <b>Operator:</b> {op} | <b>Aircraft:</b> {ac}{reg_str}<br>
+                <hr style="margin: 5px 0; border: 0; border-top: 1px solid #e0e0e0;">
+                <b>Actual Distance:</b> <b>{act_dist:.0f} NM</b><br>
+                <b>Direct Geodesic:</b> <b>{gc_dist:.0f} NM</b><br>
+                <span style="color: #c0392b; font-weight: bold;">Routing Detour: +{detour:.1f} NM (+{detour_pct:.1f}%)</span><br>
+                <b>Excess Fuel:</b> <b>{fuel_t:.2f} tonnes</b> ({f.get('excess_fuel_kg', 0):.0f} kg)<br>
+                <b>Operating Cost Penalty:</b> <span style="color: #c0392b; font-weight: bold;">€{cost:,.2f} EUR</span><br>
+                <b>Excess CO₂:</b> <b>{co2_t:.2f} tonnes</b>
+            </div>
+            """
+            folium.PolyLine(
+                locations=pts,
+                color=col,
+                weight=3.5,
+                opacity=0.9,
+                tooltip=tooltip_txt,
+                popup=folium.Popup(popup_html, max_width=300),
+            ).add_to(traj_group)
+
+        # Mark ADEP & ADES
+        if "adep_lat" in f and "adep_lon" in f:
+            folium.CircleMarker(
+                location=[f["adep_lat"], f["adep_lon"]],
+                radius=5,
+                color="#27ae60",
+                fill=True,
+                fill_color="#2ecc71",
+                fill_opacity=0.9,
+                tooltip=f"Departure: {adep} (Flight {fid})",
+            ).add_to(airports_group)
+
+        if "ades_lat" in f and "ades_lon" in f:
+            folium.CircleMarker(
+                location=[f["ades_lat"], f["ades_lon"]],
+                radius=5,
+                color="#c0392b",
+                fill=True,
+                fill_color="#e74c3c",
+                fill_opacity=0.9,
+                tooltip=f"Destination: {ades} (Flight {fid})",
+            ).add_to(airports_group)
+
+    folium.LayerControl(position="topright", collapsed=True).add_to(m)
+
+    # Floating Summary Card in bottom-left
+    legend_html = f"""
+    <div style="position: fixed; bottom: 20px; left: 15px; max-width: 440px;
+                background-color: white; border: 2px solid #bdc3c7; border-radius: 8px;
+                z-index: 9999; font-size: 12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                padding: 10px 14px; box-shadow: 2px 2px 8px rgba(0,0,0,0.22);">
+        <div style="font-size: 13.5px; font-weight: bold; color: #2c3e50; margin-bottom: 4px;">
+            🗺️ Top 10 Inefficient Flights vs. FRA: <code>{boundary_pair}</code>
+        </div>
+        <div style="color: #444; margin-bottom: 6px; font-size: 11.5px;">
+            <b>Total Detour (Top 10):</b> <span style="color: #c0392b; font-weight: bold;">+{total_detour_nm:,.0f} NM</span> |
+            <b>Excess Fuel:</b> <b>{total_fuel_tonnes:.1f} t</b> |
+            <b>Cost Penalty:</b> <span style="color: #c0392b; font-weight: bold;">€{total_cost_eur:,.0f} EUR</span>
+        </div>
+        <div style="margin-top: 4px; font-size: 11px; line-height: 1.4; color: #555;">
+            <span style="color: #27ae60; font-weight: bold;">&#9644;&#9644; Dashed Green:</span> Direct Geodesic Free Route Airspace (FRA) Benchmark<br>
+            <span style="color: #e74c3c; font-weight: bold;">&#9644;&#9644; Solid Colors:</span> Actual Dog-Legged Radar Trajectory Flown<br>
+            <span style="color: #2980b9; font-weight: bold;">&#9644;&#9644; Shaded Polygons:</span> Bordering FIR Sectors (<code>{fir_a}</code> & <code>{fir_b}</code>)
+        </div>
+    </div>
+    """
+    m.get_root().html.add_child(folium.Element(legend_html))
+
+    if output_html_path:
+        out_p = Path(output_html_path)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        m.save(str(out_p))
+
+    return m
+
+

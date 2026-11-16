@@ -86,6 +86,12 @@ from flightml.eval.jet_fuel_prices import (
     get_all_weekly_fuel_prices_df,
     get_weekly_fuel_price,
 )
+from flightml.geo.fra_boundary_engine import (
+    analyze_fir_boundary_inefficiencies,
+    get_boundary_detail,
+    get_worst_flights_for_boundary,
+    calculate_fra_long_term_forecast,
+)
 
 app = typer.Typer(
     name="flightml",
@@ -93,6 +99,33 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+
+
+def _output_json(obj: Any) -> None:
+    """Print formatted JSON to stdout for CLI --json support."""
+    import json
+    from dataclasses import asdict, is_dataclass
+    import pandas as pd
+
+    def default_serializer(o: Any) -> Any:
+        if isinstance(o, pd.DataFrame):
+            return o.to_dict(orient="records")
+        if is_dataclass(o) and not isinstance(o, type):
+            return asdict(o)
+        if hasattr(o, "to_dict") and callable(getattr(o, "to_dict")):
+            return o.to_dict()
+        return str(o)
+
+    if isinstance(obj, pd.DataFrame):
+        data = obj.to_dict(orient="records")
+    elif is_dataclass(obj) and not isinstance(obj, type):
+        data = asdict(obj)
+    elif hasattr(obj, "to_dict") and callable(getattr(obj, "to_dict")):
+        data = obj.to_dict()
+    else:
+        data = obj
+
+    print(json.dumps(data, indent=2, default=default_serializer))
 
 
 @app.command("summary")
@@ -3014,6 +3047,251 @@ def generate_corpus_cmd(
 
     console.print(table)
     console.print(f"[bold green]✓ Successfully generated {result['total_sft_generated']} SFT samples and {result['total_dpo_generated']} DPO preference pairs.[/bold green]\n")
+
+
+@app.command(name="fra-boundaries")
+def cmd_fra_boundaries(
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol archive period month (e.g. '202510' or '202410')"),
+    min_flights: int = typer.Option(1000, "--min-flights", "-m", help="Minimum boundary crossing flight volume threshold"),
+    limit: int = typer.Option(25, "--limit", "-l", help="Number of boundaries to display"),
+    cross_border_only: bool = typer.Option(True, "--cross-border-only/--all-boundaries", help="Filter strictly to cross-border international boundaries"),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON"),
+) -> None:
+    """Analyze Free Route Airspace (FRA) FIR boundary inefficiencies, detect existing FRA, and rank priority candidates."""
+    try:
+        ds = FlightDataset(period=period)
+    except Exception as exc:
+        console.print(f"[bold red]❌ Failed to load dataset period {period}: {exc}[/bold red]")
+        raise typer.Exit(1)
+
+    with console.status(f"[cyan]Analyzing FIR boundary crossings & routing inefficiencies for period {period}..."):
+        report = analyze_fir_boundary_inefficiencies(
+            dataset=ds,
+            min_flights=min_flights,
+            limit=limit,
+            cross_border_only=cross_border_only,
+        )
+
+    if json_output:
+        _output_json(report)
+        return
+
+    console.print(Panel(
+        f"[bold cyan]Free Route Airspace (FRA) FIR Boundary Inefficiency & Priority Analysis[/bold cyan]\n"
+        f"Period: [yellow]{period}[/yellow] | Min Crossings Threshold: [yellow]{min_flights:,}[/yellow] | Boundaries Analyzed: [yellow]{report.total_boundaries_analyzed}[/yellow]\n"
+        f"Cross-Border Interfaces: [green]{report.cross_border_boundaries_count}[/green] | Operating Likely FRA: [green]{report.likely_fra_boundaries_count}[/green] | "
+        f"Prime Implementation Candidates: [bold red]{report.prime_candidate_count}[/bold red]\n"
+        f"Total Detour Fuel Penalty: [bold red]{report.total_network_excess_fuel_tonnes:,.1f} tonnes Jet-A[/bold red] "
+        f"([bold red]€{report.total_network_excess_cost_eur:,.0f} EUR[/bold red]) | Excess CO2: [bold yellow]{report.total_network_excess_co2_tonnes:,.1f} tonnes[/bold yellow]",
+        title="✈️ Eurocontrol FRA Boundary Intelligence",
+    ))
+
+    table = Table(
+        title=f"European FIR Boundary Priority League Table ({period}, Ranked by Need for FRA)",
+        header_style="bold green",
+        show_lines=True,
+    )
+    table.add_column("Rank", justify="right", style="cyan", width=5)
+    table.add_column("Boundary Pair", style="bold white", width=24)
+    table.add_column("Countries", style="white", width=22)
+    table.add_column("Classification", width=34)
+    table.add_column("Crossings", justify="right", style="white", width=10)
+    table.add_column("Directness", justify="right", style="green", width=10)
+    table.add_column("Mean Detour", justify="right", style="yellow", width=12)
+    table.add_column("Cost Waste (€)", justify="right", style="bold red", width=15)
+    table.add_column("Priority (0-100)", justify="right", style="bold magenta", width=16)
+
+    for b in report.boundaries:
+        table.add_row(
+            str(b.priority_rank),
+            b.boundary_pair,
+            f"{b.country_a} ↔ {b.country_b}",
+            b.fra_classification,
+            f"{b.total_crossings:,}",
+            f"{b.directness_index_pct:.1f}%",
+            f"+{b.mean_detour_nm:.1f} NM",
+            f"€{b.excess_cost_eur:,.0f}",
+            f"{b.fra_priority_score:.1f}",
+        )
+
+    console.print(table)
+
+
+@app.command(name="fra-worst-flights")
+def cmd_fra_worst_flights(
+    boundary: str = typer.Argument("EGTTUIR <-> LFFFUIR", help="Boundary pair (e.g. 'EGTTUIR <-> LFFFUIR')"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol archive period month"),
+    limit: int = typer.Option(10, "--limit", "-l", help="Number of worst detoured flights to return"),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON"),
+) -> None:
+    """List the worst flights (highest lateral detour vs direct Free Route Airspace) crossing a FIR boundary."""
+    try:
+        ds = FlightDataset(period=period)
+    except Exception as exc:
+        console.print(f"[bold red]❌ Failed to load dataset period {period}: {exc}[/bold red]")
+        raise typer.Exit(1)
+
+    with console.status(f"[cyan]Analyzing radar trajectories for worst flights across {boundary}..."):
+        worst = get_worst_flights_for_boundary(
+            dataset=ds,
+            boundary_pair=boundary,
+            limit=limit,
+            include_trajectories=False,
+        )
+
+    if json_output:
+        _output_json(worst)
+        return
+
+    if not worst:
+        console.print(f"[yellow]No flight crossings found for boundary '{boundary}' in period {period}.[/yellow]")
+        return
+
+    console.print(Panel(
+        f"[bold cyan]Worst Flights vs. Direct Free Route Airspace (FRA) Benchmark[/bold cyan]\n"
+        f"Boundary: [yellow]{boundary}[/yellow] | Period: [yellow]{period}[/yellow] | Limit: [yellow]{limit}[/yellow]",
+        title="✈️ Flight Detour Intelligence",
+    ))
+
+    table = Table(
+        title=f"Top {len(worst)} Detoured Flights Across {boundary} ({period})",
+        header_style="bold green",
+        show_lines=True,
+    )
+    table.add_column("Rank", justify="right", style="cyan", width=5)
+    table.add_column("Flight ID", style="bold white", width=11)
+    table.add_column("Operator", style="yellow", width=8)
+    table.add_column("Type", style="magenta", width=6)
+    table.add_column("Route", style="white", width=14)
+    table.add_column("Actual (NM)", justify="right", style="white", width=11)
+    table.add_column("Direct (NM)", justify="right", style="green", width=11)
+    table.add_column("Detour", justify="right", style="bold red", width=12)
+    table.add_column("Excess Fuel", justify="right", style="red", width=13)
+    table.add_column("Cost Penalty (€)", justify="right", style="bold red", width=16)
+
+    for f in worst:
+        table.add_row(
+            f"#{f['rank']}",
+            str(f["ectrl_id"]),
+            f["ac_operator"],
+            f["ac_type"],
+            f"{f['adep']} ➔ {f['ades']}",
+            f"{f['actual_distance_nm']:,.0f}",
+            f"{f['great_circle_nm']:,.0f}",
+            f"+{f['detour_nm']:.1f} NM (+{f['detour_pct']:.0f}%)",
+            f"{f['excess_fuel_tonnes']:.2f} t",
+            f"€{f['excess_cost_eur']:,.2f}",
+        )
+
+    console.print(table)
+
+
+@app.command(name="fra-forecast")
+def cmd_fra_forecast(
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol archive period month"),
+    year: str = typer.Option("2025", "--year", "-y", help="Baseline archive year for seasonal synthesis (e.g. '2025' or '2024')"),
+    growth: float = typer.Option(2.0, "--growth", "-g", help="Annual traffic growth rate (%/year)"),
+    realization: float = typer.Option(85.0, "--realization", "-r", help="Directness realization rate (%)"),
+    scope: str = typer.Option("prime_only", "--scope", "-s", help="Scope ('prime_only', 'prime_and_medium', 'all_cross_border', 'top_10', 'top_25')"),
+    fuel_price: float = typer.Option(0.6421, "--fuel-price", help="Baseline Jet-A fuel price in €/kg"),
+    fuel_opt: float = typer.Option(1.5, "--fuel-opt", help="Optimistic fuel price growth rate (%/yr)"),
+    fuel_med: float = typer.Option(3.5, "--fuel-med", help="Median expected fuel price growth rate (%/yr)"),
+    fuel_shock: float = typer.Option(6.5, "--fuel-shock", help="Geopolitical shock fuel price growth rate (%/yr)"),
+    seasonal: bool = typer.Option(True, "--seasonal/--single-period", help="Enable multi-season empirical synthesis across Spring, Summer, Autumn"),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON"),
+) -> None:
+    """Forecast 1-year, 5-year, and 20-year accumulated benefits of Free Route Airspace (FRA) deployment."""
+    try:
+        ds = FlightDataset(period=period)
+    except Exception as exc:
+        console.print(f"[bold red]❌ Failed to load dataset period {period}: {exc}[/bold red]")
+        raise typer.Exit(1)
+
+    with console.status(f"[cyan]Synthesizing seasonal profiles (Spring, Summer, Autumn) & fuel price pathways..."):
+        report = analyze_fir_boundary_inefficiencies(ds, min_flights=500, cross_border_only=True)
+        forecast = calculate_fra_long_term_forecast(
+            boundary_metrics=report.boundaries,
+            year_baseline=year,
+            use_seasonal_synthesis=seasonal,
+            annual_growth_rate=growth / 100.0,
+            realization_rate=realization / 100.0,
+            horizons=[1, 5, 20],
+            jet_a_eur_per_kg=fuel_price,
+            fuel_growth_optimistic=fuel_opt / 100.0,
+            fuel_growth_median=fuel_med / 100.0,
+            fuel_growth_shock=fuel_shock / 100.0,
+            scope=scope,
+        )
+
+    if json_output:
+        _output_json(forecast)
+        return
+
+    h = forecast["horizons"]
+    sb = forecast.get("seasonal_breakdown", {})
+    console.print(Panel(
+        f"[bold cyan]Free Route Airspace (FRA) Multi-Horizon Benefit Forecast[/bold cyan]\n"
+        f"Scope: [yellow]{scope}[/yellow] ({forecast['total_boundaries_evaluated']} boundaries) | "
+        f"Traffic Growth: [yellow]{growth:.1f}%/yr[/yellow] | Realization: [yellow]{realization:.0f}%[/yellow] | "
+        f"Base Fuel Price: [yellow]€{fuel_price:.4f}/kg[/yellow]\n"
+        f"Fuel Price Pathways: Optimistic: [green]+{fuel_opt:.1f}%/yr[/green] | "
+        f"Median Expected: [yellow]+{fuel_med:.1f}%/yr[/yellow] | Shock: [bold red]+{fuel_shock:.1f}%/yr[/bold red]",
+        title="💰 Long-Term FRA Economics & Energy Scenarios",
+    ))
+
+    # Seasonal synthesis breakdown table
+    if sb and "annual_blended" in sb:
+        t_sea = Table(title="🌸 Seasonal Realization Profiles (Spring vs. Summer Peak vs. Autumn)", header_style="bold magenta", show_lines=True)
+        t_sea.add_column("Seasonal Archetype", style="bold white", width=34)
+        t_sea.add_column("Seasonal Crossings", justify="right", style="cyan", width=19)
+        t_sea.add_column("Fuel Saved (t)", justify="right", style="green", width=15)
+        t_sea.add_column("CO₂ Mitigated (t)", justify="right", style="yellow", width=17)
+        t_sea.add_column("Baseline Value (€ EUR)", justify="right", style="bold green", width=22)
+
+        for s_key in ["spring", "summer", "autumn"]:
+            if s_key in sb:
+                s_data = sb[s_key]
+                t_sea.add_row(
+                    s_data.get("name", s_key.title()),
+                    f"{s_data.get('seasonal_crossings', 0):,}",
+                    f"{s_data.get('seasonal_fuel_saved_tonnes', 0):,.1f} t",
+                    f"{s_data.get('seasonal_co2_mitigated_tonnes', 0):,.1f} t",
+                    f"€{s_data.get('seasonal_cost_saved_eur', 0):,.2f}",
+                )
+
+        ann = sb["annual_blended"]
+        t_sea.add_row(
+            "[bold white]🌐 Synthesized Annual Baseline[/bold white]",
+            f"[bold cyan]{ann.get('annual_crossings', 0):,}[/bold cyan]",
+            f"[bold green]{ann.get('annual_fuel_saved_tonnes', 0):,.1f} t[/bold green]",
+            f"[bold yellow]{ann.get('annual_co2_mitigated_tonnes', 0):,.1f} t[/bold yellow]",
+            f"[bold green]€{ann.get('annual_cost_saved_eur', 0):,.2f}[/bold green]",
+        )
+        console.print(t_sea)
+
+    # Multi-horizon and fuel price scenario table
+    table = Table(title="Accumulated Benefits Across Horizons & Fuel Price Pathways", header_style="bold green", show_lines=True)
+    table.add_column("Horizon", style="bold cyan", width=13)
+    table.add_column("Crossings", justify="right", style="white", width=12)
+    table.add_column("Fuel Saved", justify="right", style="green", width=13)
+    table.add_column("CO₂ (t)", justify="right", style="yellow", width=12)
+    table.add_column("🟢 Optimistic (+1.5%)", justify="right", style="green", width=20)
+    table.add_column("🟡 Median (+3.5%)", justify="right", style="bold yellow", width=20)
+    table.add_column("🔴 Shock (+6.5%)", justify="right", style="bold red", width=20)
+
+    for horiz_key, name in [(1, "1 Year"), (5, "5 Years"), (20, "20 Years")]:
+        item = h.get(horiz_key, {})
+        table.add_row(
+            name,
+            f"{item.get('cumulative_crossings', 0):,}",
+            f"{item.get('cumulative_fuel_saved_tonnes', 0):,.0f} t",
+            f"{item.get('cumulative_co2_mitigated_tonnes', 0):,.0f} t",
+            f"€{item.get('savings_optimistic_eur', 0):,.2f}",
+            f"€{item.get('savings_median_eur', 0):,.2f}",
+            f"€{item.get('savings_shock_eur', 0):,.2f}",
+        )
+
+    console.print(table)
 
 
 if __name__ == "__main__":

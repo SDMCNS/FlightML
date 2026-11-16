@@ -23,6 +23,13 @@ from flightml.models.st_gnn import SpatioTemporalDelayEngine
 from flightml.sim.airspace_closure import AirspaceClosureSimulator
 from flightml.sim.marl_atfm import ASSUMPTIONS_GLOSSARY, MultiAgentATFMSimulator
 from flightml.eval.passenger_journey import PassengerJourneyEngine
+from flightml.geo.fra_boundary_engine import (
+    analyze_fir_boundary_inefficiencies,
+    get_boundary_detail,
+    compare_fra_boundary_evolution as compare_fra_boundary_evo,
+    get_worst_flights_for_boundary,
+    calculate_fra_long_term_forecast,
+)
 
 # Global singleton cache for datasets by period
 _DATASET_CACHE: dict[str, FlightDataset] = {}
@@ -40,6 +47,21 @@ def get_dataset(period: str = "202510") -> FlightDataset:
     if p not in _DATASET_CACHE:
         _DATASET_CACHE[p] = FlightDataset(period=p)
     return _DATASET_CACHE[p]
+
+
+def _safe_json(obj: Any) -> str:
+    """Helper to cleanly serialize dataclasses, dicts, DataFrames, and numbers to formatted JSON."""
+    import pandas as pd
+    from dataclasses import asdict, is_dataclass
+    if isinstance(obj, pd.DataFrame):
+        data = obj.to_dict(orient="records")
+    elif is_dataclass(obj) and not isinstance(obj, type):
+        data = asdict(obj)
+    elif hasattr(obj, "to_dict") and callable(getattr(obj, "to_dict")):
+        data = obj.to_dict()
+    else:
+        data = obj
+    return json.dumps(data, indent=2, default=str)
 
 
 def create_mcp_server() -> FastMCP:
@@ -406,6 +428,629 @@ def create_mcp_server() -> FastMCP:
             return json.dumps({"error": f"Passenger itinerary assessment failed: {exc}"}, indent=2)
 
     # -------------------------------------------------------------------------
+    # TOOL: get_pru_scorecard
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def get_pru_scorecard(flight_id: str | int, period: str = "202510") -> str:
+        """Compute ICAO GANP & Eurocontrol PRU flight efficiency scorecard (KPI04 KEP, KPI05 KEA, KPI08 ASMA, level-capping).
+
+        Args:
+            flight_id: Eurocontrol unique flight identifier (ectrl_id).
+            period: Eurocontrol archive month (e.g. '202510').
+        """
+        try:
+            from flightml.eval.pru_kpis import compute_flight_pru_kpis
+            ds = get_dataset(period)
+            fid = int(str(flight_id).strip())
+            sc = compute_flight_pru_kpis(ds, ectrl_id=fid)
+            if not sc:
+                return json.dumps({"error": f"Flight {flight_id} not found in period {period}."}, indent=2)
+            return _safe_json(sc)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to compute PRU scorecard: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: get_flight_doc
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def get_flight_doc(flight_id: str | int, period: str = "202510", time_cost_eur_per_hr: float = 850.0) -> str:
+        """Calculate Total Direct Operating Cost (DOC = Fuel EUR + Crew/Time EUR + CRCO Charges EUR) and route charge avoidance incentive ratio.
+
+        Args:
+            flight_id: Eurocontrol unique flight identifier (ectrl_id).
+            period: Eurocontrol archive month (e.g. '202510').
+            time_cost_eur_per_hr: Airline crew and aircraft time cost benchmark in EUR/hour (default: 850.0).
+        """
+        try:
+            from flightml.eval.airline_economics import AirlineEconomicsEngine
+            ds = get_dataset(period)
+            fid = int(str(flight_id).strip())
+            econ = AirlineEconomicsEngine(ds)
+            doc = econ.evaluate_flight_doc(fid, cost_of_time_eur_per_hour=time_cost_eur_per_hr)
+            if not doc:
+                return json.dumps({"error": f"Flight {flight_id} not found in period {period}."}, indent=2)
+            return _safe_json(doc)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to compute Direct Operating Cost: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: get_crco_charges
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def get_crco_charges(flight_id: str | int, period: str = "202510") -> str:
+        """Calculate Eurocontrol CRCO En-Route Navigation Charges in Euros (EUR), Service Units, and FIR charging zones.
+
+        Args:
+            flight_id: Eurocontrol unique flight identifier (ectrl_id).
+            period: Eurocontrol archive month (e.g. '202510').
+        """
+        try:
+            from flightml.eval.crco_economics import compute_flight_crco_charges
+            ds = get_dataset(period)
+            fid = int(str(flight_id).strip())
+            crco = compute_flight_crco_charges(ds, ectrl_id=fid)
+            if not crco:
+                return json.dumps({"error": f"Flight {flight_id} not found in period {period}."}, indent=2)
+            return _safe_json(crco)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to compute CRCO route charges: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: scan_route_charge_avoidance
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def scan_route_charge_avoidance(
+        period: str = "202510",
+        min_flights: int = 50,
+        detour_nm_threshold: float = 15.0,
+        fee_saved_threshold_eur: float = 100.0,
+        limit: int = 10,
+    ) -> str:
+        """Scan European network city pairs for systematic FIR route charge avoidance detours.
+
+        Args:
+            period: Eurocontrol archive month (e.g. '202510').
+            min_flights: Minimum flights on city pair to assess (default: 50).
+            detour_nm_threshold: Minimum nautical miles detour above Great Circle (default: 15.0).
+            fee_saved_threshold_eur: Minimum CRCO fees saved in EUR (default: 100.0).
+            limit: Maximum city pairs to return (default: 10).
+        """
+        try:
+            from flightml.eval.crco_economics import detect_route_charge_avoidance
+            ds = get_dataset(period)
+            df = detect_route_charge_avoidance(
+                ds,
+                min_flights=min_flights,
+                detour_nm_threshold=detour_nm_threshold,
+                fee_saved_threshold_eur=fee_saved_threshold_eur,
+                top_n=limit,
+            )
+            return _safe_json(df)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to scan route charge avoidance: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: get_fuel_and_emissions
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def get_fuel_and_emissions(
+        flight_id: str | int,
+        period: str = "202510",
+        jet_a_price_eur_per_kg: float = 0.6421,
+    ) -> str:
+        """Compute OpenAP kinematic fuel burn, ICAO engine emissions (CO2, NOx), and Jet-A expenditure in Euros (EUR).
+
+        Args:
+            flight_id: Eurocontrol unique flight identifier (ectrl_id).
+            period: Eurocontrol archive month (e.g. '202510').
+            jet_a_price_eur_per_kg: Jet-A price in EUR per kg (default: 0.6421).
+        """
+        try:
+            from flightml.eval.fuel_carbon import compute_flight_fuel_and_emissions
+            ds = get_dataset(period)
+            fid = int(str(flight_id).strip())
+            impact = compute_flight_fuel_and_emissions(
+                ds, ectrl_id=fid, fuel_price_per_kg=jet_a_price_eur_per_kg
+            )
+            if not impact:
+                return json.dumps({"error": f"Flight {flight_id} not found or has insufficient trajectory data."}, indent=2)
+            return _safe_json(impact)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to compute fuel and emissions: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: get_cdo_descent_profile
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def get_cdo_descent_profile(flight_id: str | int, period: str = "202510") -> str:
+        """Analyze Continuous Descent Operations (CDO), Top of Descent (TOD), low-altitude level segments (<10,000 ft), and noise/fuel penalties.
+
+        Args:
+            flight_id: Eurocontrol unique flight identifier (ectrl_id).
+            period: Eurocontrol archive month (e.g. '202510').
+        """
+        try:
+            from flightml.eval.cdo_analyzer import analyze_cdo_descent
+            ds = get_dataset(period)
+            fid = int(str(flight_id).strip())
+            res = analyze_cdo_descent(ds, ectrl_id=fid)
+            if not res:
+                return json.dumps({"error": f"Flight {flight_id} not found in period {period}."}, indent=2)
+            return _safe_json(res)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to analyze CDO descent: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: get_cco_climb_profile
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def get_cco_climb_profile(flight_id: str | int, period: str = "202510") -> str:
+        """Analyze Continuous Climb Operations (CCO), intermediate climb level-offs, and initial climb profile efficiency.
+
+        Args:
+            flight_id: Eurocontrol unique flight identifier (ectrl_id).
+            period: Eurocontrol archive month (e.g. '202510').
+        """
+        try:
+            from flightml.eval.cdo_analyzer import analyze_cco_climb
+            ds = get_dataset(period)
+            fid = int(str(flight_id).strip())
+            res = analyze_cco_climb(ds, ectrl_id=fid)
+            if not res:
+                return json.dumps({"error": f"Flight {flight_id} not found in period {period}."}, indent=2)
+            return _safe_json(res)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to analyze CCO climb: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: get_fra_adherence
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def get_fra_adherence(
+        flight_id: str | int,
+        period: str = "202510",
+        direct_dct_tolerance_nm: float = 5.0,
+    ) -> str:
+        """Evaluate Free Route Airspace (FRA) adherence, DCT direct waypoint shortcuts, and mileage savings vs structured airways.
+
+        Args:
+            flight_id: Eurocontrol unique flight identifier (ectrl_id).
+            period: Eurocontrol archive month (e.g. '202510').
+            direct_dct_tolerance_nm: Cross-track tolerance in NM for direct segment detection (default: 5.0).
+        """
+        try:
+            from flightml.geo.fra_analyzer import analyze_flight_fra_adherence
+            ds = get_dataset(period)
+            fid = int(str(flight_id).strip())
+            res = analyze_flight_fra_adherence(ds, ectrl_id=fid, snap_tolerance_nm=direct_dct_tolerance_nm)
+            if not res:
+                return json.dumps({"error": f"Flight {flight_id} not found in period {period}."}, indent=2)
+            return _safe_json(res)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to analyze FRA adherence: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: diagnose_flight_bottlenecks
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def diagnose_flight_bottlenecks(flight_id: str | int, period: str = "202510") -> str:
+        """Run 360-degree bottleneck diagnostic: departure surface delay, en-route ATFM re-routing, arrival terminal holding, and weather attribution.
+
+        Args:
+            flight_id: Eurocontrol unique flight identifier (ectrl_id).
+            period: Eurocontrol archive month (e.g. '202510').
+        """
+        try:
+            from flightml.eval.diagnostics import diagnose_flight_bottlenecks
+            from flightml.weather.metar_client import MetarClient
+            ds = get_dataset(period)
+            fid = int(str(flight_id).strip())
+            diag = diagnose_flight_bottlenecks(ds, metar_client=MetarClient(), ectrl_id=fid)
+            if not diag:
+                return json.dumps({"error": f"Flight {flight_id} not found in period {period}."}, indent=2)
+            return _safe_json(diag)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to diagnose flight bottlenecks: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: get_fir_saturation
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def get_fir_saturation(
+        fir_id: str = "EDUUUIR",
+        date: str = "",
+        period: str = "202510",
+        threshold_pct: float = 85.0,
+        limit: int = 10,
+    ) -> str:
+        """Calculate hourly FIR airspace saturation, peak traffic volume, nominal capacity breaches, and ATFM delay severity.
+
+        Args:
+            fir_id: European FIR identifier (e.g. 'EDUUUIR', 'LFFFFIR', 'EGTTFIR').
+            date: Target date in YYYY-MM-DD format (leave blank for first date in period).
+            period: Eurocontrol archive month (e.g. '202510').
+            threshold_pct: Saturation capacity threshold percentage (default: 85.0).
+            limit: Maximum hourly records to return (default: 10).
+        """
+        try:
+            from flightml.features.fir_saturation import calculate_fir_hourly_saturation
+            ds = get_dataset(period)
+            res = calculate_fir_hourly_saturation(
+                ds,
+                fir_id=fir_id,
+                date_str=date or None,
+                threshold_flights_per_hr=int(threshold_pct),
+                top_n=limit,
+            )
+            return _safe_json(res)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to calculate FIR saturation: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: get_flight_fir_dwell
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def get_flight_fir_dwell(flight_id: str | int, period: str = "202510") -> str:
+        """Calculate flight-level sector-by-sector entry/exit timestamps, dwell durations, and dwell inefficiency delays.
+
+        Args:
+            flight_id: Eurocontrol unique flight identifier (ectrl_id).
+            period: Eurocontrol archive month (e.g. '202510').
+        """
+        try:
+            from flightml.features.fir_saturation import calculate_flight_fir_dwell_inefficiency
+            ds = get_dataset(period)
+            fid = int(str(flight_id).strip())
+            dwells = calculate_flight_fir_dwell_inefficiency(ds, ectrl_id=fid)
+            return _safe_json(dwells)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to calculate FIR dwell inefficiency: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: get_airport_taxi_out
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def get_airport_taxi_out(
+        airport_icao: str = "EGLL",
+        date: str = "",
+        period: str = "202510",
+        min_flights: int = 5,
+        limit: int = 10,
+    ) -> str:
+        """Analyze airport surface taxi-out performance: unimpeded baseline duration vs actual off-block to takeoff time and excess queue delays.
+
+        Args:
+            airport_icao: Origin aerodrome ICAO (e.g. 'EGLL', 'LFPG', 'EHAM').
+            date: Target date in YYYY-MM-DD format (leave blank for first date).
+            period: Eurocontrol archive month (e.g. '202510').
+            min_flights: Minimum flights per hour to consider (default: 5).
+            limit: Maximum hourly records to return (default: 10).
+        """
+        try:
+            from flightml.eval.surface_taxi import analyze_airport_taxi_out_performance
+            ds = get_dataset(period)
+            res = analyze_airport_taxi_out_performance(
+                ds,
+                airport_icao=airport_icao.strip().upper(),
+                date_str=date or None,
+                min_flights=min_flights,
+                top_n=limit,
+            )
+            return _safe_json(res)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to analyze airport taxi-out: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: get_flight_taxi_out
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def get_flight_taxi_out(flight_id: str | int, period: str = "202510") -> str:
+        """Analyze taxi-out surface duration for a specific flight: off-block to airborne time, unimpeded reference, and excess minutes.
+
+        Args:
+            flight_id: Eurocontrol unique flight identifier (ectrl_id).
+            period: Eurocontrol archive month (e.g. '202510').
+        """
+        try:
+            from flightml.eval.surface_taxi import analyze_flight_taxi_out
+            ds = get_dataset(period)
+            fid = int(str(flight_id).strip())
+            res = analyze_flight_taxi_out(ds, ectrl_id=fid)
+            if not res:
+                return json.dumps({"error": f"Flight {flight_id} not found in period {period}."}, indent=2)
+            return _safe_json(res)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to analyze flight taxi-out: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: assess_runway_safety
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def assess_runway_safety(flight_id: str | int, period: str = "202510") -> str:
+        """Assess runway safety & operational wind limits: crosswind component, tailwind component, exceedance flags, and wet runway braking margins.
+
+        Args:
+            flight_id: Eurocontrol unique flight identifier (ectrl_id).
+            period: Eurocontrol archive month (e.g. '202510').
+        """
+        try:
+            from flightml.weather.runway_safety import assess_flight_runway_safety
+            ds = get_dataset(period)
+            fid = int(str(flight_id).strip())
+            res = assess_flight_runway_safety(ds, metar_client=None, ectrl_id=fid)
+            if not res:
+                return json.dumps({"error": f"Flight {flight_id} not found in period {period}."}, indent=2)
+            return _safe_json(res)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to assess runway safety: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: analyze_reactionary_delay
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def analyze_reactionary_delay(
+        operator: str = "BAW",
+        start_date: str = "",
+        end_date: str = "",
+        period: str = "202510",
+    ) -> str:
+        """Analyze airline rotational airframe delay propagation, turnaround slack absorption, and downstream reactionary delays.
+
+        Args:
+            operator: Airline operator ICAO (e.g. 'BAW', 'DLH', 'AFR', 'RYR').
+            start_date: Start date YYYY-MM-DD (optional).
+            end_date: End date YYYY-MM-DD (optional).
+            period: Eurocontrol archive month (e.g. '202510').
+        """
+        try:
+            from flightml.models.reactionary_delay import ReactionaryDelayAnalyzer
+            from flightml.eval.multi_level_kpis import get_dataset_date_bounds
+            ds = get_dataset(period)
+            min_d, max_d = get_dataset_date_bounds(ds)
+            d_start = start_date.strip() if start_date else min_d
+            d_end = end_date.strip() if end_date else max_d
+            analyzer = ReactionaryDelayAnalyzer(ds)
+            res = analyzer.compute_network_reactionary_multiplier(
+                operator=operator.strip().upper() if operator else None,
+                date_start=d_start,
+                date_end=d_end,
+            )
+            return _safe_json(res)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to analyze reactionary delay: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: optimize_tail_swaps
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def optimize_tail_swaps(
+        operator: str = "BAW",
+        airport_icao: str = "EGLL",
+        date: str = "",
+        period: str = "202510",
+    ) -> str:
+        """Optimize hub aircraft tail swaps to break reactionary delay chains and preserve downstream passenger connections.
+
+        Args:
+            operator: Airline operator ICAO (e.g. 'BAW', 'DLH', 'KLM').
+            airport_icao: Hub aerodrome ICAO (e.g. 'EGLL', 'EDDF', 'EHAM').
+            date: Target date YYYY-MM-DD (optional).
+            period: Eurocontrol archive month (e.g. '202510').
+        """
+        try:
+            from flightml.sim.tail_swap_optimizer import optimize_hub_tail_swaps
+            ds = get_dataset(period)
+            res = optimize_hub_tail_swaps(
+                ds,
+                operator=operator.strip().upper() if operator else None,
+                hub_airport=airport_icao.strip().upper() if airport_icao else None,
+                date_str=date or None,
+            )
+            return _safe_json(res)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to optimize tail swaps: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: estimate_radio_workload
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def estimate_radio_workload(
+        airport_icao: str = "EGLL",
+        date: str = "",
+        period: str = "202510",
+    ) -> str:
+        """Estimate ATC radio frequency transmission workload, peak communications load, and channel occupancy.
+
+        Args:
+            airport_icao: Aerodrome ICAO (e.g. 'EGLL', 'EDDF', 'LFPG').
+            date: Target date YYYY-MM-DD (optional).
+            period: Eurocontrol archive month (e.g. '202510').
+        """
+        try:
+            from flightml.features.radio_workload import estimate_airport_and_sector_radio_workload
+            ds = get_dataset(period)
+            res = estimate_airport_and_sector_radio_workload(
+                ds, airport_icao=airport_icao.strip().upper(), date_str=date or None
+            )
+            return _safe_json(res)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to estimate radio workload: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: scan_airspace_conflicts
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def scan_airspace_conflicts(
+        date: str = "",
+        hour: int = 12,
+        horiz_nm: float = 5.0,
+        vert_fl: float = 10.0,
+        period: str = "202510",
+        limit: int = 20,
+    ) -> str:
+        """Scan European airspace for 4D radar proximity events (<5 NM, <1000 ft) and sector complexity index.
+
+        Args:
+            date: Target date YYYY-MM-DD (optional).
+            hour: Target UTC hour (0-23, default: 12).
+            horiz_nm: Horizontal proximity threshold in NM (default: 5.0).
+            vert_fl: Vertical proximity threshold in FL (default: 10.0 = 1,000 ft).
+            period: Eurocontrol archive month (e.g. '202510').
+            limit: Maximum conflict events to return (default: 20).
+        """
+        try:
+            from flightml.geo.conflict_scanner import scan_airspace_proximity_events
+            ds = get_dataset(period)
+            res = scan_airspace_proximity_events(
+                ds,
+                date_str=date or None,
+                hour=hour,
+                horiz_sep_nm=horiz_nm,
+                vert_sep_fl=vert_fl,
+                limit=limit,
+            )
+            return _safe_json(res)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to scan airspace conflicts: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: get_jet_fuel_prices
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def get_jet_fuel_prices(period: str = "202510") -> str:
+        """Retrieve weekly European Jet-A spot fuel prices from IATA / Platts benchmarks in Euros (€/kg, €/tonne).
+
+        Args:
+            period: Eurocontrol archive month (e.g. '202510').
+        """
+        try:
+            from flightml.eval.jet_fuel_prices import get_weekly_fuel_price
+            price = get_weekly_fuel_price(date_val=None, period_hint=period)
+            return _safe_json(price)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to retrieve jet fuel prices: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: locate_fir
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def locate_fir(lat: float, lon: float, flight_level: float = 350.0) -> str:
+        """Determine which European FIR/UIR airspace contains a given (lat, lon, FL) coordinate.
+
+        Args:
+            lat: Latitude in decimal degrees.
+            lon: Longitude in decimal degrees.
+            flight_level: Pressure altitude in Flight Level (e.g. 350.0 = 35,000 ft).
+        """
+        try:
+            from flightml.geo.fir_engine import FIREngine
+            engine = FIREngine()
+            firs = engine.locate_fir(lat=lat, lon=lon, flight_level=flight_level)
+            return json.dumps({
+                "latitude": lat,
+                "longitude": lon,
+                "flight_level": flight_level,
+                "enclosing_firs": firs or []
+            }, indent=2)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to locate FIR: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: calculate_runway_winds
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def calculate_runway_winds(
+        airport: str = "EGLL",
+        wind_dir: float = 270.0,
+        wind_speed: float = 18.0,
+        gust: float = 0.0,
+    ) -> str:
+        """Calculate headwind, crosswind, and tailwind components for all available runways at an airport.
+
+        Args:
+            airport: Aerodrome ICAO code (e.g. 'EGLL', 'EDDF', 'LFPG').
+            wind_dir: Wind direction in degrees true (0-360).
+            wind_speed: Steady wind speed in knots.
+            gust: Gust speed in knots (optional).
+        """
+        try:
+            from flightml.weather.wind_calc import find_optimal_runways
+            ds = get_dataset()
+            apt = airport.strip().upper()
+            runways_df = ds.query("SELECT * FROM raw_runways WHERE airport_ident = ?", [apt])
+            if runways_df.empty:
+                return json.dumps({"error": f"No runway data found for {apt} in catalog."}, indent=2)
+            res = find_optimal_runways(
+                runways_df.to_dict(orient="records"),
+                wind_dir_deg=wind_dir,
+                wind_speed_kts=wind_speed,
+                gust_kts=gust if gust and gust > 0 else None,
+            )
+            return _safe_json(res)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to calculate runway winds: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
+    # TOOL: predict_flight_delay
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def predict_flight_delay(
+        adep: str,
+        ades: str,
+        operator: str = "BAW",
+        market_segment: str = "Traditional Scheduled",
+        requested_fl: float = 350.0,
+        distance_nm: float = 500.0,
+        hour: int = 14,
+        day_of_week: int = 2,
+    ) -> str:
+        """Predict flight arrival delay using trained gradient-boosted ML delay models.
+
+        Args:
+            adep: Departure aerodrome ICAO (e.g. 'EGLL').
+            ades: Destination aerodrome ICAO (e.g. 'EDDF').
+            operator: Airline operator ICAO (e.g. 'BAW', 'DLH').
+            market_segment: Market segment (e.g. 'Traditional Scheduled', 'Low Cost').
+            requested_fl: Cruising flight level (e.g. 350.0).
+            distance_nm: Flown distance in nautical miles.
+            hour: Departure hour (0-23 UTC).
+            day_of_week: Day of week (0=Mon, 6=Sun).
+        """
+        try:
+            from flightml.models.delay_predictor import DelayPredictor, MODEL_DIR
+            model_path = MODEL_DIR / "arr_delay_min_model.pkl"
+            if model_path.exists():
+                predictor = DelayPredictor.load(model_path)
+            else:
+                ds = get_dataset()
+                predictor = DelayPredictor()
+                df = predictor.prepare_data(ds, sample_size=40000)
+                predictor.train(df)
+                predictor.save(model_path)
+
+            pred = predictor.predict({
+                "adep": adep.strip().upper(),
+                "ades": ades.strip().upper(),
+                "ac_operator": operator.strip().upper(),
+                "market_segment": market_segment,
+                "requested_fl": requested_fl,
+                "actual_distance_nm": distance_nm,
+                "dep_hour": hour,
+                "dep_dayofweek": day_of_week,
+                "filed_air_time_min": (distance_nm / 450.0) * 60.0,
+            })
+            risk = "HIGH" if pred > 15 else "MODERATE" if pred > 5 else "LOW"
+            return json.dumps({
+                "adep": adep.strip().upper(),
+                "ades": ades.strip().upper(),
+                "operator": operator.strip().upper(),
+                "predicted_arr_delay_min": round(float(pred), 1),
+                "delay_risk_category": risk,
+            }, indent=2)
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to predict delay: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
     # RESOURCE: Assumptions Glossary
     # -------------------------------------------------------------------------
     @server.resource("flightml://assumptions/marl_glossary")
@@ -441,6 +1086,130 @@ def create_mcp_server() -> FastMCP:
             f"1) Runway saturation at {airport}, 2) Top downstream hubs at risk, "
             f"3) Aircraft tail rotations with broken turnaround buffers, and 4) Recommended ATC flow measures."
         )
+
+    # -------------------------------------------------------------------------
+    # TOOL: get_fra_boundary_rankings
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def get_fra_boundary_rankings(
+        period: str = "202510",
+        min_flights: int = 1000,
+        limit: int = 25,
+        cross_border_only: bool = True,
+    ) -> str:
+        """Analyze Free Route Airspace (FRA) FIR boundary inefficiencies, detect existing FRA, and rank priority candidates.
+
+        Args:
+            period: Eurocontrol archive month (e.g. '202510' or '202410').
+            min_flights: Minimum boundary crossing traffic volume threshold (default: 1000).
+            limit: Number of top-ranked boundaries to return (default: 25).
+            cross_border_only: Filter strictly to cross-border international boundaries (default: True).
+        """
+        ds = get_dataset(period)
+        report = analyze_fir_boundary_inefficiencies(
+            dataset=ds,
+            min_flights=min_flights,
+            limit=limit,
+            cross_border_only=cross_border_only,
+        )
+        return _safe_json(report.to_dict())
+
+    # -------------------------------------------------------------------------
+    # TOOL: diagnose_fra_boundary
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def diagnose_fra_boundary(
+        boundary_pair: str = "EGTTUIR <-> LFFFUIR",
+        period: str = "202510",
+    ) -> str:
+        """Detailed operational diagnostic for a specific FIR boundary pair (e.g. 'EGTTUIR <-> LFFFUIR').
+
+        Args:
+            boundary_pair: Canonical FIR boundary pair (e.g. 'EGTTUIR <-> LFFFUIR' or 'LECBUIR <-> LFFFUIR').
+            period: Eurocontrol archive month (e.g. '202510').
+        """
+        ds = get_dataset(period)
+        detail = get_boundary_detail(dataset=ds, boundary_pair=boundary_pair)
+        return _safe_json(detail)
+
+    # -------------------------------------------------------------------------
+    # TOOL: get_fra_worst_flights
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def get_fra_worst_flights(
+        boundary_pair: str = "EGTTUIR <-> LFFFUIR",
+        period: str = "202510",
+        limit: int = 10,
+        max_distance_nm: float | None = None,
+    ) -> str:
+        """Query the most detoured flights across a specific FIR boundary interface vs direct Free Route Airspace.
+
+        Args:
+            boundary_pair: Canonical FIR boundary pair (e.g. 'EGTTUIR <-> LFFFUIR' or 'EDUUUIR <-> LOVVFIR').
+            period: Eurocontrol archive month (e.g. '202510' or '202410').
+            limit: Maximum flights to return (default: 10).
+            max_distance_nm: Optional filter to focus on intra-European flights (e.g. 2500.0).
+        """
+        ds = get_dataset(period)
+        flights = get_worst_flights_for_boundary(
+            dataset=ds,
+            boundary_pair=boundary_pair,
+            limit=limit,
+            max_gc_dist_nm=max_distance_nm,
+            include_trajectories=False,
+        )
+        return _safe_json(flights)
+
+    # -------------------------------------------------------------------------
+    # TOOL: forecast_fra_benefits
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def forecast_fra_benefits(
+        period: str = "202510",
+        year_baseline: str = "2025",
+        use_seasonal_synthesis: bool = True,
+        annual_growth_rate_pct: float = 2.0,
+        realization_rate_pct: float = 85.0,
+        scope: str = "prime_only",
+        jet_a_price_eur_per_kg: float = 0.6421,
+        fuel_growth_optimistic_pct: float = 1.5,
+        fuel_growth_median_pct: float = 3.5,
+        fuel_growth_shock_pct: float = 6.5,
+    ) -> str:
+        """Forecast cumulative multi-horizon benefits (1, 5, and 20 years) of Free Route Airspace (FRA) deployment.
+
+        Features:
+        - Seasonal Synthesis across Spring (02), Summer (06), and Autumn (10) to capture vacation surge and convective detours.
+        - Dynamic 20-Year Fuel Price Escalation under Optimistic, Median Expected, and Geopolitical Shock scenarios.
+
+        Args:
+            period: Eurocontrol archive month fallback (e.g. '202510').
+            year_baseline: Baseline archive year ('2025' or '2024') for seasonal synthesis.
+            use_seasonal_synthesis: Whether to blend Spring, Summer, Autumn into a weighted annual baseline (default: True).
+            annual_growth_rate_pct: Projected compound annual air traffic growth rate (default: 2.0% STATFOR baseline).
+            realization_rate_pct: Directness realization factor (default: 85.0%).
+            scope: Boundary subset to model ('prime_only', 'prime_and_medium', 'all_cross_border', 'top_10', 'top_25').
+            jet_a_price_eur_per_kg: Jet-A fuel benchmark price in €/kg (default: 0.6421 €/kg).
+            fuel_growth_optimistic_pct: Annual fuel price growth in optimistic scenario (default: 1.5%/yr).
+            fuel_growth_median_pct: Annual fuel price growth in median scenario (default: 3.5%/yr).
+            fuel_growth_shock_pct: Annual fuel price growth in shock scenario (default: 6.5%/yr).
+        """
+        ds = get_dataset(period)
+        report = analyze_fir_boundary_inefficiencies(ds, min_flights=500, cross_border_only=True)
+        forecast = calculate_fra_long_term_forecast(
+            boundary_metrics=report.boundaries,
+            year_baseline=year_baseline,
+            use_seasonal_synthesis=use_seasonal_synthesis,
+            annual_growth_rate=annual_growth_rate_pct / 100.0,
+            realization_rate=realization_rate_pct / 100.0,
+            horizons=[1, 5, 20],
+            jet_a_eur_per_kg=jet_a_price_eur_per_kg,
+            fuel_growth_optimistic=fuel_growth_optimistic_pct / 100.0,
+            fuel_growth_median=fuel_growth_median_pct / 100.0,
+            fuel_growth_shock=fuel_growth_shock_pct / 100.0,
+            scope=scope,
+        )
+        return _safe_json(forecast)
 
     return server
 

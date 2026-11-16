@@ -90,7 +90,11 @@ from flightml.features.sector_bottlenecks import analyze_fir_bottlenecks
 
 # Simulation & Stress Testing
 from flightml.models.airline_stress import stress_test_airline, StressTestResult
-from flightml.models.gnn_delay import AirportGraphDelayModel, HeterogeneousAirspaceGNN
+try:
+    from flightml.models.gnn_delay import AirportGraphDelayModel, HeterogeneousAirspaceGNN
+except ImportError:
+    AirportGraphDelayModel = None  # type: ignore
+    HeterogeneousAirspaceGNN = None  # type: ignore
 from flightml.sim.what_if import simulate_turnaround_mitigation, simulate_runway_weather_scenario
 from flightml.sim.gdp_optimizer import optimize_ground_delay_program, GDPResult
 from flightml.sim.tail_swap_optimizer import (

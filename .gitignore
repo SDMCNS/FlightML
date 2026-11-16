@@ -64,6 +64,11 @@ venv/
 # Generated HTML visualization maps from CLI runs
 *.html
 
+# Model weights, fine-tuned checkpoints & adapters
+models/
+*.safetensors
+*.bin
+
 # Internal sprint & planning roadmaps
 docs/v3_sprint.md
 docs/v4_plan.md

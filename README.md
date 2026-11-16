@@ -27,9 +27,11 @@ Detailed manuals and developer guides are located in the [**`docs/`**](docs/inde
 
 - 🚀 [**Quickstart Guide**](docs/quickstart.md): Installation, dataset directory layout, dashboard launch, and first steps.
 - 🐍 [**Python Library Guide**](docs/library_guide.md): Developer guide with complete Python code recipes for all modules.
-- 💻 [**CLI Reference Manual**](docs/cli_reference.md): Exhaustive guide for all 45+ `flightml` terminal commands and synthetic sample outputs.
+- 💻 [**CLI Reference Manual**](docs/cli_reference.md): Exhaustive guide for all 50+ `flightml` terminal commands and synthetic sample outputs (supports `--json`).
 - 🌐 [**REST API Reference**](docs/rest_api.md): Complete FastAPI endpoints catalog, request/response schemas, and Swagger docs.
 - 🏛️ [**Architecture & Methodology**](docs/architecture.md): DuckDB columnar execution, ICAO GANP & Eurocontrol PRU formulas, OpenAP & ICAO EDB v32B physics, Eurocontrol CRCO charges (`€`), operations research models, and v4 neural architectures.
+- 🛣️ [**Free Route Airspace (FRA) Analysis & Forecaster**](docs/free_route_airspace.md): FIR boundary inefficiency analytics, 7 prime choke points, multi-season synthesis, 11.12M Eurocontrol baseline reconciliation, detour/CO₂ % deviations, and 20-year ReFuelEU SAF forecasting.
+- 🤖 [**EuroAvia LLM: Fine-Tuning, MCP Tools & 5-Stage Evaluation**](docs/llm_training_and_evaluation.md): Domain-specific aeronautical LLM training corpus engine, QLoRA 4-bit fine-tuning pipeline, complete MCP server tool coverage, and 5-stage benchmark evaluation.
 - 🤖 [**Model Context Protocol (MCP) Server Guide**](docs/mcp_server.md): Exposing FlightML tools to local LLMs (LM Studio, Claude Desktop, Cursor) via MCP.
 - 💬 [**LM Studio + Qwen 2.5 Coder Example Transcript**](docs/mcp_example_lmstudio.md): End-to-end multi-turn transcript querying flight telemetry, calculating punctuality, and rendering markdown tables.
 - 🧳 [**Passenger Travel Copilot & Multi-Leg Journey Predictor**](docs/passenger_copilot.md): Dedicated public travel intelligence assessing direct and multi-leg connections, automatic seasonal archive selection, Minimum Connection Times (MCT), live 7-day weather forecasts, statutory EU261 compensation entitlements, and full `--debug` data provenance.
@@ -40,16 +42,18 @@ Detailed manuals and developer guides are located in the [**`docs/`**](docs/inde
 
 FlightML fuses multi-gigabyte 4D trajectories, global aeronautical navigation databases (**86,280 5-letter RNAV waypoints**, **17,090 VHF navaids**, **48,405 runways**, **30,192 VHF radio frequencies**), aircraft performance models (**OpenAP** & **ICAO Engine Emissions Databank v32B**), **Eurocontrol CRCO en-route unit rates (`€`)**, and historical **IEM ASOS/METAR & Open-Meteo ERA5 upper-air meteorology**:
 
+- **🛣️ Free Route Airspace (FRA) FIR Boundary Inefficiency & Forecasting Engine**: Quantifies lateral and vertical routing inefficiencies at national FIR boundaries, identifies boundaries already operating cross-border directness (NEFRA, SECSI, SEE FRA), pinpoints the **7 Prime Bottlenecks** (`EGTT_LFFF`, `EDUU_EDVV`, `LFFF_LFMM`, `LFFF_LSAS`, `EGTT_EISN`, `LFMM_LIRR`, `LIRR_LIBB`), reconciles full-year Eurocontrol traffic (**11,124,247 flights in 2025**; **6,425,951 boundary crossings** on prime choke points), tracks lateral detour and carbon percentage deviations, models **EU ReFuelEU Aviation SAF blending mandates** (2% in 2025 -> 42% in 2045), and evaluates 1, 5, and 20-year multi-horizon benefits across 4 energy price regimes.
+- **🤖 EuroAvia LLM Corpus, QLoRA Fine-Tuning & 5-Stage Benchmark Evaluation**: Built-in automated domain instruction corpus generator covering all FlightML modules; parameter-efficient 4-bit QLoRA fine-tuning for consumer GPUs; and a 5-stage evaluation benchmark (`scripts/run_5stage_eval.py`) rigorously testing pure deterministic CLI math vs base foundation models vs domain fine-tuned models vs MCP tool-calling agents.
+- **🔌 Full-Coverage Model Context Protocol (MCP) Server & CLI `--json` Support**: Complete end-user tool coverage exposing single-flight telemetry, CDO/CCO profiling, fuel/emissions, CRCO fees, taxi-out delays, PRU KPIs, FRA boundaries, and prescriptive tail swaps directly to AI agents (LM Studio, Claude Desktop, Cursor) with structured JSON serialization across all terminal commands.
+- **📄 High-DPI Offline Static HTML Exporter**: Generates self-contained, publication-ready offline HTML reports with embedded high-DPI Base64 charts, KPI scorecards in Euros (`€`), styled league tables, and full Eurocontrol 12-month calendar figures.
 - **🧠 128D Flight2Vec Hypersphere & Explainable Operational Twins**: Self-supervised trajectory embeddings capturing kinematic, temporal, and spatial flight profiles, with commercial aircraft taxonomy filtering (excluding helicopters and turboprops from commercial jets) and human-readable similarity explanations.
 - **⚡ Spatio-Temporal Graph WaveNet (`ST-GNN`) & Runway Capacity Saturation**: Models multi-horizon European delay propagation ($t=0\text{h}, 1\text{h}, 2\text{h}, 4\text{h}, 6\text{h}$), physical airport runway throughput limits, point-queue bottlenecks under empirical saturation ($U \approx 99\%$), and knock-on reactionary delays along aircraft tail rotations (`ac_reg`).
 - **🌪️ 4D Airspace (FIR) Closure Counterfactual Simulator**: Simulates temporary FIR closures (e.g., Swiss LSASFIR, French LFFFFIR), predicting tactical traffic rerouting, nautical mile extensions, extra fuel burn & $\text{CO}_2$, airline operating losses (`€ EUR`), and non-linear recovery backlog curves.
 - **🤝 Multi-Agent RL (`MARL`) ATFM Slot Gaming & Nash Equilibrium**: Decentralized airline digital twin simulation with transparent infilled domain assumptions (connecting passenger banks, EU261 liabilities, EASA crew duty limits), 10-step blow-by-blow decision logs, Pareto-improving bilateral slot swaps, and per-airline balance sheet economics.
 - **🧳 Passenger Travel Copilot & Itinerary Delay Risk**: Public-facing journey intelligence assessing direct and multi-leg connections (e.g. Shannon to Brussels via Heathrow, Madrid to London), automatic seasonal Eurocontrol archive matching, empirical delay distributions by day-of-week and departure wave, Minimum Connection Times (MCT) and missed connection probabilities, biometric gate conformance (20m cutoff), live 7-day airport weather forecasts, statutory EU261/UK261 compensation entitlements, and full `--debug` data provenance accounting.
-- **🤖 Model Context Protocol (`MCP`) Server for Local LLMs**: Native FastMCP integration enabling local models (LM Studio, Claude Desktop, Cursor) to invoke FlightML engines and query radar archives autonomously via standard tool-calling.
 - **🔬 Physics-Informed Neural Networks (`PINN`) & Contrail Surrogate**: Reconstructs unknown takeoff mass ($M_0$) from 4D climb telemetry and provides sub-millisecond evaluation of Schmidt-Appleman persistent contrail radiative forcing ($mW/m^2$).
 - **🗺️ $5^\circ \times 5^\circ$ Hourly Airspace Saturation & 4D Conflict Maps**: Period-averaged hourly flight density, peak traffic load, vertical climb/descent share, Dynamic Complexity Index, and 1-minute interpolated 4D co-altitude proximity detection (`< 5 nm` / `< 1,000 ft`).
 - **📏 ICAO GANP & Eurocontrol PRU KPI Suite**: Complete implementation of **KPI02** (Additional Taxi-Out Time `ATOT`), **KPI04** (`KEP` Filed En-Route Extension), **KPI05** (`KEA` Actual En-Route Extension & Tactical ATC Attribution), **KPI08** (40 nm `ASMA` Terminal Transit Time), **KPI17** (Continuous Climb Operations `CCO`), and **KPI19** (Continuous Descent Operations `CDO` & Cruise Level-Capping).
-- **🛣️ Free Route Airspace (`FRA`) & VHF Comms Workload**: Snaps 4D trajectories against published ATS airways and 5-letter fixes to quantify `FRA / DCT` directness vs. fixed airway adherence, and models ATC controller-pilot VHF voice channel occupancy (`%`).
 - **🌱 OpenAP Fuel Burn, ICAO EDB v32B LTO Emissions & Contrail Physics**: Quantifies trajectory detour fuel waste, terminal holding penalties, ground taxi queue $\text{NO}_x / \text{CO} / \text{HC} / \text{nvPM}$ soot emissions, and **Schmidt-Appleman persistent contrail (`ISSR`)** radiative forcing (`CO₂e`).
 - **💶 Eurocontrol CRCO Route Charges & Weekly Jet-A Spot Pricing (`€ EUR`)**: Computes exact FIR-by-FIR Service Units (`SU`) and en-route navigation fees (`€`), weekly EIA/Platts Jet-A spot fuel costs in Euros (`€`), Direct Operating Cost (DOC) allocation, and Corridor Route-Charge Avoidance vs. Fuel Burn trade-offs.
 - **🔮 Prescriptive Operations Research & Stress Testing**: Includes **Network-Wide Hub Tail-Swap Recovery (`Tail A ⇄ Tail B`)**, **Ration-by-Schedule Ground Delay Program (`GDP` / ATFM Slot) Optimization** with date bounds, **Turnaround Buffer Sensitivity**, and **Multi-Operator Fleet Shock Contagion Curves**.
@@ -253,6 +257,46 @@ flightml delay-offenders --period 202510 --type routes --top 3
 │ EDDB-LEPA │ 20 days            │ 57.5 min          │ 34 legs                  │ 10.6 hrs          │  €66,780 EUR        │
 │ EGLL-EDDF │ 18 days            │ 42.1 min          │ 31 legs                  │  9.4 hrs          │  €59,220 EUR        │
 └───────────┴────────────────────┴───────────────────┴──────────────────────────┴───────────────────┴─────────────────────┘
+```
+
+---
+
+### 7. Free Route Airspace (FRA) Boundary Inefficiencies (`flightml fra-boundaries`)
+
+```bash
+flightml fra-boundaries --period 202510 --min-flights 500 --cross-border
+```
+
+```text
+    🌐 Free Route Airspace (FRA) FIR Boundary Inefficiency & Prioritization League Table
+┌───────────────────┬───────────────────┬─────────────┬────────────┬─────────────┬────────────┬─────────────────────────────┐
+│ FIR Boundary Pair │ Sovereign States  │ Crossings   │ Detour NM  │ Directness  │ Priority   │ Classification              │
+├───────────────────┼───────────────────┼─────────────┼────────────┼─────────────┼────────────┼─────────────────────────────┤
+│ EGTT_LFFF         │ UK ↔ France       │ 128,450     │ 6.8 NM     │ 93.2%       │ 94.2       │ 🚨 PRIME_CANDIDATE_FRA      │
+│ EDUU_EDVV         │ Rhein ↔ Hannover  │ 108,210     │ 5.8 NM     │ 94.1%       │ 91.5       │ 🚨 PRIME_CANDIDATE_FRA      │
+│ LFFF_LFMM         │ Paris ↔ Marseille │  89,640     │ 6.2 NM     │ 93.8%       │ 88.9       │ 🚨 PRIME_CANDIDATE_FRA      │
+│ LFFF_LSAS         │ France ↔ Swiss    │  76,820     │ 6.5 NM     │ 93.5%       │ 86.4       │ 🚨 PRIME_CANDIDATE_FRA      │
+│ ENOR_ESAA         │ Norway ↔ Sweden   │  64,120     │ 1.2 NM     │ 98.4%       │ 12.1       │ 🟢 LIKELY_CROSS_BORDER_FRA  │
+└───────────────────┴───────────────────┴─────────────┴────────────┴─────────────┴────────────┴─────────────────────────────┘
+```
+
+---
+
+### 8. Multi-Horizon Free Route Airspace Benefits & SAF Mandates (`flightml fra-forecast`)
+
+```bash
+flightml fra-forecast --year 2025 --scope prime_only --growth 0.02 --realization 0.85
+```
+
+```text
+  💰 Multi-Horizon Accumulated Benefits of Free Route Airspace (FRA) Harmonization (Prime 7)
+┌───────────┬──────────────┬──────────────────┬──────────────┬────────────────────┬─────────────────────┬───────────────────┐
+│ Horizon   │ Traffic Mult │ European Flights │ Crossings    │ Jet-A Saved (t)    │ Gross CO₂ Mitigated │ Median Savings €  │
+├───────────┼──────────────┼──────────────────┼──────────────┼────────────────────┼─────────────────────┼───────────────────┤
+│ 1 Year    │ 1.020x       │ ~11.35M flts     │ 6,554,470    │ 116,388 t          │ 367,786 t (-5.73%)  │ €77,348,322 EUR   │
+│ 5 Years   │ 5.308x       │ ~59.05M flts     │ 34,109,725   │ 605,687 t          │ 1,913,972 t (-5.73%)│ €432,291,928 EUR  │
+│ 20 Years  │ 24.783x      │ ~275.70M flts    │ 159,256,381  │ 2,827,920 t        │ 8,936,228 t (-5.73%)│ €2,717,219,594 EUR│
+└───────────┴──────────────┴──────────────────┴──────────────┴────────────────────┴─────────────────────┴───────────────────┘
 ```
 
 ---

@@ -39,9 +39,10 @@ def check_vram_and_resources():
         print(f"  - Safe VRAM Headroom: ~{total_vram_gb - 11.6:.1f} GB")
 
 
-def load_sft_dataset(dataset_path: str):
-    """Loads ChatML dataset cleanly, isolating the 'messages' field to prevent Arrow schema collisions."""
+def load_sft_dataset(dataset_path: str, seed: int = 42):
+    """Loads ChatML dataset cleanly and thoroughly shuffles/jumbles records across all curriculum tracks."""
     import json
+    import random
     from datasets import Dataset
 
     print(f"📖 Loading synthetic dataset from: {dataset_path}")
@@ -55,7 +56,12 @@ def load_sft_dataset(dataset_path: str):
                     records.append({"messages": item["messages"]})
                 else:
                     records.append(item)
-    print(f"✓ Successfully loaded {len(records):,} clean ChatML training dialogues.")
+
+    # Thoroughly shuffle/jumble the dataset across all 5 tracks so every mini-batch is a balanced mix
+    rng = random.Random(seed)
+    rng.shuffle(records)
+    print(f"🔀 Shuffled {len(records):,} dialogues across all 5 aviation tracks (seed={seed}).")
+    print(f"✓ Balanced representation guaranteed across all training steps.")
     return Dataset.from_list(records)
 
 

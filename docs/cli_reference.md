@@ -1,6 +1,15 @@
 # Command-Line Interface (CLI) Reference 💻
 
-FlightML includes a comprehensive command-line interface accessible via `flightml`. All commands output Rich-formatted tables and status badges, with all monetary figures reported in **Euros (`€`, `EUR`)**.
+FlightML includes a comprehensive command-line interface accessible via `flightml`. All commands output Rich-formatted tables and status badges by default, with all monetary figures reported in **Euros (`€`, `EUR`)**.
+
+### Machine-Readable JSON Output (`--json`)
+Every analytical, economic, and simulation command supports the `--json` flag (e.g., `flightml summary --json`, `flightml trip-risk ... --json`, `flightml pru-scorecard ... --json`, `flightml crco-cost ... --json`). When passed, FlightML outputs clean, machine-readable JSON directly to stdout—ideal for shell pipelines, automated scripting, `jq` queries, or integration with external agents and HTTP microservices without Rich table borders or ANSI escape codes.
+
+```bash
+flightml summary --json | jq .
+flightml pru-scorecard 291262109 --json
+flightml trip-risk --origin EINN --dest EBBR --hub EGLL --json
+```
 
 ```bash
 flightml --help
@@ -238,6 +247,33 @@ flightml airspace-conflicts --period 202510 --hour 10 --sep-nm 5.0
 Assess arrival runway braking action, density altitude, crosswinds, and landing distance safety margin (`LDA`).
 ```bash
 flightml runway-safety 900104215 --period 202510
+```
+
+### `flightml fra-boundaries`
+Analyze Free Route Airspace (FRA) FIR boundary routing inefficiencies, detect active cross-border Free Route Airspace implementations, and rank European FIR boundaries in descending order of priority for FRA rollout.
+```bash
+flightml fra-boundaries [--period 202510] [--min-flights 1000] [--limit 25] [--json]
+```
+
+### `flightml fra-worst-flights`
+List the worst detoured flights crossing a specific FIR boundary interface compared against the direct geodesic Free Route Airspace benchmark path.
+```bash
+flightml fra-worst-flights "EGTTUIR <-> LFFFUIR" [--period 202510] [--limit 10] [--json]
+```
+
+### `flightml fra-forecast`
+Forecast cumulative multi-horizon benefits (1-year, 5-year, and 20-year) of Free Route Airspace harmonization.
+Features:
+- **Seasonal Realization Synthesis**: Blends Spring (02), Summer Peak (06), and Autumn (10) to account for vacation traffic surges and convective weather detours.
+- **Dynamic Fuel Price Growth Pathways**: Models 20-year energy cost inflation across Optimistic (+1.5%/yr), Median Expected (+3.5%/yr: ReFuelEU SAF mandates + EU ETS), and Shock Pricing (+6.5%/yr).
+```bash
+flightml fra-forecast [--year 2025] [--growth 2.0] [--realization 85.0] [--scope prime_only] [--fuel-price 0.6421] [--fuel-opt 1.5] [--fuel-med 3.5] [--fuel-shock 6.5] [--seasonal] [--json]
+```
+
+### `flightml generate-corpus`
+Synthesize structured European aviation instruction and preference datasets for fine-tuning 4B–8B parameter SLMs (EuroAvia-Qwen/Llama) across SFT (ChatML), Alpaca, DPO preference pairs, and FastMCP tool-calling.
+```bash
+flightml generate-corpus [--samples 5000] [--tracks all] [--formats "chatml,dpo,tools"] [--output-dir data/llm_corpus] [--period auto] [--seed 42]
 ```
 
 ### `flightml tail-swaps`
