@@ -735,6 +735,7 @@ def get_worst_flights_for_boundary(
               AND ((fir_id = ? AND next_fir_id = ?) OR (fir_id = ? AND next_fir_id = ?))
         )
         SELECT
+            f.period_id,
             f.ectrl_id,
             f.adep,
             f.ades,
@@ -811,6 +812,7 @@ def get_worst_flights_for_boundary(
 
         worst_flights.append({
             "rank": idx,
+            "period_id": str(row.get("period_id") or dataset.period),
             "ectrl_id": fid,
             "adep": str(row["adep"]),
             "ades": str(row["ades"]),
@@ -839,6 +841,44 @@ def get_worst_flights_for_boundary(
 
 
 _SEASONAL_REPORTS_CACHE: dict[str, FRABoundaryReport] = {}
+_FULL_YEAR_REPORTS_CACHE: dict[str, dict[str, FRABoundaryReport]] = {}
+
+CONTIGUOUS_12M_PERIODS: list[str] = [
+    "202411", "202412", "202501", "202502",
+    "202503", "202504", "202505", "202506",
+    "202507", "202508", "202509", "202510",
+]
+
+
+def get_full_year_boundary_reports(
+    min_flights: int = 500,
+    cross_border_only: bool = True,
+) -> dict[str, FRABoundaryReport]:
+    """
+    Retrieve and cache empirical boundary performance reports across all 12 contiguous months (202411 through 202510).
+    """
+    global _FULL_YEAR_REPORTS_CACHE
+    cache_key = f"12m_{min_flights}_{cross_border_only}"
+    if cache_key in _FULL_YEAR_REPORTS_CACHE:
+        return _FULL_YEAR_REPORTS_CACHE[cache_key]
+
+    res: dict[str, FRABoundaryReport] = {}
+    for p in CONTIGUOUS_12M_PERIODS:
+        try:
+            ds = FlightDataset(period=p)
+            rep = analyze_fir_boundary_inefficiencies(
+                dataset=ds,
+                min_flights=min_flights,
+                limit=150,
+                cross_border_only=cross_border_only,
+            )
+            res[p] = rep
+        except Exception:
+            pass
+
+    if len(res) == len(CONTIGUOUS_12M_PERIODS):
+        _FULL_YEAR_REPORTS_CACHE[cache_key] = res
+    return res
 
 
 def get_seasonal_boundary_reports(
@@ -879,6 +919,7 @@ def calculate_fra_long_term_forecast(
     boundary_metrics: list[FRABoundaryMetric] | None = None,
     dataset: FlightDataset | None = None,
     year_baseline: str = "2025",
+    baseline_mode: str = "full_year",
     use_seasonal_synthesis: bool = True,
     seasonal_weights: dict[str, float] | None = None,
     annual_growth_rate: float = 0.02,
@@ -895,14 +936,17 @@ def calculate_fra_long_term_forecast(
     harmonization across European FIR boundaries over 1 year, 5 years, and 20 years.
 
     Key Enhancements:
-    1. Eurocontrol Network Reconciliation: Calibrates annual European network traffic to
-       Eurocontrol's official annual total of 11,124,247 flights (2025) and 10,696,391 flights (2024),
-       correcting the previous incomplete extrapolation with exact 12-month calendar statistics.
-    2. Exact % Routing & CO2 Deviation Tracking: Tracks lateral routing detour % deviation from GCD,
+    1. Contiguous 12-Month Full-Year Empirical Baseline (2024-11 -> 2025-10):
+       When 12 contiguous Eurocontrol periods are present, models every month's verified traffic,
+       boundary crossings, detour nautical miles, excess fuel, and excess CO2 emissions with
+       month-by-month Eurocontrol calendar scaling.
+    2. Eurocontrol Network Reconciliation: Calibrates annual European network traffic to
+       Eurocontrol's official annual total of 11,124,247 flights (2025) and 10,696,391 flights (2024).
+    3. Exact % Routing & CO2 Deviation Tracking: Tracks lateral routing detour % deviation from GCD,
        boundary crossing CO2 excess % deviation, and post-FRA CO2 mitigation % deviation across all horizons.
-    3. ReFuelEU SAF & Lifecycle Decarbonization: Models the mandatory minimum SAF blend trajectory
+    4. ReFuelEU SAF & Lifecycle Decarbonization: Models the mandatory minimum SAF blend trajectory
        (2% in 2025 -> 42% in 2045) and evaluates net lifecycle CO2 mitigation alongside gross engine emissions.
-    4. Multi-Pathway Energy Economics: Evaluates 4 fuel price trajectories (Constant, Optimistic +1.5%/yr,
+    5. Multi-Pathway Energy Economics: Evaluates 4 fuel price trajectories (Constant, Optimistic +1.5%/yr,
        Median Expected +3.5%/yr, Shock +6.5%/yr) over 20 years.
     """
     if horizons is None:
@@ -964,16 +1008,192 @@ def calculate_fra_long_term_forecast(
             out = [b for b in metrics if b.is_cross_border]
         return out if out else metrics
 
-    seasonal_reports = {}
-    if use_seasonal_synthesis:
-        seasonal_reports = get_seasonal_boundary_reports(year=year_baseline, min_flights=500, cross_border_only=True)
-
-    has_full_seasons = len(seasonal_reports) >= 2
-
     boundary_contributions: list[dict[str, Any]] = []
     seasonal_breakdown: dict[str, Any] = {}
+    monthly_breakdown: list[dict[str, Any]] = []
 
-    if has_full_seasons:
+    # Check for contiguous 12-month full year baseline
+    full_year_reports = {}
+    if baseline_mode in ("full_year", "auto"):
+        full_year_reports = get_full_year_boundary_reports(min_flights=500, cross_border_only=True)
+
+    is_12m_active = len(full_year_reports) == len(CONTIGUOUS_12M_PERIODS) and baseline_mode != "seasonal_synthesis" and baseline_mode != "single_period"
+
+    seasonal_reports = {}
+    if not is_12m_active and use_seasonal_synthesis:
+        seasonal_reports = get_seasonal_boundary_reports(year=year_baseline, min_flights=500, cross_border_only=True)
+    has_full_seasons = len(seasonal_reports) >= 2
+
+    if is_12m_active:
+        # 12-Month Empirical Full Year Execution
+        month_names = {
+            "202411": "Nov 2024", "202412": "Dec 2024", "202501": "Jan 2025", "202502": "Feb 2025",
+            "202503": "Mar 2025", "202504": "Apr 2025", "202505": "May 2025", "202506": "Jun 2025",
+            "202507": "Jul 2025", "202508": "Aug 2025", "202509": "Sep 2025", "202510": "Oct 2025",
+        }
+        boundary_annual_acc: dict[str, dict[str, Any]] = {}
+
+        ann_crossings = 0
+        ann_detour_nm = 0.0
+        ann_fuel_tonnes = 0.0
+        ann_co2_tonnes = 0.0
+        ann_cost_eur = 0.0
+        total_raw_crossings = 0
+
+        # Seasonal clusters for aggregation
+        sp_months = {"202412", "202501", "202502", "202503"}
+        su_months = {"202506", "202507", "202508", "202509"}
+        au_months = {"202411", "202504", "202505", "202510"}
+
+        clust_stats = {
+            "spring": {"crossings": 0, "detour_nm": 0.0, "fuel_t": 0.0, "co2_t": 0.0, "cost_eur": 0.0, "flights_eurocontrol": 0, "dev_sum": 0.0, "weight_c": 0},
+            "summer": {"crossings": 0, "detour_nm": 0.0, "fuel_t": 0.0, "co2_t": 0.0, "cost_eur": 0.0, "flights_eurocontrol": 0, "dev_sum": 0.0, "weight_c": 0},
+            "autumn": {"crossings": 0, "detour_nm": 0.0, "fuel_t": 0.0, "co2_t": 0.0, "cost_eur": 0.0, "flights_eurocontrol": 0, "dev_sum": 0.0, "weight_c": 0},
+        }
+
+        for p in CONTIGUOUS_12M_PERIODS:
+            rep = full_year_reports[p]
+            m_str = p[4:]
+            off_fl = monthly_dict.get(m_str, 927020)
+            arch_fl = ARCHIVE_TOTAL_FLIGHTS.get(p, 850000)
+            s_m = off_fl / max(1, arch_fl)
+
+            scoped = filter_scoped(rep.boundaries)
+            c_raw = sum(b.total_crossings for b in scoped)
+            d_raw = sum(b.total_crossings * (b.mean_detour_nm * realization_rate) for b in scoped)
+            dev_raw = (sum(b.detour_deviation_pct * b.total_crossings for b in scoped) / max(1, c_raw)) if c_raw > 0 else 0.0
+
+            c_scaled = int(c_raw * s_m)
+            d_scaled = d_raw * s_m
+            f_t = (d_scaled * KG_FUEL_PER_NM_CRUISE) / 1000.0
+            cost_m = f_t * 1000.0 * jet_a_eur_per_kg
+            co2_m = f_t * CO2_PER_KG_FUEL
+            co2_mit_dev = (dev_raw * realization_rate) / (1.0 + dev_raw / 100.0)
+
+            ann_crossings += c_scaled
+            ann_detour_nm += d_scaled
+            ann_fuel_tonnes += f_t
+            ann_co2_tonnes += co2_m
+            ann_cost_eur += cost_m
+            total_raw_crossings += c_raw
+
+            c_key = "spring" if p in sp_months else ("summer" if p in su_months else "autumn")
+            clust = clust_stats[c_key]
+            clust["crossings"] += c_scaled
+            clust["detour_nm"] += d_scaled
+            clust["fuel_t"] += f_t
+            clust["co2_t"] += co2_m
+            clust["cost_eur"] += cost_m
+            clust["flights_eurocontrol"] += off_fl
+            clust["dev_sum"] += dev_raw * c_scaled
+            clust["weight_c"] += c_scaled
+
+            monthly_breakdown.append({
+                "period": p,
+                "month_name": month_names.get(p, p),
+                "season_cluster": c_key,
+                "flights_eurocontrol": off_fl,
+                "flights_archive": arch_fl,
+                "coverage_scale_factor": round(s_m, 4),
+                "crossings_raw": c_raw,
+                "crossings_scaled": c_scaled,
+                "detour_nm_avoided": round(d_scaled, 0),
+                "fuel_saved_tonnes": round(f_t, 1),
+                "co2_mitigated_tonnes": round(co2_m, 1),
+                "cost_saved_eur": round(cost_m, 2),
+                "detour_deviation_pct": round(dev_raw, 2),
+                "co2_excess_deviation_pct": round(dev_raw, 2),
+                "co2_mitigation_deviation_pct": round(co2_mit_dev, 2),
+            })
+
+            # Accumulate per boundary across the 12 months
+            for b in scoped:
+                pair = b.boundary_pair
+                if pair not in boundary_annual_acc:
+                    boundary_annual_acc[pair] = {
+                        "ref": b,
+                        "raw_crossings": 0,
+                        "scaled_crossings": 0,
+                        "detour_nm": 0.0,
+                        "fuel_t": 0.0,
+                        "cost_eur": 0.0,
+                        "co2_t": 0.0,
+                        "dev_weighted": 0.0,
+                        "season_crossings": {"spring": 0, "summer": 0, "autumn": 0},
+                    }
+                acc = boundary_annual_acc[pair]
+                b_c_scaled = int(b.total_crossings * s_m)
+                b_d_scaled = b.total_crossings * (b.mean_detour_nm * realization_rate) * s_m
+                b_f_t = (b_d_scaled * KG_FUEL_PER_NM_CRUISE) / 1000.0
+
+                acc["raw_crossings"] += b.total_crossings
+                acc["scaled_crossings"] += b_c_scaled
+                acc["detour_nm"] += b_d_scaled
+                acc["fuel_t"] += b_f_t
+                acc["cost_eur"] += b_f_t * 1000.0 * jet_a_eur_per_kg
+                acc["co2_t"] += b_f_t * CO2_PER_KG_FUEL
+                acc["dev_weighted"] += b.detour_deviation_pct * b_c_scaled
+                acc["season_crossings"][c_key] += b_c_scaled
+
+        # Build seasonal breakdown dictionary from empirical months
+        for c_key, c_name in [("spring", "Spring (Jan, Feb, Mar, Dec)"), ("summer", "Summer Peak (Jun, Jul, Aug, Sep)"), ("autumn", "Autumn (Apr, May, Oct, Nov)")]:
+            c_data = clust_stats[c_key]
+            c_dev = c_data["dev_sum"] / max(1, c_data["weight_c"]) if c_data["weight_c"] > 0 else 0.0
+            c_mit = (c_dev * realization_rate) / (1.0 + c_dev / 100.0)
+            seasonal_breakdown[c_key] = {
+                "period": "12M-Cluster",
+                "name": c_name,
+                "cluster_flights_eurocontrol": c_data["flights_eurocontrol"],
+                "seasonal_crossings": c_data["crossings"],
+                "seasonal_fuel_saved_tonnes": round(c_data["fuel_t"], 1),
+                "seasonal_cost_saved_eur": round(c_data["cost_eur"], 2),
+                "seasonal_co2_mitigated_tonnes": round(c_data["co2_t"], 1),
+                "detour_deviation_pct": round(c_dev, 2),
+                "co2_excess_deviation_pct": round(c_dev, 2),
+                "co2_mitigation_deviation_pct": round(c_mit, 2),
+            }
+
+        ann_detour_dev_pct = sum(m["detour_deviation_pct"] * m["crossings_scaled"] for m in monthly_breakdown) / max(1, ann_crossings)
+        ann_co2_mit_dev_pct = (ann_detour_dev_pct * realization_rate) / (1.0 + ann_detour_dev_pct / 100.0)
+
+        seasonal_breakdown["annual_blended"] = {
+            "annual_crossings": ann_crossings,
+            "annual_detour_nm_avoided": round(ann_detour_nm, 0),
+            "annual_fuel_saved_tonnes": round(ann_fuel_tonnes, 1),
+            "annual_co2_mitigated_tonnes": round(ann_co2_tonnes, 1),
+            "annual_cost_saved_eur": round(ann_cost_eur, 2),
+            "detour_deviation_pct": round(ann_detour_dev_pct, 2),
+            "co2_excess_deviation_pct": round(ann_detour_dev_pct, 2),
+            "co2_mitigation_deviation_pct": round(ann_co2_mit_dev_pct, 2),
+        }
+
+        # Per-boundary contributions from 12-month sums
+        for pair, acc in boundary_annual_acc.items():
+            b_ref = acc["ref"]
+            b_dev = acc["dev_weighted"] / max(1, acc["scaled_crossings"]) if acc["scaled_crossings"] > 0 else b_ref.detour_deviation_pct
+            b_co2_mit = (b_dev * realization_rate) / (1.0 + b_dev / 100.0)
+
+            boundary_contributions.append({
+                "boundary_pair": pair,
+                "countries": f"{b_ref.country_a} ↔ {b_ref.country_b}",
+                "is_cross_border": b_ref.is_cross_border,
+                "classification": b_ref.fra_classification,
+                "spring_crossings": acc["season_crossings"]["spring"],
+                "summer_crossings": acc["season_crossings"]["summer"],
+                "autumn_crossings": acc["season_crossings"]["autumn"],
+                "annual_baseline_crossings": acc["scaled_crossings"],
+                "mean_detour_nm": b_ref.mean_detour_nm,
+                "realized_detour_nm": round(b_ref.mean_detour_nm * realization_rate, 1),
+                "directness_index_pct": round(b_ref.directness_index_pct, 1),
+                "detour_deviation_pct": round(b_dev, 2),
+                "co2_excess_deviation_pct": round(b_dev, 2),
+                "co2_mitigation_deviation_pct": round(b_co2_mit, 2),
+                "annual_base_cost_eur": acc["cost_eur"],
+                "annual_fuel_saved_tonnes": acc["fuel_t"],
+                "annual_co2_tonnes": acc["co2_t"],
+            })
+
+    elif has_full_seasons:
         rep_sp = seasonal_reports.get("spring", FRABoundaryReport("", 0, 0, 0, 0, 0, 0, 0, []))
         rep_su = seasonal_reports.get("summer", FRABoundaryReport("", 0, 0, 0, 0, 0, 0, 0, []))
         rep_au = seasonal_reports.get("autumn", FRABoundaryReport("", 0, 0, 0, 0, 0, 0, 0, []))
@@ -1393,15 +1613,15 @@ def calculate_fra_long_term_forecast(
     boundary_contributions.sort(key=lambda x: x["savings_20yr_median_eur"], reverse=True)
 
     # 12-month calendar breakdown metadata
-    month_names = {
+    month_names_dict = {
         "01": "January", "02": "February", "03": "March", "04": "April",
         "05": "May", "06": "June", "07": "July", "08": "August",
         "09": "September", "10": "October", "11": "November", "12": "December"
     }
-    monthly_breakdown = [
+    cal_monthly_breakdown = [
         {
             "month_num": m,
-            "month_name": month_names[m],
+            "month_name": month_names_dict[m],
             "official_flights": monthly_dict[m],
             "seasonal_cluster": "Winter/Spring" if m in SEASONAL_MONTH_CLUSTERS["spring"] else ("Summer Peak" if m in SEASONAL_MONTH_CLUSTERS["summer"] else "Autumn Shoulder"),
             "anchor_represented": f"{year_baseline}02" if m in SEASONAL_MONTH_CLUSTERS["spring"] else (f"{year_baseline}06" if m in SEASONAL_MONTH_CLUSTERS["summer"] else f"{year_baseline}10"),
@@ -1412,12 +1632,15 @@ def calculate_fra_long_term_forecast(
     return {
         "scope": scope,
         "year_baseline": year_baseline,
+        "baseline_mode": "full_year" if is_12m_active else ("seasonal_synthesis" if has_full_seasons else "single_period"),
+        "is_12m_full_year": is_12m_active,
         "network_total_flights": official_total_flights,
         "official_total_flights": official_total_flights,
         "official_yoy_growth_pct": EUROCONTROL_YOY_GROWTH_2025_VS_2024 * 100.0,
         "archive_sample_flights": archive_total_sampled,
         "archive_coverage_pct": round(archive_coverage_pct, 1),
-        "eurocontrol_monthly_breakdown": monthly_breakdown,
+        "monthly_breakdown": monthly_breakdown if is_12m_active else [],
+        "eurocontrol_monthly_breakdown": cal_monthly_breakdown,
         "use_seasonal_synthesis": use_seasonal_synthesis,
         "total_boundaries_evaluated": len(boundary_contributions),
         "annual_growth_rate": g,

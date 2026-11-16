@@ -12,10 +12,19 @@ from flightml.config import DATA_DIR, PARQUET_DIR
 PERIODS_PARQUET_DIR = PARQUET_DIR / "periods"
 
 
+CONTIGUOUS_12M_PERIODS: list[str] = [
+    "202411", "202412", "202501", "202502",
+    "202503", "202504", "202505", "202506",
+    "202507", "202508", "202509", "202510",
+]
+FULL_YEAR_PERIOD: str = "202411-202510"
+
+
 class FlightDataset:
     """
     High-performance, columnar analytics and query engine for the FlightML dataset.
-    Supports multi-period federation across Eurocontrol monthly archives (e.g. 201611, 202510).
+    Supports multi-period federation across Eurocontrol monthly archives (e.g. 201611, 202510)
+    and full-year multi-archive federation (e.g. 202411-202510).
     """
 
     def __init__(
@@ -33,15 +42,37 @@ class FlightDataset:
         self.db_path = str(db_path)
 
         period_str = str(period).strip() if period is not None else ""
-        if period_str.lower() in ("auto", "none", ""):
+        period_lower = period_str.lower()
+        if period_lower in ("auto", "none", ""):
             resolved_period, self.period_selection_reason = self.find_best_period(
                 target_date=target_date,
                 day_of_week=day_of_week,
                 parquet_dir=self.parquet_dir,
             )
             self.period = resolved_period
+            self.is_multi_period = False
+            self.constituent_periods = [self.period]
+        elif period_lower in ("202411-202510 (full year)", "202411-202510", "full_year", "full-year", "year_2025", "yearly", "12m"):
+            self.period = FULL_YEAR_PERIOD
+            self.is_multi_period = True
+            self.constituent_periods = list(CONTIGUOUS_12M_PERIODS)
+            self.period_selection_reason = f"Full contiguous 12-month Eurocontrol operational cycle ({FULL_YEAR_PERIOD})"
+        elif "," in period_str:
+            parts = [p.strip() for p in period_str.split(",") if p.strip()]
+            if len(parts) > 1:
+                self.is_multi_period = True
+                self.constituent_periods = parts
+                self.period = period_str
+                self.period_selection_reason = f"Multi-period federation across {len(parts)} archives: {', '.join(parts)}"
+            else:
+                self.period = parts[0] if parts else "202510"
+                self.is_multi_period = False
+                self.constituent_periods = [self.period]
+                self.period_selection_reason = f"Explicitly configured period: {self.period}"
         else:
             self.period = period_str
+            self.is_multi_period = False
+            self.constituent_periods = [self.period]
             self.period_selection_reason = f"Explicitly configured period: {self.period}"
 
         self.con = duckdb.connect(db_path)
@@ -55,12 +86,32 @@ class FlightDataset:
         return f"read_csv_auto('{str(csv_path).replace(chr(92), '/')}', header=true, ignore_errors=true)"
 
     def _resolve_period_source(self, table_name: str, fallback_parquet: str, fallback_csv: str) -> str:
+        if self.is_multi_period:
+            file_list = []
+            for p in self.constituent_periods:
+                p_pq = self.periods_dir / p / f"{table_name}.parquet"
+                if p_pq.exists():
+                    file_list.append(str(p_pq).replace(chr(92), "/"))
+            if file_list:
+                files_repr = "[" + ", ".join(f"'{f}'" for f in file_list) + "]"
+                return f"read_parquet({files_repr}, filename=true)"
+            return self._resolve_universal_source(fallback_parquet, fallback_csv)
+
         if self.period not in ("201611", "baseline"):
             period_pq = self.periods_dir / self.period / f"{table_name}.parquet"
             if period_pq.exists():
                 return f"'{str(period_pq).replace(chr(92), '/')}'"
 
         return self._resolve_universal_source(fallback_parquet, fallback_csv)
+
+    def _resolve_reference_source(self, table_name: str, fallback_parquet: str, fallback_csv: str) -> str:
+        """Resolve reference tables (fir, routes) preferring the most recent cycle in multi-period mode."""
+        if self.is_multi_period:
+            for p in reversed(self.constituent_periods):
+                p_pq = self.periods_dir / p / f"{table_name}.parquet"
+                if p_pq.exists():
+                    return f"'{str(p_pq).replace(chr(92), '/')}'"
+        return self._resolve_period_source(table_name, fallback_parquet, fallback_csv)
 
     def _init_views(self) -> None:
         """Register logical tables and views in DuckDB."""
@@ -69,8 +120,8 @@ class FlightDataset:
         freqs_src = self._resolve_universal_source("airport_frequencies.parquet", "airport-frequencies.csv")
         navaids_src = self._resolve_universal_source("navaids.parquet", "navaids.csv")
 
-        fir_src = self._resolve_period_source("fir", "fir.parquet", "FIR.csv")
-        routes_src = self._resolve_period_source("routes", "routes.parquet", "Routes.csv")
+        fir_src = self._resolve_reference_source("fir", "fir.parquet", "FIR.csv")
+        routes_src = self._resolve_reference_source("routes", "routes.parquet", "Routes.csv")
         flights_src = self._resolve_period_source("flights", "flights.parquet", "Flights.csv")
 
         self.con.execute(f"CREATE OR REPLACE VIEW raw_airports AS SELECT * FROM {airports_src};")
@@ -81,11 +132,13 @@ class FlightDataset:
         self.con.execute(f"CREATE OR REPLACE VIEW raw_routes AS SELECT * FROM {routes_src};")
         self.con.execute(f"CREATE OR REPLACE VIEW raw_flights AS SELECT * FROM {flights_src};")
 
+        period_expr = "COALESCE(NULLIF(regexp_extract(filename, 'periods/([0-9]{6})', 1), ''), '" + self.period + "')" if self.is_multi_period else f"'{self.period}'"
+
         # Standardized views with clean identifiers and computed delay metrics
         self.con.execute(f"""
             CREATE OR REPLACE VIEW flights AS
             SELECT
-                '{self.period}' AS period_id,
+                {period_expr} AS period_id,
                 "ECTRL ID" AS ectrl_id,
                 ADEP AS adep,
                 "ADEP Latitude" AS adep_lat,
@@ -122,7 +175,7 @@ class FlightDataset:
         self.con.execute(f"""
             CREATE OR REPLACE VIEW trajectory_actual AS
             SELECT
-                '{self.period}' AS period_id,
+                {period_expr} AS period_id,
                 "ECTRL ID" AS ectrl_id,
                 "Sequence Number" AS seq_num,
                 "Time Over" AS time_over,
@@ -135,7 +188,7 @@ class FlightDataset:
         self.con.execute(f"""
             CREATE OR REPLACE VIEW trajectory_planned AS
             SELECT
-                '{self.period}' AS period_id,
+                {period_expr} AS period_id,
                 "ECTRL ID" AS ectrl_id,
                 "Sequence Number" AS seq_num,
                 "Time Over" AS time_over,
@@ -146,13 +199,13 @@ class FlightDataset:
         """)
 
         # Optional en-route FIR sector traversal views (if ingested from monthly Eurocontrol archive)
-        fir_act_pq = self.periods_dir / self.period / "flight_firs_actual.parquet"
-        if fir_act_pq.exists():
-            fir_act_src = f"'{str(fir_act_pq).replace(chr(92), '/')}'"
+        has_fir_act = self.is_multi_period or (self.periods_dir / self.period / "flight_firs_actual.parquet").exists()
+        if has_fir_act:
+            fir_act_src = self._resolve_period_source("flight_firs_actual", "", "")
             self.con.execute(f"""
                 CREATE OR REPLACE VIEW flight_firs_actual AS
                 SELECT
-                    '{self.period}' AS period_id,
+                    {period_expr} AS period_id,
                     "ECTRL ID" AS ectrl_id,
                     "Sequence Number" AS seq_num,
                     "FIR ID" AS fir_id,
@@ -162,13 +215,13 @@ class FlightDataset:
                 FROM {fir_act_src};
             """)
 
-        fir_fld_pq = self.periods_dir / self.period / "flight_firs_filed.parquet"
-        if fir_fld_pq.exists():
-            fir_fld_src = f"'{str(fir_fld_pq).replace(chr(92), '/')}'"
+        has_fir_fld = self.is_multi_period or (self.periods_dir / self.period / "flight_firs_filed.parquet").exists()
+        if has_fir_fld:
+            fir_fld_src = self._resolve_period_source("flight_firs_filed", "", "")
             self.con.execute(f"""
                 CREATE OR REPLACE VIEW flight_firs_filed AS
                 SELECT
-                    '{self.period}' AS period_id,
+                    {period_expr} AS period_id,
                     "ECTRL ID" AS ectrl_id,
                     "Sequence Number" AS seq_num,
                     "FIR ID" AS fir_id,
@@ -179,13 +232,13 @@ class FlightDataset:
             """)
 
         # Optional ATC Unit Airspace (AUA: TMA, CTA, UTA) traversal views
-        aua_act_pq = self.periods_dir / self.period / "flight_auas_actual.parquet"
-        if aua_act_pq.exists():
-            aua_act_src = f"'{str(aua_act_pq).replace(chr(92), '/')}'"
+        has_aua_act = self.is_multi_period or (self.periods_dir / self.period / "flight_auas_actual.parquet").exists()
+        if has_aua_act:
+            aua_act_src = self._resolve_period_source("flight_auas_actual", "", "")
             self.con.execute(f"""
                 CREATE OR REPLACE VIEW flight_auas_actual AS
                 SELECT
-                    '{self.period}' AS period_id,
+                    {period_expr} AS period_id,
                     "ECTRL ID" AS ectrl_id,
                     "Sequence Number" AS seq_num,
                     "AUA ID" AS aua_id,
@@ -201,13 +254,13 @@ class FlightDataset:
                 FROM {aua_act_src};
             """)
 
-        aua_fld_pq = self.periods_dir / self.period / "flight_auas_filed.parquet"
-        if aua_fld_pq.exists():
-            aua_fld_src = f"'{str(aua_fld_pq).replace(chr(92), '/')}'"
+        has_aua_fld = self.is_multi_period or (self.periods_dir / self.period / "flight_auas_filed.parquet").exists()
+        if has_aua_fld:
+            aua_fld_src = self._resolve_period_source("flight_auas_filed", "", "")
             self.con.execute(f"""
                 CREATE OR REPLACE VIEW flight_auas_filed AS
                 SELECT
-                    '{self.period}' AS period_id,
+                    {period_expr} AS period_id,
                     "ECTRL ID" AS ectrl_id,
                     "Sequence Number" AS seq_num,
                     "AUA ID" AS aua_id,

@@ -3190,6 +3190,7 @@ def cmd_fra_worst_flights(
 def cmd_fra_forecast(
     period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol archive period month"),
     year: str = typer.Option("2025", "--year", "-y", help="Baseline archive year for seasonal synthesis (e.g. '2025' or '2024')"),
+    baseline_mode: str = typer.Option("full_year", "--baseline-mode", "-b", help="Baseline mode: 'full_year' (12 contiguous empirical months), 'seasonal_synthesis', or 'single_period'"),
     growth: float = typer.Option(2.0, "--growth", "-g", help="Annual traffic growth rate (%/year)"),
     realization: float = typer.Option(85.0, "--realization", "-r", help="Directness realization rate (%)"),
     scope: str = typer.Option("prime_only", "--scope", "-s", help="Scope ('prime_only', 'prime_and_medium', 'all_cross_border', 'top_10', 'top_25')"),
@@ -3207,11 +3208,13 @@ def cmd_fra_forecast(
         console.print(f"[bold red]❌ Failed to load dataset period {period}: {exc}[/bold red]")
         raise typer.Exit(1)
 
-    with console.status(f"[cyan]Synthesizing seasonal profiles (Spring, Summer, Autumn) & fuel price pathways..."):
+    with console.status(f"[cyan]Synthesizing empirical baseline profiles ({baseline_mode}) & fuel price pathways..."):
         report = analyze_fir_boundary_inefficiencies(ds, min_flights=500, cross_border_only=True)
         forecast = calculate_fra_long_term_forecast(
             boundary_metrics=report.boundaries,
+            dataset=ds,
             year_baseline=year,
+            baseline_mode=baseline_mode,
             use_seasonal_synthesis=seasonal,
             annual_growth_rate=growth / 100.0,
             realization_rate=realization / 100.0,
@@ -3229,15 +3232,44 @@ def cmd_fra_forecast(
 
     h = forecast["horizons"]
     sb = forecast.get("seasonal_breakdown", {})
+    mb = forecast.get("monthly_breakdown", [])
+    b_mode_name = forecast.get("baseline_mode", "full_year").replace("_", " ").title()
+
     console.print(Panel(
         f"[bold cyan]Free Route Airspace (FRA) Multi-Horizon Benefit Forecast[/bold cyan]\n"
         f"Scope: [yellow]{scope}[/yellow] ({forecast['total_boundaries_evaluated']} boundaries) | "
+        f"Baseline Mode: [green]{b_mode_name}[/green] | "
         f"Traffic Growth: [yellow]{growth:.1f}%/yr[/yellow] | Realization: [yellow]{realization:.0f}%[/yellow] | "
         f"Base Fuel Price: [yellow]€{fuel_price:.4f}/kg[/yellow]\n"
         f"Fuel Price Pathways: Optimistic: [green]+{fuel_opt:.1f}%/yr[/green] | "
         f"Median Expected: [yellow]+{fuel_med:.1f}%/yr[/yellow] | Shock: [bold red]+{fuel_shock:.1f}%/yr[/bold red]",
         title="💰 Long-Term FRA Economics & Energy Scenarios",
     ))
+
+    # 12-Month empirical breakdown table
+    if mb:
+        t_mb = Table(title="🗓️ Contiguous 12-Month Empirical Monthly Baseline (Nov 2024 – Oct 2025)", header_style="bold cyan", show_lines=True)
+        t_mb.add_column("Period", style="bold white", width=10)
+        t_mb.add_column("Month", style="white", width=12)
+        t_mb.add_column("Season", style="dim white", width=10)
+        t_mb.add_column("European Flights", justify="right", style="cyan", width=18)
+        t_mb.add_column("Scoped Crossings", justify="right", style="green", width=18)
+        t_mb.add_column("Fuel Saved (t)", justify="right", style="green", width=15)
+        t_mb.add_column("CO₂ Mitigated (t)", justify="right", style="yellow", width=17)
+        t_mb.add_column("Monthly Value (€ EUR)", justify="right", style="bold green", width=22)
+
+        for m in mb:
+            t_mb.add_row(
+                m["period"],
+                m["month_name"],
+                m["season_cluster"].title(),
+                f"{m['flights_eurocontrol']:,}",
+                f"{m['crossings_scaled']:,}",
+                f"{m['fuel_saved_tonnes']:,.1f} t",
+                f"{m['co2_mitigated_tonnes']:,.1f} t",
+                f"€{m['cost_saved_eur']:,.2f}",
+            )
+        console.print(t_mb)
 
     # Seasonal synthesis breakdown table
     if sb and "annual_blended" in sb:

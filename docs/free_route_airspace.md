@@ -47,14 +47,37 @@ A key distinction in European air traffic management is the relationship between
 
 ---
 
-## Multi-Season Empirical Synthesis
+## Baseline Extrapolation Modes: Contiguous 12-Month Full Year & Seasonal Synthesis
 
-Aviation traffic and airway detours vary significantly across seasons:
+FlightML provides two deterministic baseline extrapolation modes for long-term benefit forecasting, selectable via the Streamlit dashboard (`Baseline Extrapolation Source`), CLI (`--baseline-mode`), or FastMCP (`baseline_mode`):
+
+### 1. Contiguous 12-Month Full-Year Empirical Baseline (`202411-202510`) *(Default / Recommended)*
+FlightML ingests **12 contiguous Eurocontrol monthly archives** (November 2024 through October 2025), representing **10,235,149 verified DDR2 radar flights** and **88,164,473 FIR traversals**:
+* Each of the 12 individual months is computed deterministically from real 4D radar tracks and FIR boundary logs.
+* Month-by-month scaling factors reconcile each archive month to Eurocontrol's official monthly traffic count ($11,124,247$ annual flights in 2025).
+* Tracks the true European seasonal volatility: winter trough in January (€3.73M/mo saved) through the peak summer vacation surge in July/August (€8.65M–€9.21M/mo saved).
+
+| Period | Month | Season Cluster | Eurocontrol Flights | Archive Flights | Coverage | Scoped Crossings | Fuel Saved (t) | CO₂ Mitigated (t) | Operating Value (€ EUR) | Mean Detour |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **202411** | Nov 2024 | Autumn Shoulder | 810,270 | 714,083 | 88.1% | 376,446 | 6,633.1 t | 20,960.5 t | €4,259,132 | +6.95% |
+| **202412** | Dec 2024 | Winter Block | 827,049 | 732,074 | 88.5% | 394,408 | 6,672.1 t | 21,083.8 t | €4,284,148 | +6.68% |
+| **202501** | Jan 2025 | Winter Block | 745,085 | 691,278 | 92.8% | 333,958 | 5,816.5 t | 18,380.0 t | €3,734,793 | +6.88% |
+| **202502** | Feb 2025 | Winter Block | 713,160 | 656,458 | 91.9% | 402,318 | 7,231.6 t | 22,851.9 t | €4,643,393 | +7.11% |
+| **202503** | Mar 2025 | Winter Block | 825,871 | 759,566 | 91.6% | 418,187 | 7,400.8 t | 23,386.5 t | €4,752,054 | +7.00% |
+| **202504** | Apr 2025 | Autumn Shoulder | 918,900 | 848,673 | 92.4% | 538,707 | 9,190.6 t | 29,042.3 t | €5,901,277 | +6.74% |
+| **202505** | May 2025 | Autumn Shoulder | 1,000,184 | 926,106 | 92.0% | 649,816 | 11,242.3 t | 35,525.6 t | €7,218,671 | +6.85% |
+| **202506** | Jun 2025 | Summer Peak | 1,037,280 | 957,457 | 92.3% | 593,123 | 10,922.5 t | 34,515.2 t | €7,013,316 | +7.27% |
+| **202507** | Jul 2025 | Summer Peak | 1,097,183 | 1,019,405 | 92.9% | 758,263 | 13,470.7 t | 42,567.5 t | €8,649,506 | +7.02% |
+| **202508** | Aug 2025 | Summer Peak | 1,097,059 | 1,027,054 | 93.2% | 770,711 | 14,342.5 t | 45,322.2 t | €9,209,314 | +7.35% |
+| **202509** | Sep 2025 | Summer Peak | 1,044,210 | 968,854 | 92.8% | 691,728 | 11,978.6 t | 37,852.3 t | €7,691,466 | +6.84% |
+| **202510** | Oct 2025 | Autumn Shoulder | 1,007,996 | 934,141 | 92.4% | 600,356 | 10,123.5 t | 31,990.2 t | €6,500,299 | +6.66% |
+| **TOTAL** | **Full Year** | **12 Months** | **11,124,247** | **10,235,149** | **92.0%** | **6,528,020** | **115,024.7 t** | **363,478.0 t** | **€73,857,363** | **+6.95%** |
+
+### 2. Multi-Season Empirical Synthesis (3 Anchor Blocks)
+For environments where only seasonal samples are indexed:
 * **Spring (02)**: Low winter trough and shoulder operations (lower convective weather, standard airway routing).
 * **Summer Peak (06)**: Severe seasonal traffic surges, holiday charter flows to Southern Europe, and extensive tactical convective storm avoidance.
 * **Autumn Shoulder (10)**: High-density business trunk corridors, dense North-South European axis operations.
-
-FlightML synthesizes empirical monthly archives using Eurocontrol's official 12-month calendar figures:
 
 ```text
 Seasonal Cluster Mapping (11,124,247 Total Flights in 2025):

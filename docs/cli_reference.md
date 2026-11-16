@@ -264,10 +264,11 @@ flightml fra-worst-flights "EGTTUIR <-> LFFFUIR" [--period 202510] [--limit 10] 
 ### `flightml fra-forecast`
 Forecast cumulative multi-horizon benefits (1-year, 5-year, and 20-year) of Free Route Airspace harmonization.
 Features:
-- **Seasonal Realization Synthesis**: Blends Spring (02), Summer Peak (06), and Autumn (10) to account for vacation traffic surges and convective weather detours.
+- **Contiguous 12-Month Empirical Baseline (`--baseline-mode full_year`)**: Leverages 12 contiguous historical Eurocontrol archives (202411 to 202510, 10.2M trajectories) with exact month-by-month empirical routing inefficiencies and calendar scaling.
+- **Seasonal Realization Synthesis (`--baseline-mode seasonal_synthesis`)**: Blends Spring (02), Summer Peak (06), and Autumn (10) to account for vacation traffic surges and convective weather detours.
 - **Dynamic Fuel Price Growth Pathways**: Models 20-year energy cost inflation across Optimistic (+1.5%/yr), Median Expected (+3.5%/yr: ReFuelEU SAF mandates + EU ETS), and Shock Pricing (+6.5%/yr).
 ```bash
-flightml fra-forecast [--year 2025] [--growth 2.0] [--realization 85.0] [--scope prime_only] [--fuel-price 0.6421] [--fuel-opt 1.5] [--fuel-med 3.5] [--fuel-shock 6.5] [--seasonal] [--json]
+flightml fra-forecast [--baseline-mode full_year] [--year 2025] [--growth 2.0] [--realization 85.0] [--scope prime_only] [--fuel-price 0.6421] [--fuel-opt 1.5] [--fuel-med 3.5] [--fuel-shock 6.5] [--json]
 ```
 
 ### `flightml generate-corpus`

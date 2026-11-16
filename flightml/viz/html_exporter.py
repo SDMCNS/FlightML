@@ -1212,6 +1212,28 @@ def _build_fra_boundary_section(
         ]
     )
 
+    mb_12m = forecast.get("monthly_breakdown", [])
+    mb_12m_html = ""
+    if mb_12m:
+        mb_12m_df = pd.DataFrame(mb_12m)[
+            ["month_name", "season_cluster", "flights_eurocontrol", "crossings_scaled", "fuel_saved_tonnes", "co2_mitigated_tonnes", "cost_saved_eur", "detour_deviation_pct"]
+        ].rename(
+            columns={
+                "month_name": "Month",
+                "season_cluster": "Season",
+                "flights_eurocontrol": "European Flights",
+                "crossings_scaled": "Scoped Crossings",
+                "fuel_saved_tonnes": "Fuel Saved (t)",
+                "co2_mitigated_tonnes": "CO₂ Mitigated (t)",
+                "cost_saved_eur": "Operating Value (€ EUR)",
+                "detour_deviation_pct": "Mean Detour (%)",
+            }
+        )
+        mb_12m_html = f"""
+        <h3>🗓️ Contiguous 12-Month Empirical Monthly Baseline (Nov 2024 – Oct 2025)</h3>
+        {_df_to_html_table(mb_12m_df)}
+        """
+
     return f"""
     <section class="report-section">
         <h2>🌐 Free Route Airspace (FRA) Boundary Efficiency Analysis &amp; Long-Term Forecaster</h2>
@@ -1232,6 +1254,7 @@ def _build_fra_boundary_section(
             Energy pathways: Optimistic (+{fuel_growth_opt*100:.1f}%/yr), Median Expected ReFuelEU/ETS (+{fuel_growth_med*100:.1f}%/yr), and Shock Pricing (+{fuel_growth_shock*100:.1f}%/yr).
         </p>
         {_df_to_html_table(hz_df)}
+        {mb_12m_html}
         <h3>📅 Official Eurocontrol Monthly Flight Statistics &amp; Seasonal Synthesis ({baseline_year})</h3>
         {_df_to_html_table(month_df) if not month_df.empty else ""}
         {chart3_html}

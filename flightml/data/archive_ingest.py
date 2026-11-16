@@ -136,8 +136,26 @@ class EurocontrolArchiveIngestor:
         return self.convert_period_to_parquet(period_id, classified)
 
 
+CONTIGUOUS_12M_PERIODS: list[str] = [
+    "202411", "202412", "202501", "202502",
+    "202503", "202504", "202505", "202506",
+    "202507", "202508", "202509", "202510",
+]
+FULL_YEAR_PERIOD: str = "202411-202510"
+FULL_YEAR_LABEL: str = "202411-202510 (Full Year)"
+
+
+def has_contiguous_12m_archive(parquet_dir: Path | str | None = None) -> bool:
+    """Check if all 12 contiguous monthly periods (202411 through 202510) are ingested in parquet."""
+    target_dir = Path(parquet_dir) if parquet_dir else PARQUET_DIR
+    periods_sub = target_dir / "periods" if target_dir.name != "periods" else target_dir
+    if not periods_sub.exists():
+        return False
+    return all((periods_sub / p / "flights.parquet").exists() for p in CONTIGUOUS_12M_PERIODS)
+
+
 def list_available_periods(parquet_dir: Path | str | None = None) -> list[str]:
-    """List all ingested historical periods available in parquet."""
+    """List all ingested historical monthly periods available in parquet."""
     target_dir = Path(parquet_dir) if parquet_dir else PARQUET_DIR
     periods = []
     # Check baseline 201611
@@ -148,11 +166,22 @@ def list_available_periods(parquet_dir: Path | str | None = None) -> list[str]:
     periods_sub = target_dir / "periods" if target_dir.name != "periods" else target_dir
     if periods_sub.exists():
         for p in periods_sub.iterdir():
-            if p.is_dir() and (p / "flights.parquet").exists():
+            if p.is_dir() and (p / "flights.parquet").exists() and re.match(r"^\d{6}$", p.name):
                 periods.append(p.name)
 
     if not periods:
         periods = ["201611"]
 
     return sorted(list(set(periods)))
+
+
+def list_selectable_periods(parquet_dir: Path | str | None = None, include_full_year: bool = True) -> list[str]:
+    """
+    List all selectable periods for UI and CLI dropdowns.
+    If the 12 contiguous months are present, includes the full-year option.
+    """
+    periods = list_available_periods(parquet_dir)
+    if include_full_year and has_contiguous_12m_archive(parquet_dir):
+        return [FULL_YEAR_LABEL] + periods
+    return periods
 

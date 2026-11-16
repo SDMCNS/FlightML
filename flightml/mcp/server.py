@@ -1167,6 +1167,7 @@ def create_mcp_server() -> FastMCP:
     def forecast_fra_benefits(
         period: str = "202510",
         year_baseline: str = "2025",
+        baseline_mode: str = "full_year",
         use_seasonal_synthesis: bool = True,
         annual_growth_rate_pct: float = 2.0,
         realization_rate_pct: float = 85.0,
@@ -1179,12 +1180,14 @@ def create_mcp_server() -> FastMCP:
         """Forecast cumulative multi-horizon benefits (1, 5, and 20 years) of Free Route Airspace (FRA) deployment.
 
         Features:
-        - Seasonal Synthesis across Spring (02), Summer (06), and Autumn (10) to capture vacation surge and convective detours.
+        - 12-Month Empirical Full-Year Baseline: Uses the contiguous 12-month Eurocontrol operational cycle (202411 to 202510).
+        - Multi-Season Synthesis across Spring (02), Summer (06), and Autumn (10) to capture vacation surge and convective detours.
         - Dynamic 20-Year Fuel Price Escalation under Optimistic, Median Expected, and Geopolitical Shock scenarios.
 
         Args:
             period: Eurocontrol archive month fallback (e.g. '202510').
             year_baseline: Baseline archive year ('2025' or '2024') for seasonal synthesis.
+            baseline_mode: Baseline mode ('full_year' for 12 contiguous empirical months, 'seasonal_synthesis', or 'single_period').
             use_seasonal_synthesis: Whether to blend Spring, Summer, Autumn into a weighted annual baseline (default: True).
             annual_growth_rate_pct: Projected compound annual air traffic growth rate (default: 2.0% STATFOR baseline).
             realization_rate_pct: Directness realization factor (default: 85.0%).
@@ -1198,7 +1201,9 @@ def create_mcp_server() -> FastMCP:
         report = analyze_fir_boundary_inefficiencies(ds, min_flights=500, cross_border_only=True)
         forecast = calculate_fra_long_term_forecast(
             boundary_metrics=report.boundaries,
+            dataset=ds,
             year_baseline=year_baseline,
+            baseline_mode=baseline_mode,
             use_seasonal_synthesis=use_seasonal_synthesis,
             annual_growth_rate=annual_growth_rate_pct / 100.0,
             realization_rate=realization_rate_pct / 100.0,

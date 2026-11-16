@@ -7,7 +7,7 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 from flightml.data.dataset import FlightDataset
-from flightml.data.archive_ingest import list_available_periods
+from flightml.data.archive_ingest import list_available_periods, list_selectable_periods, FULL_YEAR_LABEL, has_contiguous_12m_archive
 from flightml.geo.trajectory import analyze_trajectory
 from flightml.weather.metar_client import MetarClient
 from flightml.eval.diagnostics import diagnose_flight_bottlenecks
@@ -123,6 +123,12 @@ st.sidebar.title("✈️ FlightML Control Deck")
 
 def _get_available_periods() -> list[str]:
     try:
+        periods = list_selectable_periods(include_full_year=True)
+        if periods:
+            return periods
+    except Exception:
+        pass
+    try:
         periods = list_available_periods()
         if periods:
             return periods
@@ -137,13 +143,16 @@ def _get_available_periods() -> list[str]:
 
 
 available_periods = _get_available_periods()
-default_idx = available_periods.index("202510") if "202510" in available_periods else len(available_periods) - 1
+default_idx = available_periods.index("202510") if "202510" in available_periods else 0
 selected_period = st.sidebar.selectbox(
     "Active Eurocontrol Period",
     options=available_periods,
     index=default_idx,
-    help="Select Eurocontrol archive period (e.g. 2024 vs 2025 seasonal benchmarks: Feb, Jun, Oct)."
+    help="Select Eurocontrol archive period. Includes individual monthly archives as well as the contiguous 12-month full year baseline."
 )
+
+if "Full Year" in selected_period or "202411-202510" in selected_period:
+    st.sidebar.success("🗓️ **Full Contiguous Year Active:** 12 contiguous months (Nov 2024 – Oct 2025, 10.2M trajectories federated).")
 
 
 @st.cache_resource(show_spinner=False)
@@ -2119,7 +2128,7 @@ with tab_cat_system:
                 "and evaluates forward-looking **energy pathways (Optimistic, Median Expected, and Geopolitical Shock pricing)**."
             )
 
-            col_fc0, col_fc1, col_fc2 = st.columns([1, 1.2, 1.8])
+            col_fc0, col_fc1, col_fc2 = st.columns([1, 1.4, 1.6])
             with col_fc0:
                 fc_year = st.selectbox(
                     "Baseline Year:",
@@ -2129,11 +2138,16 @@ with tab_cat_system:
                     help="Eurocontrol multi-season archive baseline year.",
                 )
             with col_fc1:
-                fc_seasonal_toggle = st.checkbox(
-                    "🌸 Multi-Season Empirical Synthesis",
-                    value=True,
-                    key="fra_fc_seasonal_toggle",
-                    help="Blends empirical crossing and detour metrics from Spring (Feb), Summer Peak (Jun), and Autumn (Oct).",
+                fc_baseline_mode = st.selectbox(
+                    "Baseline Extrapolation Source:",
+                    [
+                        "🗓️ 12-Month Full Year (202411-202510) [Empirical 12M]",
+                        "🌸 Multi-Season Synthesis (Spring, Summer, Autumn)",
+                        "⚡ Active Sidebar Period Annualization",
+                    ],
+                    index=0,
+                    key="fra_fc_baseline_mode_select",
+                    help="Choose whether to extrapolate from all 12 contiguous empirical monthly archives, 3 seasonal anchor months, or the single active period.",
                 )
             with col_fc2:
                 fc_scope_label = st.selectbox(
@@ -2228,12 +2242,15 @@ with tab_cat_system:
                 "🔝 Top 25 Ranked Priority Boundaries": "top_25",
             }
             sel_scope_key = scope_map.get(fc_scope_label, "prime_only")
+            b_mode = "full_year" if "12-Month" in fc_baseline_mode else ("seasonal_synthesis" if "Multi-Season" in fc_baseline_mode else "single_period")
 
-            with st.spinner("Synthesizing seasonal profiles (Spring, Summer, Autumn) & fuel price pathways..."):
+            with st.spinner("Synthesizing baseline profiles & fuel price pathways..."):
                 fc_res = calculate_fra_long_term_forecast(
                     boundary_metrics=fra_report.boundaries,
+                    dataset=ds,
                     year_baseline=fc_year,
-                    use_seasonal_synthesis=fc_seasonal_toggle,
+                    baseline_mode=b_mode,
+                    use_seasonal_synthesis=(b_mode != "single_period"),
                     annual_growth_rate=fc_growth / 100.0,
                     realization_rate=fc_realization / 100.0,
                     horizons=[1, 5, 20],
@@ -2255,8 +2272,49 @@ with tab_cat_system:
             st.info(
                 f"🇪🇺 **Eurocontrol Network Baseline ({fc_year}):** **{net_flts:,} Total Flights** "
                 f"(`+{official_yoy:.1f}%` YoY) ➔ Generated **{ann_scoped_crossings:,} Scoped Boundary Crossings** across the {fc_res['total_boundaries_evaluated']} evaluated interfaces "
-                f"(averaging **{crossings_per_flt:.2f} crossings per flight** | Archive Coverage: **{arch_cov:.1f}%**)."
+                f"(averaging **{crossings_per_flt:.2f} crossings per flight** | Baseline Mode: **{fc_res.get('baseline_mode', 'full_year').replace('_', ' ').title()}** | Coverage: **{arch_cov:.1f}%**)."
             )
+
+            if fc_res.get("is_12m_full_year") and fc_res.get("monthly_breakdown"):
+                st.success("🗓️ **Full Contiguous 12-Month Empirical Baseline Active (Nov 2024 – Oct 2025):** 12 individual Eurocontrol monthly archives evaluated with month-by-month empirical routing detours & crossings.")
+                with st.expander("📊 Contiguous 12-Month Empirical Monthly Breakdown (Nov 2024 – Oct 2025)", expanded=True):
+                    m_breakdown = fc_res["monthly_breakdown"]
+                    m_df = pd.DataFrame(m_breakdown)
+
+                    st.markdown("#### Monthly Crossings & Jet-A Conserved Progression")
+                    c_chart1, c_chart2 = st.columns(2)
+                    with c_chart1:
+                        st.caption("Monthly Scoped Crossings Across Bottlenecks")
+                        st.bar_chart(m_df.set_index("month_name")["crossings_scaled"])
+                    with c_chart2:
+                        st.caption("Monthly Jet-A Fuel Saved (Tonnes)")
+                        st.line_chart(m_df.set_index("month_name")["fuel_saved_tonnes"])
+
+                    rename_cols = {
+                        "month_name": "Month",
+                        "season_cluster": "Season",
+                        "flights_eurocontrol": "European Flights",
+                        "flights_archive": "Archive Flights",
+                        "crossings_scaled": "Scoped Crossings",
+                        "fuel_saved_tonnes": "Fuel Saved (t)",
+                        "co2_mitigated_tonnes": "CO₂ Mitigated (t)",
+                        "cost_saved_eur": "Operating Value (€ EUR)",
+                        "detour_deviation_pct": "Mean Detour (%)",
+                    }
+                    display_m_df = m_df[list(rename_cols.keys())].rename(columns=rename_cols)
+                    st.dataframe(
+                        display_m_df.style.format({
+                            "European Flights": "{:,}",
+                            "Archive Flights": "{:,}",
+                            "Scoped Crossings": "{:,}",
+                            "Fuel Saved (t)": "{:,.1f}",
+                            "CO₂ Mitigated (t)": "{:,.1f}",
+                            "Operating Value (€ EUR)": "€{:,.2f}",
+                            "Mean Detour (%)": "+{:.2f}%",
+                        }),
+                        use_container_width=True,
+                    )
+
             with st.expander("📅 Official Eurocontrol Monthly Flight Breakdown (Full 12-Month Calendar)", expanded=False):
                 mb_df = pd.DataFrame(fc_res.get("eurocontrol_monthly_breakdown", []))
                 if not mb_df.empty:

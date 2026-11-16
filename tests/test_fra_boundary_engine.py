@@ -243,3 +243,37 @@ def test_cli_fra_forecast_json():
     assert "5" in data["horizons"]
     assert "20" in data["horizons"]
     assert data["horizons"]["20"]["cumulative_cost_saved_eur"] > 0.0
+
+
+def test_full_year_dataset_federation():
+    """Verify 12-month contiguous multi-period dataset federation."""
+    from flightml.data.archive_ingest import has_contiguous_12m_archive, list_selectable_periods, FULL_YEAR_LABEL
+
+    assert has_contiguous_12m_archive() is True
+    selectable = list_selectable_periods(include_full_year=True)
+    assert FULL_YEAR_LABEL in selectable
+
+    ds = FlightDataset(period="202411-202510")
+    assert ds.is_multi_period is True
+    assert len(ds.constituent_periods) == 12
+    fl_count = ds.con.execute("SELECT count(*) FROM flights").fetchone()[0]
+    assert fl_count > 10_000_000
+
+
+def test_fra_forecast_12m_full_year_mode():
+    """Verify empirical 12-month contiguous baseline calculation in FRA benefit forecasting."""
+    fc = calculate_fra_long_term_forecast(baseline_mode="full_year", scope="prime_only")
+    assert fc["is_12m_full_year"] is True
+    assert fc["baseline_mode"] == "full_year"
+    assert len(fc["monthly_breakdown"]) == 12
+
+    # Verify each month has expected keys
+    for m in fc["monthly_breakdown"]:
+        assert m["crossings_scaled"] > 0
+        assert m["fuel_saved_tonnes"] > 0.0
+        assert m["cost_saved_eur"] > 0.0
+
+    # Compounding horizons
+    h = fc["horizons"]
+    assert h[1]["cumulative_crossings"] > 6_000_000
+    assert h[20]["cumulative_crossings"] > h[5]["cumulative_crossings"] > h[1]["cumulative_crossings"]
