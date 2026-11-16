@@ -2312,7 +2312,7 @@ with tab_cat_system:
                     st.markdown("#### 📊 Monthly Scoped Crossings & Jet-A Conserved Progression (Nov 2024 – Oct 2025)")
                     st.caption(
                         f"Displays verified empirical progression across the 12 contiguous months for the **{fc_res['total_boundaries_evaluated']} scoped boundary interfaces** "
-                        f"(Scope: `{fc_scope}`). Crossings follow natural European airline seasonality from the winter trough (~402k/mo in Jan–Feb) "
+                        f"(Scope: `{fc_scope_label}`). Crossings follow natural European airline seasonality from the winter trough (~402k/mo in Jan–Feb) "
                         f"to the summer peak (~638k/mo in Jul–Aug), calibrated against official Eurocontrol traffic with a verified ~92.5% archive capture rate."
                     )
                     chronological_months = list(m_df["month_name"])
