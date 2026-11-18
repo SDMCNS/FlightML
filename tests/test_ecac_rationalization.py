@@ -10,6 +10,7 @@ from flightml.eval.ecac_station_rationalization import (
     get_ecac_rationalization_report,
     list_available_ecac_firs,
     get_fir_geometry,
+    is_point_on_land,
 )
 from flightml.viz.map_builder import create_ecac_coverage_map
 
@@ -135,3 +136,37 @@ def test_ecac_single_fir_rationalization():
     assert rep_paris["target_fir"] == "LFFFFIR"
     assert rep_paris["active_stations_count"] > 0
     assert len(rep_paris["airports"]) > 0
+
+
+def test_synthetic_gap_fillers_land_constraint():
+    """
+    Ensure all proposed synthetic gap fillers are strictly located on land,
+    and that uncoverable oceanic cells that cannot be covered from land
+    are never assigned impossible offshore stations.
+    """
+    # 1. Direct test of deep oceanic cell (Atlantic Ocean far from land)
+    deep_ocean_cell = [(45.0, -18.0)]
+    ocean_synthetics = compute_synthetic_gap_fillers(deep_ocean_cell, station_type="RADAR")
+    # Must NOT propose any station because it cannot be placed on land
+    assert len(ocean_synthetics) == 0
+
+    # 2. Direct test with a continental land gap cell (Central Germany)
+    land_cell = [(50.5, 9.5)]
+    land_synthetics = compute_synthetic_gap_fillers(land_cell, station_type="RADAR")
+    assert len(land_synthetics) == 1
+    assert is_point_on_land(land_synthetics[0].latitude, land_synthetics[0].longitude)
+
+    # 3. Network-wide report validation: 100% of proposed infill stations MUST be on land
+    ds = FlightDataset("202510")
+    radar_rep = get_ecac_rationalization_report(ds, station_type="RADAR", active_view="VIEW_1")
+    for gap in radar_rep["synthetic_gap_fillers"]:
+        assert is_point_on_land(gap["latitude"], gap["longitude"]), (
+            f"Proposed RADAR infill {gap['id']} at ({gap['latitude']}, {gap['longitude']}) is not on land!"
+        )
+
+    dme_rep = get_ecac_rationalization_report(ds, station_type="DME", active_view="VIEW_1")
+    for gap in dme_rep["synthetic_gap_fillers"]:
+        assert is_point_on_land(gap["latitude"], gap["longitude"]), (
+            f"Proposed DME infill {gap['id']} at ({gap['latitude']}, {gap['longitude']}) is not on land!"
+        )
+

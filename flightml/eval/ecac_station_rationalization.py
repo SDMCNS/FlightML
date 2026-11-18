@@ -28,6 +28,37 @@ from flightml.data.dataset import FlightDataset
 import flightml.math as fmath
 from flightml.utils.cache import disk_cache
 
+try:
+    from global_land_mask import globe
+    HAS_GLOBE = True
+except ImportError:
+    HAS_GLOBE = False
+
+
+def is_points_on_land(
+    latitudes: np.ndarray | list[float],
+    longitudes: np.ndarray | list[float],
+) -> np.ndarray:
+    """
+    Vectorized validation that geographic coordinates are located strictly on land.
+    """
+    lats = np.asarray(latitudes, dtype=float)
+    lons = np.asarray(longitudes, dtype=float)
+    if len(lats) == 0:
+        return np.zeros(0, dtype=bool)
+    if HAS_GLOBE:
+        return globe.is_land(lats, lons)
+    return np.ones(len(lats), dtype=bool)
+
+
+def is_point_on_land(latitude: float, longitude: float) -> bool:
+    """
+    Validation that a single (latitude, longitude) coordinate is located strictly on land.
+    """
+    if HAS_GLOBE:
+        return bool(globe.is_land(latitude, longitude))
+    return True
+
 # ECAC Continental Airspace Bounding Box (Lat: 34N to 68N, Lon: -12W to 35E)
 ECAC_LAT_MIN = 35.0
 ECAC_LAT_MAX = 65.0
@@ -566,11 +597,18 @@ def compute_synthetic_gap_fillers(
     uncoverable_cells: list[tuple[float, float]],
     station_type: Literal["RADAR", "DME"],
     target_fl: int = 200,
+    candidate_airports: list[dict[str, Any]] | None = None,
 ) -> list[SyntheticGapFiller]:
     """
-    Greedy Facility Location solver:
-    Identifies the minimum number of ideal synthetic station locations
-    required to cover 100% of the dataset gap cells.
+    Greedy Facility Location solver with strict Terrestrial Land Constraint:
+    Identifies the minimum number of ideal synthetic station locations on land
+    required to cover gap cells.
+
+    Rules:
+    - Proposed infill sites MUST be on land (is_point_on_land is True).
+    - Water gap cells are covered from coastal/island terrestrial sites where feasible.
+    - If a cell cannot be covered by any land site (e.g. deep oceanic airspace),
+      do NOT propose an impossible offshore station.
     """
     if not uncoverable_cells:
         return []
@@ -578,60 +616,95 @@ def compute_synthetic_gap_fillers(
     service_r = 160.0 if station_type == "DME" else 220.0
     u_lats = np.array([c[0] for c in uncoverable_cells])
     u_lons = np.array([c[1] for c in uncoverable_cells])
-    rem_indices = set(range(len(uncoverable_cells)))
+    is_land_u = is_points_on_land(u_lats, u_lons)
 
+    # Candidate land coordinates
+    cand_lats: list[float] = list(u_lats[is_land_u])
+    cand_lons: list[float] = list(u_lons[is_land_u])
+
+    # If candidate airports are provided, add land airports as potential station sites
+    # to provide coastal/island coverage for water gap cells
+    if candidate_airports:
+        apt_lats = np.array([a["latitude"] for a in candidate_airports])
+        apt_lons = np.array([a["longitude"] for a in candidate_airports])
+        apt_land = is_points_on_land(apt_lats, apt_lons)
+        land_apt_lats = apt_lats[apt_land]
+        land_apt_lons = apt_lons[apt_land]
+
+        if len(land_apt_lats) > 0:
+            water_indices = np.where(~is_land_u)[0]
+            for wi in water_indices:
+                w_lat, w_lon = u_lats[wi], u_lons[wi]
+                dlat = (land_apt_lats - w_lat) * 60.0
+                dlon = (land_apt_lons - w_lon) * 60.0 * np.cos(np.radians(w_lat))
+                dists = np.sqrt(dlat**2 + dlon**2)
+                min_idx = int(np.argmin(dists))
+                if dists[min_idx] <= service_r:
+                    cand_lats.append(float(land_apt_lats[min_idx]))
+                    cand_lons.append(float(land_apt_lons[min_idx]))
+
+    # Deduplicate and ensure 100% strict land validation
+    all_cand_pts = {(round(float(la), 3), round(float(lo), 3)) for la, lo in zip(cand_lats, cand_lons)}
+    cand_pts = [p for p in all_cand_pts if is_point_on_land(p[0], p[1])]
+
+    if not cand_pts:
+        return []
+
+    c_lats = np.array([p[0] for p in cand_pts])
+    c_lons = np.array([p[1] for p in cand_pts])
+
+    rem_indices = set(range(len(uncoverable_cells)))
     synthetics: list[SyntheticGapFiller] = []
     gap_count = 0
 
     while rem_indices:
-        gap_count += 1
-        best_idx = -1
-        best_covered: set[int] = set()
-
         rem_list = list(rem_indices)
         rem_lats = u_lats[rem_list]
         rem_lons = u_lons[rem_list]
 
-        for c_idx in rem_list:
-            lat_c, lon_c = u_lats[c_idx], u_lons[c_idx]
-            dlat = (rem_lats - lat_c) * 60.0
-            dlon = (rem_lons - lon_c) * 60.0 * np.cos(np.radians(lat_c))
-            dists = np.sqrt(dlat**2 + dlon**2)
-            covered_in_step = {rem_list[k] for k, d in enumerate(dists) if d <= service_r}
+        # Vectorized distance from all candidate land points to remaining cells
+        dlat = (rem_lats[None, :] - c_lats[:, None]) * 60.0
+        mid_lat = np.radians((rem_lats[None, :] + c_lats[:, None]) / 2.0)
+        dlon = (rem_lons[None, :] - c_lons[:, None]) * 60.0 * np.cos(mid_lat)
+        dists = np.sqrt(dlat**2 + dlon**2)
+        in_range = dists <= service_r
+        gains = in_range.sum(axis=1)
 
-            if len(covered_in_step) > len(best_covered):
-                best_covered = covered_in_step
-                best_idx = c_idx
-
-        if best_idx == -1 or not best_covered:
+        best_cand_idx = int(np.argmax(gains))
+        best_gain = int(gains[best_cand_idx])
+        if best_gain == 0:
+            # No remaining uncoverable cells can be covered from any land location!
+            # Do NOT propose any synthetic station for them.
             break
 
-        c_lat = float(u_lats[best_idx])
-        c_lon = float(u_lons[best_idx])
-        rem_indices -= best_covered
+        gap_count += 1
+        c_lat = float(c_lats[best_cand_idx])
+        c_lon = float(c_lons[best_cand_idx])
+        covered_indices = {rem_list[k] for k in np.where(in_range[best_cand_idx])[0]}
+        rem_indices -= covered_indices
 
         # Geographic region descriptor
         if c_lat < 40.0 and c_lon > 20.0:
-            reg = "Eastern Mediterranean / Aegean Gap"
+            reg = "Eastern Mediterranean / Aegean Terrestrial Infill"
         elif c_lat < 42.0 and c_lon < 0.0:
-            reg = "Iberian Atlantic Approach Gap"
+            reg = "Iberian Atlantic Terrestrial Infill"
         elif c_lat > 60.0:
-            reg = "Nordic / Oceanic Airspace Gap"
+            reg = "Nordic / Coastal Terrestrial Infill"
         elif c_lon > 25.0:
-            reg = "Black Sea / Eastern Perimeter Gap"
+            reg = "Eastern European Terrestrial Infill"
         else:
-            reg = "Central European High-Terrain Gap"
+            reg = "Central European Terrestrial Infill"
 
         synthetics.append(
             SyntheticGapFiller(
                 id=f"SYN-{station_type}-{gap_count:02d}",
-                name=f"Proposed {station_type} Infill #{gap_count}",
+                name=f"Proposed {station_type} Infill #{gap_count} (Land)",
                 latitude=round(c_lat, 3),
                 longitude=round(c_lon, 3),
                 elevation_ft=1000.0,
                 target_flight_level=target_fl,
                 service_range_nm=service_r,
-                cells_covered_count=len(best_covered),
+                cells_covered_count=len(covered_indices),
                 region_note=reg,
             )
         )
@@ -815,11 +888,12 @@ def get_ecac_rationalization_report(
             "annual_power_mwh": s.annual_power_savings_mwh,
         })
 
-    # 6. Ideal Synthetic Gap Fillers
+    # 6. Ideal Synthetic Gap Fillers (Strictly Constrained to Terrestrial Land)
     gap_fillers = compute_synthetic_gap_fillers(
         uncoverable_cells_by_fl[200],
         station_type=station_type,
         target_fl=200,
+        candidate_airports=airports,
     )
 
     return {

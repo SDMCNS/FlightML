@@ -48,6 +48,7 @@ dependencies = [
     "mcp>=1.0.0",
     "pyyaml>=6.0",
     "matplotlib>=3.7.0",
+    "global-land-mask>=1.0.0",
 ]
 
 [project.optional-dependencies]

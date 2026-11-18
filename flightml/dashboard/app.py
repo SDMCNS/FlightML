@@ -5065,7 +5065,8 @@ with tab_cat_maps:
         st.markdown("### 💡 Ideal Gap-Filling Facilities (Minimum Equipment to Bridge Dataset Gaps)")
         st.caption(
             "Certain peripheral or boundary cells lack coverage data in the current inventory. "
-            "The Facility Location algorithm determined the exact minimum number of new installations required to bridge 100% of these gaps without brute-force looping."
+            "The Facility Location algorithm determines the minimum number of new installations required to bridge coverage gaps without brute-force looping. "
+            "All proposed infill sites are strictly constrained to terrestrial land coordinates (islands or coastlines for water sectors); unserviceable deep oceanic airspace cells are not assigned impossible offshore stations."
         )
         if rep["synthetic_gap_fillers"]:
             gap_df = pd.DataFrame([
