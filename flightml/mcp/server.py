@@ -1354,20 +1354,21 @@ def create_mcp_server() -> FastMCP:
     @server.tool()
     def scan_gnss_jamming_and_spoofing(
         period: str = "",
-        sample_limit: int = 2500,
-        min_score: float = 35.0,
+        sample_limit: int | None = None,
+        min_score: float = 75.0,
         hotspot: str = "",
     ) -> str:
         """Scan historical European and international flights for GNSS (GPS) jamming and spoofing anomalies.
 
         Detects kinematic teleportation speed jumps (> 750 kts), unphysical vertical velocity spikes
-        (> 6,000 ft/min), sudden altitude telemetry glitches, erratic zigzag track jitter, and jumping
-        positions or speed breaches on terminal approach. Telemetry dropouts are excluded as an indicator.
+        (> 6,000 ft/min), and sudden altitude telemetry glitches. Within 50 nm of departure/arrival airports,
+        only unrealistic altitudes and rates of climb/descent are used as anomaly markers (sharp turns are normal
+        under ATC landing vectors). Confirmation requires an anomaly score of 75.0 or above.
 
         Args:
             period: Eurocontrol period (e.g. '202510', '202402', or empty for active default).
-            sample_limit: Maximum number of candidate flights to pre-screen (default: 2500).
-            min_score: Minimum multi-factor anomaly score threshold 0 to 100 (default: 35.0).
+            sample_limit: Maximum number of candidate flights to pre-screen (default: None for all flights).
+            min_score: Minimum multi-factor anomaly score threshold 0 to 100 for confirmation (default: 75.0).
             hotspot: Optional electronic warfare zone filter (e.g. 'BALTIC_KALININGRAD', 'EAST_MED_LEVANT',
                      'BLACK_SEA_CRIMEA', 'MIDDLE_EAST_PERSIAN_GULF', 'RED_SEA_BAB_EL_MANDEB').
         """

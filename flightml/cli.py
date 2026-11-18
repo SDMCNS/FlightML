@@ -3546,8 +3546,8 @@ def cli_flight_notes_delete(
 @app.command(name="gnss-scan")
 def cli_gnss_scan(
     period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol archive period"),
-    limit: int = typer.Option(2500, "--limit", "-l", help="Number of candidate flights to pre-screen"),
-    min_score: float = typer.Option(35.0, "--min-score", "-s", help="Minimum anomaly score (0-100)"),
+    limit: int = typer.Option(None, "--limit", "-l", help="Number of candidate flights to pre-screen (default: scan all flights in period)"),
+    min_score: float = typer.Option(75.0, "--min-score", "-s", help="Minimum anomaly score for confirmed spoofing (default: 75.0)"),
     hotspot: str = typer.Option(None, "--hotspot", help="Filter by electronic warfare hotspot key"),
     output_json: bool = typer.Option(False, "--json", help="Output results in JSON format"),
 ) -> None:

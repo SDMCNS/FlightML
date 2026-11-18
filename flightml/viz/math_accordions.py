@@ -266,16 +266,22 @@ $$V_z = \frac{|FL_2 - FL_1| \cdot 100\,\text{ft}}{\Delta t / 60\,\text{s}} \quad
 - **Commercial Aircraft Structural Limit:** Maximum passenger climb $\approx 3,000\,\text{fpm}$; maximum structural emergency descent $\approx 6,000\,\text{fpm}$.
 - **Spoofing Breach Trigger:** $V_z > 6,000\,\text{ft/min}$ (with $\Delta FL \ge 20$ in $< 120\,\text{s}$) or instantaneous altitude glitches dropping from cruise to FL0.
 
-##### C. Track Angle Jitter & Circular Spoofing
-The angular change between consecutive trajectory leg azimuths $\theta_1, \theta_2$:
+##### C. Terminal Airport Proximity Buffer (≤ 50 nm from ADEP / ADES)
+When an aircraft operates within $50\,\text{nm}$ of either its departure (ADEP) or arrival (ADES) airport:
+$$\min\left( d(\mathbf{x}, \mathbf{x}_{ADEP}), \; d(\mathbf{x}, \mathbf{x}_{ADES}) \right) \le 50.0\,\text{nm}$$
+- **Operational Reality:** Radar vectoring, base-leg turns, S-turns for spacing, and sharp course alterations are standard ATC operational procedures during terminal approach and departure.
+- **Filtering Constraint:** Within this $50\,\text{nm}$ envelope, **only unrealistic altitudes** (stepped jumps $\Delta FL \ge 40$, drops to FL0) and **unphysical rates of climb/descent** ($|V_z| > 6,000\,\text{ft/min}$) are utilized as anomaly markers. Heading changes and track turns are strictly exempt from being flagged as spoofing.
 
+##### D. Track Angle Jitter & Circular Spoofing En-Route (> 50 nm)
+Outside the $50\,\text{nm}$ terminal buffer, the angular change between consecutive trajectory leg azimuths $\theta_1, \theta_2$:
 $$\Delta \theta = \min\left( |\theta_2 - \theta_1|, \; 360^\circ - |\theta_2 - \theta_1| \right)$$
-
 - **Standard Rate Turn Limit:** Rate-1 turn $= 3^\circ/\text{s}$ ($180^\circ/\text{min}$) at bank angle $\le 25^\circ\text{--}30^\circ$.
-- **Jitter Breach Trigger:** $|\Delta \theta| \ge 65^\circ$ in $< 150\,\text{s}$ outside terminal holding stacks.
+- **Jitter Breach Trigger:** $|\Delta \theta| \ge 65^\circ$ in $< 150\,\text{s}$ outside terminal areas, indicative of cyclic spoofed pseudo-range noise ("circle spoofing").
 
-##### D. Terminal Approach Speed & Spatial Jumps
-In terminal airspace below FL100, ICAO/FAA regulations mandate $V \le 250\,\text{kts}$. Groundspeeds $> 320\,\text{kts}$ below FL100 or spatial jumps $> 8\,\text{nm}$ in $< 30\,\text{s}$ indicate spoofed coordinates during approach alignment.
+##### E. High-Confidence Confirmation Standard (Score ≥ 75.0)
+The multi-factor anomaly scoring function evaluates kinematic breaches across the entire archive period. A flight is classified as **Confirmed Spoofing** strictly when:
+$$\text{Score} \ge 75.0 \quad \text{AND} \quad \left( V_{GS} > 750\,\text{kts} \; \lor \; |V_z| > 6,000\,\text{ft/min} \; \lor \; \text{Glitch} \right)$$
+Scores below 75.0 represent unconfirmed or suspected noise, preventing false alarms under nominal flight operations.
         """)
 
 

@@ -174,3 +174,101 @@ async def test_gnss_mcp_tools():
 
     assert "scan_gnss_jamming_and_spoofing" in tool_names
     assert "inspect_flight_gnss_interference" in tool_names
+
+
+def test_terminal_proximity_50nm_filtering():
+    """Verify that within 50nm of ADEP/ADES, only unrealistic altitudes and rates of climb/descent trigger anomalies."""
+    import pandas as pd
+    from unittest.mock import MagicMock
+
+    ds = MagicMock(spec=FlightDataset)
+    ds.period = "202402"
+    ds.get_flight.return_value = {
+        "ectrl_id": 999001,
+        "adep": "EGLL",
+        "ades": "LFPG",
+        "ac_operator": "TEST",
+        "ac_type": "A320",
+        "ac_reg": "G-TEST",
+    }
+    # Mock raw_airports query returning Heathrow and Charles de Gaulle coordinates
+    ds.query.return_value = pd.DataFrame([
+        {"ident": "EGLL", "latitude_deg": 51.4700, "longitude_deg": -0.4543},
+        {"ident": "LFPG", "latitude_deg": 49.0097, "longitude_deg": 2.5479},
+    ])
+
+    # Trajectory within 15 nm of Heathrow undergoing sharp 90-degree vectoring turn at normal climb rate
+    actual_terminal_turn = pd.DataFrame([
+        {"seq_num": 1, "time_over": "2024-02-15 10:00:00", "latitude": 51.4700, "longitude": -0.4543, "flight_level": 10.0},
+        {"seq_num": 2, "time_over": "2024-02-15 10:02:00", "latitude": 51.5200, "longitude": -0.4543, "flight_level": 30.0},
+        # Sharp 90-degree heading change while climbing normally within 15 nm of EGLL
+        {"seq_num": 3, "time_over": "2024-02-15 10:04:00", "latitude": 51.5200, "longitude": -0.3000, "flight_level": 50.0},
+        {"seq_num": 4, "time_over": "2024-02-15 10:06:00", "latitude": 51.5200, "longitude": -0.1500, "flight_level": 70.0},
+    ])
+    ds.get_trajectory.return_value = {"actual": actual_terminal_turn, "planned": pd.DataFrame()}
+
+    report = analyze_flight_gnss_interference(ds, ectrl_id=999001)
+    assert report is not None
+    # Sharp turn under radar vectoring within 50nm must NOT be flagged as ERRATIC_TRACK_JITTER
+    jitter_events = [e for e in report.events if e.anomaly_type == "ERRATIC_TRACK_JITTER"]
+    assert len(jitter_events) == 0, "Sharp turns within 50nm of ADEP must not trigger track jitter anomalies"
+    assert report.gnss_status == "NOMINAL"
+
+    # Now test an unphysical vertical rate spike within 50nm of ADEP
+    actual_terminal_spike = pd.DataFrame([
+        {"seq_num": 1, "time_over": "2024-02-15 10:00:00", "latitude": 51.4700, "longitude": -0.4543, "flight_level": 10.0},
+        # Extreme vertical rate spike: Climbing 8,000 ft in 30 seconds = 16,000 fpm!
+        {"seq_num": 2, "time_over": "2024-02-15 10:00:30", "latitude": 51.4800, "longitude": -0.4543, "flight_level": 90.0},
+        {"seq_num": 3, "time_over": "2024-02-15 10:02:00", "latitude": 51.5200, "longitude": -0.4000, "flight_level": 90.0},
+    ])
+    ds.get_trajectory.return_value = {"actual": actual_terminal_spike, "planned": pd.DataFrame()}
+    rep_spike = analyze_flight_gnss_interference(ds, ectrl_id=999001)
+    assert rep_spike is not None
+    vs_events = [e for e in rep_spike.events if e.anomaly_type == "VERTICAL_RATE_SPIKE"]
+    assert len(vs_events) > 0, "Unrealistic rate of climb within 50nm MUST be flagged as an anomaly"
+
+
+def test_confirmation_score_threshold_75():
+    """Verify that CONFIRMED_SPOOFING status strictly requires an anomaly score of 75.0 or above."""
+    import pandas as pd
+    from unittest.mock import MagicMock
+
+    ds = MagicMock(spec=FlightDataset)
+    ds.period = "202402"
+    ds.get_flight.return_value = {
+        "ectrl_id": 999002,
+        "adep": "EGLL",
+        "ades": "LFPG",
+        "ac_operator": "TEST",
+        "ac_type": "A320",
+        "ac_reg": "G-TEST",
+    }
+    ds.query.return_value = pd.DataFrame([
+        {"ident": "EGLL", "latitude_deg": 51.4700, "longitude_deg": -0.4543},
+        {"ident": "LFPG", "latitude_deg": 49.0097, "longitude_deg": 2.5479},
+    ])
+
+    # Trajectory with moderate en-route track oscillation yielding score in the 50-74 range
+    actual_moderate = pd.DataFrame([
+        {"seq_num": 1, "time_over": "2024-02-15 10:00:00", "latitude": 55.0000, "longitude": 10.0000, "flight_level": 350.0},
+        {"seq_num": 2, "time_over": "2024-02-15 10:02:00", "latitude": 55.1000, "longitude": 10.0000, "flight_level": 350.0},
+        {"seq_num": 3, "time_over": "2024-02-15 10:03:00", "latitude": 55.1000, "longitude": 10.1500, "flight_level": 350.0},
+        {"seq_num": 4, "time_over": "2024-02-15 10:04:00", "latitude": 55.2000, "longitude": 10.1500, "flight_level": 350.0},
+    ])
+    ds.get_trajectory.return_value = {"actual": actual_moderate, "planned": pd.DataFrame()}
+    rep = analyze_flight_gnss_interference(ds, ectrl_id=999002)
+    assert rep is not None
+    if rep.anomaly_score < 75.0:
+        assert rep.gnss_status != "CONFIRMED_SPOOFING", "Scores below 75 must not be marked CONFIRMED_SPOOFING"
+
+
+def test_scan_all_flights_in_period():
+    """Verify that sample_limit=None includes all flights in the period for assessment."""
+    ds = FlightDataset(period="202510")
+    total_in_period = int(ds.query("SELECT count(*) as c FROM flights").iloc[0, 0])
+
+    scan = scan_network_gnss_interference(ds, sample_limit=None, min_score=75.0)
+    assert isinstance(scan, NetworkGNSSScanReport)
+    assert scan.total_flights_scanned == total_in_period, f"Expected {total_in_period} scanned, got {scan.total_flights_scanned}"
+    for f in scan.flagged_flights:
+        assert f.anomaly_score >= 75.0

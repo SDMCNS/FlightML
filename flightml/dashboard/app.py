@@ -3159,24 +3159,26 @@ with tab_cat_system:
         st.header("🛰️ Network GNSS Jamming & Spoofing Anomaly Detector")
         st.caption(
             "Detects commercial flights exhibiting signatures of Global Navigation Satellite System (GNSS / GPS) "
-            "jamming and spoofing: impossible kinematic teleportation jumps (> 750 kts), unphysical vertical rate spikes (> 6,000 ft/min), "
-            "sudden altitude glitches, erratic track jitter / circular spoofing, and jumping positions or speed breaches on terminal approach. "
-            "Telemetry reporting dropouts are excluded as an indicator due to non-uniform waypoint reporting intervals."
+            "jamming and spoofing across European and conflict-adjacent airspace. "
+            "**Terminal Buffer Rule:** Within 50 nm of ADEP or ADES, only unrealistic altitudes and unphysical rates of climb/descent "
+            "are used as markers of jamming/spoofing, as sharp turns and heading changes are common when being vectored by ATC for landing. "
+            "**Confirmation Standard:** High-confidence confirmation strictly requires a multi-factor anomaly score of **75 or above**, "
+            "and the assessment evaluates all flights across the entire archive period."
         )
 
-        col_g1, col_g2, col_g3, col_g4 = st.columns([1.2, 1.4, 1.8, 1.6])
+        col_g1, col_g2, col_g3, col_g4 = st.columns([1.3, 1.5, 1.8, 1.4])
         with col_g1:
             gnss_sample_limit = st.selectbox(
                 "Telemetry Search Scope:",
-                options=[1000, 2500, 5000, 10000],
-                index=1,
+                options=["All Flights in Period", 50000, 25000, 10000, 5000],
+                index=0,
                 key=f"gnss_sample_limit_{selected_period}",
-                help="Maximum number of historical flights to scan across the archive via vectorized DuckDB engine."
+                help="Evaluate all flights in the Eurocontrol archive period via vectorized DuckDB window functions, or select a restricted test slice."
             )
         with col_g2:
             gnss_status_filter = st.selectbox(
                 "Anomaly Severity Filter:",
-                options=["All Flagged", "Confirmed Spoofing", "Suspected Spoofing", "Terminal Approach Jumps"],
+                options=["Confirmed Spoofing (Score ≥ 75)", "All Flagged", "Suspected Spoofing"],
                 index=0,
                 key=f"gnss_status_filter_{selected_period}",
                 help="Filter by anomaly classification severity."
@@ -3192,13 +3194,13 @@ with tab_cat_system:
             )
         with col_g4:
             min_score_val = st.slider(
-                "Min Anomaly Score:",
-                min_value=25.0,
-                max_value=90.0,
-                value=35.0,
+                "Confirmation Score Threshold:",
+                min_value=50.0,
+                max_value=95.0,
+                value=75.0,
                 step=5.0,
                 key=f"gnss_min_score_{selected_period}",
-                help="Threshold isolates extreme kinematic teleportations, vertical rate breaches, and erratic track jitter."
+                help="Confirmation threshold for high-confidence GNSS spoofing/jamming (default: ≥ 75.0)."
             )
 
         hotspot_key_arg = None
@@ -3208,31 +3210,35 @@ with tab_cat_system:
                     hotspot_key_arg = k
                     break
 
+        limit_arg = None if gnss_sample_limit == "All Flights in Period" else int(gnss_sample_limit)
+
         with st.spinner("Executing vectorized DuckDB scan for GNSS jamming/spoofing anomalies across European airspace..."):
             scan_rep = scan_network_gnss_interference(
                 ds,
-                sample_limit=int(gnss_sample_limit),
+                sample_limit=limit_arg,
                 min_score=float(min_score_val),
                 hotspot_filter=hotspot_key_arg,
             )
 
         # Filter by severity if requested
         filtered_flagged = scan_rep.flagged_flights
-        if gnss_status_filter == "Confirmed Spoofing":
-            filtered_flagged = [f for f in filtered_flagged if f.gnss_status == "CONFIRMED_SPOOFING"]
-        elif gnss_status_filter == "Suspected Spoofing":
+        if "Confirmed Spoofing" in gnss_status_filter:
+            filtered_flagged = [f for f in filtered_flagged if f.gnss_status == "CONFIRMED_SPOOFING" and f.anomaly_score >= 75.0]
+        elif "Suspected Spoofing" in gnss_status_filter:
             filtered_flagged = [f for f in filtered_flagged if f.gnss_status == "SUSPECTED_SPOOFING"]
-        elif gnss_status_filter == "Terminal Approach Jumps":
-            filtered_flagged = [f for f in filtered_flagged if any(e.anomaly_type == "APPROACH_POSITION_JUMP" for e in f.events)]
 
         # Metric Row 1: Executive Network Interference KPIs
         gk1, gk2, gk3, gk4 = st.columns(4)
         gk1.metric(
             "Flagged Flights",
             f"{len(filtered_flagged):,}",
-            f"Of {scan_rep.total_flights_scanned:,} scanned"
+            f"Of {scan_rep.total_flights_scanned:,} in period"
         )
         gk2.metric(
+            "Confirmed Spoofing",
+            f"{scan_rep.spoofing_confirmed_count:,}",
+            "Score ≥ 75"
+        )
             "Confirmed Spoofing",
             f"{scan_rep.spoofing_confirmed_count}",
             "Speed (>750 kts) / Vert (>6,000 fpm)",

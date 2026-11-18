@@ -102,6 +102,43 @@ def identify_intersecting_hotspots(points: list[tuple[float, float]]) -> list[st
     return sorted(list(intersected))
 
 
+def get_flight_airport_coords(
+    dataset: FlightDataset,
+    adep: str,
+    ades: str,
+    actual_df: pd.DataFrame,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """
+    Resolve (lat, lon) coordinates for departure (ADEP) and arrival (ADES) airports.
+    Queries `raw_airports` first; falls back to the initial and terminal points of the actual trajectory.
+    """
+    p_start = (float(actual_df.iloc[0]["latitude"]), float(actual_df.iloc[0]["longitude"]))
+    p_end = (float(actual_df.iloc[-1]["latitude"]), float(actual_df.iloc[-1]["longitude"]))
+
+    adep_coords = p_start
+    ades_coords = p_end
+
+    idents = [i for i in [adep.strip().upper(), ades.strip().upper()] if i]
+    if idents:
+        try:
+            placeholders = ", ".join(["?"] * len(idents))
+            res = dataset.query(
+                f"SELECT ident, latitude_deg, longitude_deg FROM raw_airports WHERE ident IN ({placeholders})",
+                idents,
+            )
+            for _, r in res.iterrows():
+                ident = str(r["ident"]).upper()
+                c = (float(r["latitude_deg"]), float(r["longitude_deg"]))
+                if ident == adep.strip().upper():
+                    adep_coords = c
+                elif ident == ades.strip().upper():
+                    ades_coords = c
+        except Exception:
+            pass
+
+    return adep_coords, ades_coords
+
+
 @dataclass
 class GNSSAnomalyEvent:
     seq_num: int
@@ -209,6 +246,10 @@ def analyze_flight_gnss_interference(
     coords = [(float(r["latitude"]), float(r["longitude"])) for _, r in actual_df.iterrows()]
     hotspots = identify_intersecting_hotspots(coords)
 
+    adep = str(flight.get("adep") or "")
+    ades = str(flight.get("ades") or "")
+    adep_coords, ades_coords = get_flight_airport_coords(dataset, adep, ades, actual_df)
+
     events: list[GNSSAnomalyEvent] = []
     anomalous_segments: list[GNSSAnomalySegment] = []
     annotated_profile: list[dict[str, Any]] = []
@@ -301,57 +342,81 @@ def analyze_flight_gnss_interference(
             if angle_diff > max_jitter_deg and seg_dist_nm >= 0.5:
                 max_jitter_deg = angle_diff
 
-        # Terminal approach condition: low flight level and proximity to departure/arrival ends
-        is_terminal_phase = (fl1 <= 120.0 or fl2 <= 120.0) and (i <= 4 or i >= n_pts - 6)
+        # Calculate proximity to departure (ADEP) and arrival (ADES) airports
+        d_adep_1 = haversine_nm(lat1, lon1, adep_coords[0], adep_coords[1])
+        d_ades_1 = haversine_nm(lat1, lon1, ades_coords[0], ades_coords[1])
+        d_adep_2 = haversine_nm(lat2, lon2, adep_coords[0], adep_coords[1])
+        d_ades_2 = haversine_nm(lat2, lon2, ades_coords[0], ades_coords[1])
+        min_airport_dist_nm = min(d_adep_1, d_ades_1, d_adep_2, d_ades_2)
+        is_within_50nm = min_airport_dist_nm <= 50.0
 
         segment_anomalies: list[tuple[str, float, str, float, str]] = []
 
-        # Indicator A: Speed jumps beyond aircraft capability
-        if (speed_kts > 750.0 and seg_dist_nm > 4.0) or (speed_kts > 900.0 and seg_dist_nm > 1.5):
-            sev = min(100.0, 50.0 + (speed_kts - 750.0) / 20.0)
-            desc = f"Unphysical groundspeed jump ({speed_kts:,.0f} kts, Δd={seg_dist_nm:.1f} nm in {dt_s:.0f}s) exceeding certified airframe Mach envelope."
-            segment_anomalies.append(("SPEED_TELEPORTATION", speed_kts, "kts", sev, desc))
-        elif prev_speed_kts is not None and (speed_kts - prev_speed_kts > 320.0) and dt_s < 75.0 and seg_dist_nm > 2.0:
-            sev = 75.0
-            desc = f"Kinematic acceleration jump: Speed surged from {prev_speed_kts:,.0f} kts to {speed_kts:,.0f} kts (ΔV={speed_kts - prev_speed_kts:,.0f} kts in {dt_s:.0f}s)."
-            segment_anomalies.append(("SPEED_TELEPORTATION", speed_kts, "kts", sev, desc))
+        if is_within_50nm:
+            # =========================================================================
+            # WITHIN 50 NM OF ADEP/ADES:
+            # Per operational specifications, ONLY unrealistic altitudes and unphysical
+            # rates of climb/descent are used as markers of jamming/spoofing.
+            # Sharp turns, heading changes, vectoring turns, and speed adjustments are
+            # common when a flight is being vectored by ATC for runway landing or departure.
+            # =========================================================================
 
-        # Indicator B: Altitude gains / losses outside possible profile
-        if vs_fpm > 6000.0 and abs(fl2 - fl1) >= 20.0 and dt_s < 120.0:
-            sev = min(100.0, 45.0 + (vs_fpm - 6000.0) / 120.0)
-            desc = f"Unphysical vertical velocity breach ({vs_fpm:,.0f} ft/min, ΔFL={abs(fl2-fl1):.0f} in {dt_s:.0f}s) exceeding aerodynamic/structural limits."
-            segment_anomalies.append(("VERTICAL_RATE_SPIKE", vs_fpm, "fpm", sev, desc))
+            # Indicator 1: Unrealistic rate of climb/descent
+            if vs_fpm > 6000.0 and abs(fl2 - fl1) >= 20.0 and dt_s < 120.0:
+                sev = min(100.0, 50.0 + (vs_fpm - 6000.0) / 120.0)
+                desc = (
+                    f"Unrealistic vertical velocity breach ({vs_fpm:,.0f} ft/min, ΔFL={abs(fl2-fl1):.0f} in {dt_s:.0f}s) "
+                    f"within {min_airport_dist_nm:.1f} nm of airport exceeding aerodynamic/structural limits."
+                )
+                segment_anomalies.append(("VERTICAL_RATE_SPIKE", vs_fpm, "fpm", sev, desc))
 
-        # Sudden Altitude Glitch (dropping to 0 or stepped teleportation)
-        if fl1 >= 200.0 and fl2 <= 10.0 and dt_s < 180.0:
-            has_glitch = True
-            desc = f"Sudden altitude telemetry glitch dropping from FL{fl1:.0f} to FL{fl2:.0f} in {dt_s:.0f}s during cruise."
-            segment_anomalies.append(("ALTITUDE_GLITCH", fl2, "FL", 90.0, desc))
-        elif abs(fl2 - fl1) >= 40.0 and dt_s <= 35.0:
-            has_glitch = True
-            desc = f"Stepped altitude teleportation: Instant jump of ΔFL={abs(fl2-fl1):.0f} in {dt_s:.0f}s."
-            segment_anomalies.append(("ALTITUDE_GLITCH", abs(fl2 - fl1), "FL", 85.0, desc))
+            # Indicator 2: Unrealistic altitude telemetry glitches (dropping to 0, stepped jumps)
+            if fl1 >= 50.0 and fl2 <= 0.0 and dt_s < 180.0:
+                has_glitch = True
+                desc = f"Unrealistic altitude glitch dropping from FL{fl1:.0f} to FL{fl2:.0f} in {dt_s:.0f}s within {min_airport_dist_nm:.1f} nm of airport."
+                segment_anomalies.append(("ALTITUDE_GLITCH", fl2, "FL", 90.0, desc))
+            elif abs(fl2 - fl1) >= 40.0 and dt_s <= 35.0:
+                has_glitch = True
+                desc = f"Stepped altitude teleportation: Instant jump of ΔFL={abs(fl2-fl1):.0f} in {dt_s:.0f}s within {min_airport_dist_nm:.1f} nm of airport."
+                segment_anomalies.append(("ALTITUDE_GLITCH", abs(fl2 - fl1), "FL", 85.0, desc))
 
-        # Indicator C: Erratic track jitter & circular spoofing
-        if angle_diff >= 65.0 and seg_dist_nm < 25.0 and dt_s < 150.0 and not is_terminal_phase:
-            sev = min(95.0, 45.0 + (angle_diff - 65.0) * 1.5)
-            desc = f"Erratic course reversal / track jitter ({angle_diff:.0f}° track angle flip in {dt_s:.0f}s) indicative of spoofed pseudo-range error."
-            segment_anomalies.append(("ERRATIC_TRACK_JITTER", angle_diff, "deg", sev, desc))
+        else:
+            # =========================================================================
+            # EN-ROUTE (> 50 NM FROM ADEP AND ADES):
+            # All markers evaluated: speed teleportation, vertical rates, altitude glitches, erratic track jitter
+            # =========================================================================
 
-        # Indicator D: Jumping positions on approach / terminal phase
-        if is_terminal_phase:
-            if speed_kts > 320.0 and (fl1 < 100.0 or fl2 < 100.0) and seg_dist_nm > 2.0:
-                has_approach_jump = True
-                desc = f"Terminal approach speed breach: Groundspeed {speed_kts:,.0f} kts below FL100 violates terminal envelope (ICAO 250 kts limit)."
-                segment_anomalies.append(("APPROACH_POSITION_JUMP", speed_kts, "kts", 75.0, desc))
-            elif seg_dist_nm > 8.0 and dt_s < 30.0:
-                has_approach_jump = True
-                desc = f"Spatial position jump on approach: {seg_dist_nm:.1f} nm teleportation in {dt_s:.0f}s near airport."
-                segment_anomalies.append(("APPROACH_POSITION_JUMP", seg_dist_nm, "nm", 80.0, desc))
-            elif angle_diff >= 65.0 and (fl1 < 80.0 or fl2 < 80.0) and dt_s < 90.0:
-                has_approach_jump = True
-                desc = f"Erratic track jitter on final approach ({angle_diff:.0f}° track flip below FL80)."
-                segment_anomalies.append(("APPROACH_POSITION_JUMP", angle_diff, "deg", 70.0, desc))
+            # Indicator A: Speed jumps beyond aircraft capability
+            if (speed_kts > 750.0 and seg_dist_nm > 4.0) or (speed_kts > 900.0 and seg_dist_nm > 1.5):
+                sev = min(100.0, 50.0 + (speed_kts - 750.0) / 20.0)
+                desc = f"Unphysical groundspeed jump ({speed_kts:,.0f} kts, Δd={seg_dist_nm:.1f} nm in {dt_s:.0f}s) exceeding certified airframe Mach envelope."
+                segment_anomalies.append(("SPEED_TELEPORTATION", speed_kts, "kts", sev, desc))
+            elif prev_speed_kts is not None and (speed_kts - prev_speed_kts > 320.0) and dt_s < 75.0 and seg_dist_nm > 2.0:
+                sev = 75.0
+                desc = f"Kinematic acceleration jump: Speed surged from {prev_speed_kts:,.0f} kts to {speed_kts:,.0f} kts (ΔV={speed_kts - prev_speed_kts:,.0f} kts in {dt_s:.0f}s)."
+                segment_anomalies.append(("SPEED_TELEPORTATION", speed_kts, "kts", sev, desc))
+
+            # Indicator B: Altitude gains / losses outside possible profile
+            if vs_fpm > 6000.0 and abs(fl2 - fl1) >= 20.0 and dt_s < 120.0:
+                sev = min(100.0, 45.0 + (vs_fpm - 6000.0) / 120.0)
+                desc = f"Unphysical vertical velocity breach ({vs_fpm:,.0f} ft/min, ΔFL={abs(fl2-fl1):.0f} in {dt_s:.0f}s) exceeding aerodynamic/structural limits."
+                segment_anomalies.append(("VERTICAL_RATE_SPIKE", vs_fpm, "fpm", sev, desc))
+
+            # Indicator C: Sudden Altitude Glitch (dropping to 0 or stepped teleportation)
+            if fl1 >= 200.0 and fl2 <= 10.0 and dt_s < 180.0:
+                has_glitch = True
+                desc = f"Sudden altitude telemetry glitch dropping from FL{fl1:.0f} to FL{fl2:.0f} in {dt_s:.0f}s during cruise."
+                segment_anomalies.append(("ALTITUDE_GLITCH", fl2, "FL", 90.0, desc))
+            elif abs(fl2 - fl1) >= 40.0 and dt_s <= 35.0:
+                has_glitch = True
+                desc = f"Stepped altitude teleportation: Instant jump of ΔFL={abs(fl2-fl1):.0f} in {dt_s:.0f}s."
+                segment_anomalies.append(("ALTITUDE_GLITCH", abs(fl2 - fl1), "FL", 85.0, desc))
+
+            # Indicator D: Erratic track jitter & circular spoofing
+            if angle_diff >= 65.0 and seg_dist_nm < 25.0 and dt_s < 150.0:
+                sev = min(95.0, 45.0 + (angle_diff - 65.0) * 1.5)
+                desc = f"Erratic course reversal / track jitter ({angle_diff:.0f}° track angle flip in {dt_s:.0f}s) indicative of spoofed pseudo-range error."
+                segment_anomalies.append(("ERRATIC_TRACK_JITTER", angle_diff, "deg", sev, desc))
 
         # Record segment anomalies and waypoint profile
         pt_is_anom = False
@@ -425,44 +490,45 @@ def analyze_flight_gnss_interference(
     # Multi-Factor Composite Anomaly Scoring (0 to 100)
     # Strictly driven by physical aerodynamic and kinematic envelope breaches
     score = 0.0
-    if max_speed_kts > 1200.0:
-        score += 45.0
-    elif max_speed_kts > 750.0:
-        score += 35.0
-    elif max_speed_kts > 680.0:
-        score += 20.0
+    has_enroute_speed_anomaly = any(e.anomaly_type == "SPEED_TELEPORTATION" for e in events)
+    if has_enroute_speed_anomaly:
+        if max_speed_kts > 1200.0:
+            score += 45.0
+        elif max_speed_kts > 750.0:
+            score += 35.0
+        elif max_speed_kts > 680.0:
+            score += 20.0
 
-    if max_vs_fpm > 10000.0:
-        score += 40.0
-    elif max_vs_fpm > 6000.0:
-        score += 25.0
+    if any(e.anomaly_type == "VERTICAL_RATE_SPIKE" for e in events):
+        if max_vs_fpm > 10000.0:
+            score += 45.0
+        elif max_vs_fpm > 6000.0:
+            score += 35.0
 
     if has_glitch:
-        score += 30.0
+        score += 40.0
 
-    if max_jitter_deg > 100.0:
-        score += 30.0
-    elif max_jitter_deg > 65.0:
-        score += 20.0
-
-    if has_approach_jump:
-        score += 25.0
+    if any(e.anomaly_type == "ERRATIC_TRACK_JITTER" for e in events):
+        if max_jitter_deg > 100.0:
+            score += 30.0
+        elif max_jitter_deg > 65.0:
+            score += 20.0
 
     if hotspots:
         score += min(15.0, len(hotspots) * 8.0)
 
     score = min(100.0, score)
 
-    # Classification Status
-    if score >= 65.0 and (max_speed_kts > 750.0 or max_vs_fpm > 7500.0 or has_glitch):
+    # Classification Status: High-confidence confirmation strictly requires score >= 75.0
+    if score >= 75.0 and (has_enroute_speed_anomaly or max_vs_fpm > 6000.0 or has_glitch):
         status = "CONFIRMED_SPOOFING"
-        verdict = f"High-confidence GNSS Spoofing: Trajectory displays physically impossible speed/altitude teleportation ({max_speed_kts:,.0f} kts, {max_vs_fpm:,.0f} fpm)."
-    elif score >= 45.0 and (max_speed_kts > 680.0 or max_jitter_deg >= 65.0 or max_vs_fpm > 6000.0):
+        verdict = (
+            f"High-confidence GNSS Spoofing (Score {score:.0f} ≥ 75): Trajectory displays physically impossible "
+            f"kinematic teleportation or vertical rate breaches ({max_speed_kts:,.0f} kts, {max_vs_fpm:,.0f} fpm)."
+        )
+    elif score >= 50.0 and (max_speed_kts > 680.0 or max_vs_fpm > 5000.0 or any(e.anomaly_type == "ERRATIC_TRACK_JITTER" for e in events)):
         status = "SUSPECTED_SPOOFING"
-        verdict = f"Suspected GNSS Spoofing: Severe track oscillations ({max_jitter_deg:.0f}° jitter) or off-nominal kinematic telemetry."
-    elif score >= 35.0 and has_approach_jump:
-        status = "SUSPECTED_SPOOFING"
-        verdict = "Terminal Approach Anomaly: Jumping positions or excessive speed on approach below FL100."
+        verdict = f"Suspected GNSS Interference: Elevated anomaly score ({score:.0f}/100) with off-nominal kinematics."
     else:
         status = "NOMINAL"
         verdict = "Nominal trajectory within normal avionics and airframe envelope tolerances."
@@ -492,15 +558,27 @@ def analyze_flight_gnss_interference(
 
 def scan_network_gnss_interference(
     dataset: FlightDataset,
-    sample_limit: int = 5000,
-    min_score: float = 35.0,
+    sample_limit: int | None = None,
+    min_score: float = 75.0,
     hotspot_filter: str | None = None,
 ) -> NetworkGNSSScanReport:
     """
     Scan the network archive using vectorized DuckDB window functions to flag flights exhibiting
     signatures of GNSS spoofing, speed teleportation, or unphysical vertical spikes.
-    Note: Position reporting gaps are excluded from candidate filtering.
+    Includes all flights in the period by default (when sample_limit is None).
     """
+    try:
+        total_period_flights = int(dataset.query("SELECT count(*) as c FROM flights").iloc[0, 0])
+    except Exception:
+        total_period_flights = 0
+
+    if sample_limit is not None and sample_limit > 0:
+        flight_limit_clause = f"WHERE t.ectrl_id IN (SELECT ectrl_id FROM flights LIMIT {int(sample_limit)})"
+        total_scanned = min(int(sample_limit), total_period_flights)
+    else:
+        flight_limit_clause = ""
+        total_scanned = total_period_flights
+
     sql = f"""
     WITH lagged AS (
         SELECT 
@@ -515,10 +593,7 @@ def scan_network_gnss_interference(
             LAG(t.latitude) OVER (PARTITION BY t.ectrl_id ORDER BY t.seq_num) as prev_lat,
             LAG(t.longitude) OVER (PARTITION BY t.ectrl_id ORDER BY t.seq_num) as prev_lon
         FROM trajectory_actual t
-        WHERE t.ectrl_id IN (
-            SELECT ectrl_id FROM flights 
-            LIMIT {int(sample_limit)}
-        )
+        {flight_limit_clause}
     ),
     diffs AS (
         SELECT 
@@ -556,8 +631,8 @@ def scan_network_gnss_interference(
         m.avg_lon
     FROM metrics m
     WHERE m.max_speed_kts > 680.0 OR m.max_vs_fpm > 5500.0
-    ORDER BY m.max_speed_kts DESC
-    LIMIT 250
+    ORDER BY m.max_speed_kts DESC, m.max_vs_fpm DESC
+    LIMIT 350
     """
     
     try:
@@ -601,7 +676,7 @@ def scan_network_gnss_interference(
 
     return NetworkGNSSScanReport(
         period=dataset.period,
-        total_flights_scanned=min(int(sample_limit), len(candidates_df) if not candidates_df.empty else 0),
+        total_flights_scanned=total_scanned,
         flagged_flights_count=len(flagged_flights),
         spoofing_confirmed_count=confirmed_count,
         spoofing_suspected_count=suspected_count,
