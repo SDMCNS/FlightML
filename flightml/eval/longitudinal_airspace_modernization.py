@@ -21,8 +21,10 @@ import numpy as np
 
 from flightml.data.dataset import FlightDataset
 import flightml.math as fmath
+from flightml.utils.cache import disk_cache
 
 
+@disk_cache(namespace="longitudinal")
 def get_vertical_capping_analysis(
     dataset: FlightDataset,
     period: str = "201611",
@@ -143,6 +145,7 @@ def get_vertical_capping_analysis(
     }
 
 
+@disk_cache(namespace="longitudinal")
 def get_fixed_airways_vs_fra_analysis(
     dataset: FlightDataset,
     period: str = "201611",

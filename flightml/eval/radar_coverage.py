@@ -25,6 +25,7 @@ import numpy as np
 
 from flightml.data.dataset import FlightDataset
 import flightml.math as fmath
+from flightml.utils.cache import disk_cache
 
 
 @dataclass
@@ -530,6 +531,7 @@ def optimize_radar_network(
     return suggestions
 
 
+@disk_cache(namespace="radar")
 def get_radar_coverage_report(
     dataset: FlightDataset,
     flight_level: int = 300,

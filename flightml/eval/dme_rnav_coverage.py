@@ -20,6 +20,7 @@ import numpy as np
 
 from flightml.data.dataset import FlightDataset
 import flightml.math as fmath
+from flightml.utils.cache import disk_cache
 
 
 @dataclass
@@ -243,6 +244,7 @@ def optimize_dme_rationalization(
     return suggestions
 
 
+@disk_cache(namespace="dme_rnav")
 def get_dme_rnav_coverage_report(
     dataset: FlightDataset,
     flight_level: int = 300,

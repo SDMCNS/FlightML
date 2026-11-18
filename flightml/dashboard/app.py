@@ -149,6 +149,8 @@ from flightml.eval.longitudinal_airspace_modernization import (
     get_fixed_airways_vs_fra_analysis,
 )
 from flightml.eval.mct_database import HUB_MCT_DATABASE
+from flightml.utils.cache import clear_disk_cache, get_disk_cache_stats
+
 
 
 
@@ -270,6 +272,45 @@ def _cached_gdp_optimizer(
         end_hour=end_hour,
         degraded_capacity_rate_per_hr=aar,
     )
+
+
+@st.cache_data(show_spinner=False)
+def _cached_airport_ops(period: str, airport_ident: str):
+    return get_airport_operations_report(get_dataset(period), airport_ident, period=period)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_wrap_envelope(period: str, ectrl_id: int):
+    return analyze_flight_wrap_envelope(get_dataset(period), int(ectrl_id), period=period)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_dme_coverage(period: str, flight_level: int, inactive_tuple: tuple[str, ...]):
+    return get_dme_rnav_coverage_report(
+        get_dataset(period),
+        flight_level=flight_level,
+        inactive_idents=list(inactive_tuple),
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _cached_radar_coverage(period: str, flight_level: int, inactive_tuple: tuple[str, ...]):
+    return get_radar_coverage_report(
+        get_dataset(period),
+        flight_level=flight_level,
+        inactive_ids=list(inactive_tuple),
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _cached_vertical_capping(period: str, sample_size: int):
+    return get_vertical_capping_analysis(get_dataset(period), period=period, sample_size=sample_size)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_fra_dividend(period: str, sample_size: int):
+    return get_fixed_airways_vs_fra_analysis(get_dataset(period), period=period, sample_size=sample_size)
+
 
 
 def get_sample_flight_id(ds: FlightDataset) -> int:
@@ -489,6 +530,22 @@ with st.sidebar.expander("📄 Export Static HTML Report (with Images)", expande
         )
 
 st.sidebar.markdown(f"**Period Active:** `{selected_period}`")
+
+# ----------------- Sidebar: Analysis Cache & Storage Management -----------------
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 💾 Analysis Cache & Storage")
+cache_stats = get_disk_cache_stats()
+st.sidebar.caption(
+    f"Persistent Cache: **{cache_stats['total_files']} items** ({cache_stats['total_size_mb']:.1f} MB)\n\n"
+    "Historical analyses, radar horizons & kinematic envelopes are cached by input SHA-256 hash to eliminate redundant recalculation."
+)
+if st.sidebar.button("🧹 Reset All Analysis Cache", key="btn_clear_disk_and_memory_cache", help="Clear both Streamlit in-memory cache and persistent disk cache with one click."):
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    cleared_cnt = clear_disk_cache()
+    st.sidebar.success(f"✅ Cache reset! Cleared {cleared_cnt} files.")
+    st.rerun()
+
 st.sidebar.markdown("---")
 st.sidebar.markdown(
     "### ✨ Platform Highlights\n"
@@ -1676,7 +1733,7 @@ with tab_cat_single:
             "cruise Mach, descent deceleration profile, and approach speeds."
         )
         try:
-            wrap_rep = analyze_flight_wrap_envelope(ds, int(active_flight_id), period=selected_period)
+            wrap_rep = _cached_wrap_envelope(selected_period, int(active_flight_id))
         except Exception as e:
             wrap_rep = None
             st.error(f"Error computing OpenAP WRAP envelope: {e}")
@@ -3624,7 +3681,7 @@ with tab_cat_system:
 
         try:
             with st.spinner(f"Aggregating runway layout, METAR winds and movements for {sel_apt}..."):
-                apt_ops_rep = get_airport_operations_report(ds, sel_apt, period=selected_period)
+                apt_ops_rep = _cached_airport_ops(selected_period, sel_apt)
         except Exception as e:
             apt_ops_rep = None
             st.error(f"Error loading airport operations for {sel_apt}: {e}")
@@ -4280,7 +4337,7 @@ with tab_cat_longitudinal:
         cap_sample = st.slider("Sample Size for Capping Analysis", min_value=100, max_value=2000, value=500, step=100, key=f"cap_slider_{selected_period}")
         try:
             with st.spinner("Analyzing vertical flight level capping, altitude deficits, and excess fuel burn..."):
-                cap_rep = get_vertical_capping_analysis(ds, period=selected_period, sample_size=cap_sample)
+                cap_rep = _cached_vertical_capping(selected_period, cap_sample)
         except Exception as e:
             cap_rep = None
             st.error(f"Error computing vertical capping analysis: {e}")
@@ -4311,7 +4368,7 @@ with tab_cat_longitudinal:
         fra_sample = st.slider("Sample Size for FRA Analysis", min_value=100, max_value=2000, value=500, step=100, key=f"fra_slider_{selected_period}")
         try:
             with st.spinner("Sampling flights across FRA sectors against fixed ATS network..."):
-                fra_rep = get_fixed_airways_vs_fra_analysis(ds, period=selected_period, sample_size=fra_sample)
+                fra_rep = _cached_fra_dividend(selected_period, fra_sample)
         except Exception as e:
             fra_rep = None
             st.error(f"Error computing FRA dividend: {e}")
@@ -4852,10 +4909,10 @@ with tab_cat_maps:
 
         try:
             with st.spinner("Computing radio horizons, station line-of-sight and dual-station angular intersections..."):
-                dme_rep = get_dme_rnav_coverage_report(
-                    ds,
-                    flight_level=dme_fl,
-                    inactive_idents=st.session_state["dme_inactive_idents"],
+                dme_rep = _cached_dme_coverage(
+                    selected_period,
+                    dme_fl,
+                    tuple(sorted(st.session_state["dme_inactive_idents"])),
                 )
         except Exception as e:
             dme_rep = None
@@ -4961,10 +5018,10 @@ with tab_cat_maps:
 
         try:
             with st.spinner("Evaluating radar horizons, high-density hub surface LOS & multi-tier target compliance..."):
-                radar_rep = get_radar_coverage_report(
-                    ds,
-                    flight_level=radar_fl,
-                    inactive_ids=st.session_state["radar_inactive_ids"],
+                radar_rep = _cached_radar_coverage(
+                    selected_period,
+                    radar_fl,
+                    tuple(sorted(st.session_state["radar_inactive_ids"])),
                 )
         except Exception as e:
             radar_rep = None

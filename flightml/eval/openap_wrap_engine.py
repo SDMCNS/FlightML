@@ -16,6 +16,7 @@ import numpy as np
 
 from flightml.data.dataset import FlightDataset
 import flightml.math as fmath
+from flightml.utils.cache import disk_cache
 
 
 @dataclass
@@ -74,6 +75,7 @@ def _calc_normal_z_and_percentile(val: float, params_str: str) -> tuple[float, f
         return 0.0, 50.0
 
 
+@disk_cache(namespace="openap_wrap")
 def analyze_flight_wrap_envelope(
     dataset: FlightDataset,
     ectrl_id: int,

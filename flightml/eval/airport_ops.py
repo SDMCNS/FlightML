@@ -19,6 +19,7 @@ import pandas as pd
 
 from flightml.data.dataset import FlightDataset
 import flightml.math as fmath
+from flightml.utils.cache import disk_cache
 
 
 @dataclass
@@ -188,6 +189,7 @@ def assess_runways_with_wind(
     return assessments, active_config, advisories
 
 
+@disk_cache(namespace="airport_ops")
 def get_airport_operations_report(
     dataset: FlightDataset,
     airport_ident: str,
