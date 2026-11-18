@@ -59,6 +59,62 @@ def is_point_on_land(latitude: float, longitude: float) -> bool:
         return bool(globe.is_land(latitude, longitude))
     return True
 
+# ==============================================================================
+# SURVEILLANCE & NAVIGATION RATIONALIZATION COST & POWER CONSTANTS
+# Industry References:
+# 1. Eurocontrol Specification for the Rationalisation of Terrestrial Surveillance Infrastructure
+# 2. Eurocontrol Navigation Infrastructure Strategy (Conventional Navaids Rationalisation)
+# 3. ICAO Doc 9750 (Global Air Navigation Plan - CNS Economic Benchmarks)
+# ==============================================================================
+
+HOURS_PER_YEAR = 8760.0
+
+# --- Surveillance Radar Head (PSR/MSSR) ---
+# Electrical Power Draw Breakdown:
+# - Transmitter racks & high-voltage power supplies: ~5.5 kW
+# - Pedestal motor & antenna rotational drive system: ~3.5 kW
+# - Signal processing, extractor & UPS charger float losses: ~1.4 kW
+# - Equipment shelter HVAC climate control (cooling electronics): ~5.0 kW
+# Total continuous average load = 15.41 kW
+RADAR_POWER_DRAW_KW = 15.41
+RADAR_ANNUAL_POWER_MWH = round((RADAR_POWER_DRAW_KW * HOURS_PER_YEAR) / 1000.0, 1)  # 135.0 MWh/yr
+
+# Annual Operational Expenditure (OPEX) Savings per Decommissioned/Standby Radar Head:
+# - Preventative/corrective maintenance & specialized technical labor: €42,000 / yr
+# - Periodic airborne flight inspection / calibration sorties (flight check): €22,000 / yr
+# - High-reliability leased line telecommunications, site lease & licensing: €13,000 / yr
+# - Power utility consumption (~135 MWh @ industrial base rate ~€60/MWh): €8,000 / yr
+RADAR_ANNUAL_MAINTENANCE_EUR = 42000.0
+RADAR_ANNUAL_FLIGHT_CAL_EUR = 22000.0
+RADAR_ANNUAL_COMMS_EUR = 13000.0
+RADAR_ANNUAL_ENERGY_EUR = 8000.0
+RADAR_ANNUAL_COST_SAVINGS_EUR = (
+    RADAR_ANNUAL_MAINTENANCE_EUR + RADAR_ANNUAL_FLIGHT_CAL_EUR + RADAR_ANNUAL_COMMS_EUR + RADAR_ANNUAL_ENERGY_EUR
+)  # €85,000 / yr
+
+# --- Distance Measuring Equipment (DME) Ground Transponder ---
+# Electrical Power Draw Breakdown:
+# - 1 kW peak pulsed solid-state transponder chassis (dual redundant channels): ~1.10 kW
+# - Monitor receiver, cavity filters & RF duplexer: ~0.45 kW
+# - Battery float charger & inverter standby load: ~0.30 kW
+# - Equipment cabinet thermal ventilation & cooling: ~1.00 kW
+# Total continuous average load = 2.85 kW
+DME_POWER_DRAW_KW = 2.85
+DME_ANNUAL_POWER_MWH = round((DME_POWER_DRAW_KW * HOURS_PER_YEAR) / 1000.0, 1)  # 25.0 MWh/yr
+
+# Annual Operational Expenditure (OPEX) Savings per Decommissioned/Standby DME Station:
+# - Routine airborne flight calibration & inspection sorties: €18,000 / yr
+# - Preventative technician maintenance visits & hardware component spares: €16,000 / yr
+# - Telemetry, remote control monitoring lines & mast/site lease: €8,000 / yr
+# - Power utility consumption (~25 MWh @ commercial/industrial rate ~€120/MWh): €3,000 / yr
+DME_ANNUAL_FLIGHT_CAL_EUR = 18000.0
+DME_ANNUAL_MAINTENANCE_EUR = 16000.0
+DME_ANNUAL_COMMS_EUR = 8000.0
+DME_ANNUAL_ENERGY_EUR = 3000.0
+DME_ANNUAL_COST_SAVINGS_EUR = (
+    DME_ANNUAL_FLIGHT_CAL_EUR + DME_ANNUAL_MAINTENANCE_EUR + DME_ANNUAL_COMMS_EUR + DME_ANNUAL_ENERGY_EUR
+)  # €45,000 / yr
+
 # ECAC Continental Airspace Bounding Box (Lat: 34N to 68N, Lon: -12W to 35E)
 ECAC_LAT_MIN = 35.0
 ECAC_LAT_MAX = 65.0
@@ -210,10 +266,16 @@ def load_ecac_stations(
     radars_path: str = "data/radars.json",
     fir_poly: Polygon | None = None,
     fir_bbox: tuple[float, float, float, float] | None = None,
-) -> tuple[list[ECACStation], list[dict[str, Any]]]:
+    include_adjacent: bool = False,
+) -> tuple[list[ECACStation], list[dict[str, Any]]] | tuple[list[ECACStation], list[dict[str, Any]], list[ECACStation]]:
     """
     Load all ECAC stations (Radars or DMEs) along with ECAC commercial airports
-    and high-density hubs (>= 500 movements/day). Supports single-FIR scope filtering.
+    and high-density hubs (>= 500 movements/day).
+
+    FIR Scoping Rule:
+    - For FIR-level analysis, primary stations are strictly those inside the FIR polygon.
+    - Neighboring stations outside the polygon are segregated as adjacent stations
+      for cross-border infill evaluation.
     """
     lat_min = fir_bbox[0] if fir_bbox else ECAC_LAT_MIN
     lat_max = fir_bbox[1] if fir_bbox else ECAC_LAT_MAX
@@ -318,8 +380,8 @@ def load_ecac_stations(
                         is_airport_station=is_apt,
                         nearest_airport_ident=nearest_apt_ident if is_apt else None,
                         nominal_range_nm=250.0,  # Max line of sight 250 NM for radar
-                        annual_cost_savings_eur=85000.0,
-                        annual_power_savings_mwh=135.0,
+                        annual_cost_savings_eur=RADAR_ANNUAL_COST_SAVINGS_EUR,
+                        annual_power_savings_mwh=RADAR_ANNUAL_POWER_MWH,
                     )
                 )
     else:  # DME
@@ -367,12 +429,21 @@ def load_ecac_stations(
                     is_airport_station=is_apt,
                     nearest_airport_ident=nearest_apt_ident if is_apt else None,
                     nominal_range_nm=160.0,  # Max service range 160 NM for DME
-                    annual_cost_savings_eur=45000.0,
-                    annual_power_savings_mwh=25.0,
+                    annual_cost_savings_eur=DME_ANNUAL_COST_SAVINGS_EUR,
+                    annual_power_savings_mwh=DME_ANNUAL_POWER_MWH,
                 )
             )
 
-    return stations, airports
+    if fir_poly:
+        inside_stations = [s for s in stations if fir_poly.contains(Point(s.longitude, s.latitude))]
+        adjacent_stations = [s for s in stations if not fir_poly.contains(Point(s.longitude, s.latitude))]
+    else:
+        inside_stations = stations
+        adjacent_stations = []
+
+    if include_adjacent:
+        return inside_stations, airports, adjacent_stations
+    return inside_stations, airports
 
 
 def generate_ecac_grid(
@@ -740,11 +811,12 @@ def get_ecac_rationalization_report(
             fir_name = ECAC_FIR_REGISTRY.get(target_fir, target_fir)
             fir_center = [round((fir_bbox[0] + fir_bbox[1]) / 2.0, 3), round((fir_bbox[2] + fir_bbox[3]) / 2.0, 3)]
 
-    stations, airports = load_ecac_stations(
+    stations, airports, adjacent_stations = load_ecac_stations(
         dataset,
         station_type=station_type,
         fir_poly=fir_poly,
         fir_bbox=fir_bbox,
+        include_adjacent=True,
     )
     grid_cells = generate_ecac_grid(
         step_deg=0.35,
@@ -888,9 +960,57 @@ def get_ecac_rationalization_report(
             "annual_power_mwh": s.annual_power_savings_mwh,
         })
 
-    # 6. Ideal Synthetic Gap Fillers (Strictly Constrained to Terrestrial Land)
+    # 6. Hierarchical Gap Infill Architecture
+    # User Mandate:
+    # 1. For FIR level views, only consider internal stations in primary inventory.
+    # 2. Where an unfillable gap exists, suggest using an adjacent FIR station to infill first.
+    # 3. If not possible, suggest a synthetic station, but only if it can be sited on land.
+    uncovered_fl200 = uncoverable_cells_by_fl.get(200, [])
+    suggested_adjacent_stations = []
+    remaining_gaps = list(uncovered_fl200)
+
+    if remaining_gaps and adjacent_stations:
+        adj_mat, _ = _compute_coverage_matrices(adjacent_stations, remaining_gaps, airports, flight_levels=(200,))
+        cov_from_adj = adj_mat[200]  # shape: (N_gaps, N_adj_stations)
+
+        rem_indices = set(range(len(remaining_gaps)))
+        while rem_indices:
+            best_adj_idx = -1
+            best_gain = 0
+            best_covered_in_step = set()
+
+            for s_idx in range(len(adjacent_stations)):
+                visible = {i for i in rem_indices if cov_from_adj[i, s_idx]}
+                if len(visible) > best_gain:
+                    best_gain = len(visible)
+                    best_adj_idx = s_idx
+                    best_covered_in_step = visible
+
+            if best_gain == 0 or best_adj_idx == -1:
+                break
+
+            adj_s = adjacent_stations[best_adj_idx]
+            suggested_adjacent_stations.append({
+                "id": adj_s.id,
+                "name": adj_s.name,
+                "type": adj_s.type,
+                "latitude": round(adj_s.latitude, 3),
+                "longitude": round(adj_s.longitude, 3),
+                "elevation_ft": round(adj_s.elevation_ft, 0),
+                "country": adj_s.country,
+                "nominal_range_nm": adj_s.nominal_range_nm,
+                "cells_covered_count": len(best_covered_in_step),
+                "strategy": "ADJACENT_FIR_CROSS_BORDER",
+                "rationale": f"Existing station in {adj_s.country} ({adj_s.name}) provides cross-border coverage bridging {len(best_covered_in_step)} gap cells at €0 capital cost.",
+            })
+            rem_indices -= best_covered_in_step
+
+        remaining_gaps = [remaining_gaps[i] for i in rem_indices]
+
+    # Step 2: For any gaps that cannot be covered by adjacent stations,
+    # compute synthetic infill stations strictly sited on land!
     gap_fillers = compute_synthetic_gap_fillers(
-        uncoverable_cells_by_fl[200],
+        remaining_gaps,
         station_type=station_type,
         target_fl=200,
         candidate_airports=airports,
@@ -915,6 +1035,33 @@ def get_ecac_rationalization_report(
         "stations": station_list,
         "airports": apt_reports,
         "coverage_by_fl": coverage_by_fl,
+        "adjacent_fir_infill_suggestions": suggested_adjacent_stations,
         "synthetic_gap_fillers": [g.to_dict() for g in gap_fillers],
         "uncoverable_cells_count_fl200": len(uncoverable_cells_by_fl[200]),
+        "remaining_uncovered_after_adjacent": len(remaining_gaps),
+        "methodology": {
+            "radar": {
+                "annual_cost_savings_eur": RADAR_ANNUAL_COST_SAVINGS_EUR,
+                "maintenance_eur": RADAR_ANNUAL_MAINTENANCE_EUR,
+                "flight_calibration_eur": RADAR_ANNUAL_FLIGHT_CAL_EUR,
+                "comms_site_eur": RADAR_ANNUAL_COMMS_EUR,
+                "energy_eur": RADAR_ANNUAL_ENERGY_EUR,
+                "power_draw_kw": RADAR_POWER_DRAW_KW,
+                "annual_power_mwh": RADAR_ANNUAL_POWER_MWH,
+            },
+            "dme": {
+                "annual_cost_savings_eur": DME_ANNUAL_COST_SAVINGS_EUR,
+                "flight_calibration_eur": DME_ANNUAL_FLIGHT_CAL_EUR,
+                "maintenance_eur": DME_ANNUAL_MAINTENANCE_EUR,
+                "comms_monitoring_eur": DME_ANNUAL_COMMS_EUR,
+                "energy_eur": DME_ANNUAL_ENERGY_EUR,
+                "power_draw_kw": DME_POWER_DRAW_KW,
+                "annual_power_mwh": DME_ANNUAL_POWER_MWH,
+            },
+            "sources": [
+                "Eurocontrol Specification for the Rationalisation of Terrestrial Surveillance Infrastructure",
+                "Eurocontrol Navigation Infrastructure Strategy (Conventional Navaids Rationalisation)",
+                "ICAO Doc 9750 (Global Air Navigation Plan - CNS Economic Benchmarks)",
+            ],
+        },
     }

@@ -122,6 +122,14 @@ def test_ecac_single_fir_rationalization():
     for apt in rep_egtt["airports"]:
         assert 48.0 <= apt["latitude"] <= 56.0
 
+    # User mandate: Primary station inventory for FIR must contain ONLY stations inside the FIR
+    egtt_poly, _, _ = get_fir_geometry(ds, "EGTTFIR")
+    from shapely.geometry import Point
+    for s in rep_egtt["stations"]:
+        assert egtt_poly.contains(Point(s["longitude"], s["latitude"])), (
+            f"Station {s['id']} at ({s['latitude']}, {s['longitude']}) is outside EGTTFIR!"
+        )
+
     # Test map generation for single FIR with boundary
     folium_map = create_ecac_coverage_map(rep_egtt, selected_fl=200)
     assert folium_map is not None
@@ -136,6 +144,21 @@ def test_ecac_single_fir_rationalization():
     assert rep_paris["target_fir"] == "LFFFFIR"
     assert rep_paris["active_stations_count"] > 0
     assert len(rep_paris["airports"]) > 0
+
+    # Test Adjacent FIR Infill for EGTTFIR DME (which has North Sea boundary gaps)
+    rep_egtt_dme = get_ecac_rationalization_report(
+        ds,
+        station_type="DME",
+        active_view="VIEW_1",
+        target_fir="EGTTFIR",
+    )
+    assert "adjacent_fir_infill_suggestions" in rep_egtt_dme
+    assert len(rep_egtt_dme["adjacent_fir_infill_suggestions"]) > 0
+    # Verify adjacent stations are outside EGTTFIR and provide cross-border sharing
+    for adj_s in rep_egtt_dme["adjacent_fir_infill_suggestions"]:
+        assert not egtt_poly.contains(Point(adj_s["longitude"], adj_s["latitude"]))
+        assert adj_s["cells_covered_count"] > 0
+    assert "methodology" in rep_egtt_dme
 
 
 def test_synthetic_gap_fillers_land_constraint():

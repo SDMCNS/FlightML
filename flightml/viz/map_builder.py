@@ -2135,9 +2135,19 @@ def create_ecac_coverage_map(
                     tooltip=f"STANDBY {station_type}: {s_id} - {s_name} [Deactivated for Rationalization]",
                 ).add_to(sta_inact_group)
 
-    # 3. Proposed Synthetic Gap-Filler Stations
+    # 3. Suggested Adjacent FIR Cross-Border Infill Stations
+    if show_gap_fillers and coverage_report.get("adjacent_fir_infill_suggestions"):
+        adj_group = folium.FeatureGroup(name="Suggested Adjacent FIR Cross-Border Infill", show=True).add_to(m)
+        for s in coverage_report["adjacent_fir_infill_suggestions"]:
+            folium.Marker(
+                location=[s["latitude"], s["longitude"]],
+                icon=folium.Icon(color="darkblue", icon="share-alt", prefix="fa"),
+                tooltip=f"ADJACENT FIR INFILL: {s['id']} - {s['name']} ({s['country']}) | Covers {s['cells_covered_count']} internal gap cells | €0 Capital Cost",
+            ).add_to(adj_group)
+
+    # 4. Proposed Synthetic Gap-Filler Stations (Strictly on Land)
     if show_gap_fillers and "synthetic_gap_fillers" in coverage_report:
-        gap_group = folium.FeatureGroup(name="Proposed Gap-Filler Infill Facilities", show=True).add_to(m)
+        gap_group = folium.FeatureGroup(name="Proposed Gap-Filler Infill Facilities (Land)", show=True).add_to(m)
         for g in coverage_report["synthetic_gap_fillers"]:
             folium.Marker(
                 location=[g["latitude"], g["longitude"]],
