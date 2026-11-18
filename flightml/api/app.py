@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from flightml.data.dataset import FlightDataset
@@ -80,6 +83,18 @@ app = FastAPI(
     version="0.1.0",
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+frontend_dist = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist"))
+if os.path.isdir(frontend_dist):
+    app.mount("/cockpit", StaticFiles(directory=frontend_dist, html=True), name="cockpit")
+
 # Global singletons
 _dataset: FlightDataset | None = None
 _fir_engine: FIREngine | None = None
@@ -137,7 +152,7 @@ class PredictDelayRequest(BaseModel):
 
 @app.get("/")
 def root() -> dict[str, str]:
-    return {"status": "ok", "service": "FlightML API", "docs": "/docs"}
+    return {"status": "ok", "service": "FlightML API", "docs": "/docs", "cockpit": "/cockpit"}
 
 
 @app.get("/api/v1/summary")
@@ -497,6 +512,49 @@ def stress_test_endpoint(
     return res.to_dict()
 
 
+# -----------------------------------------------------------------------------
+# GNSS Jamming & Spoofing Network Endpoints
+# -----------------------------------------------------------------------------
+
+@app.get("/api/v1/gnss/hotspots")
+def get_gnss_hotspots() -> dict[str, Any]:
+    """Retrieve known geopolitical electronic warfare and GNSS interference hotspot bounding boxes."""
+    from flightml.eval.gnss_jamming_spoofing import GNSS_HOTSPOTS
+    return GNSS_HOTSPOTS
+
+
+@app.get("/api/v1/gnss/scan")
+def scan_gnss_endpoint(
+    period: str = Query("202402", description="Archive period"),
+    min_score: float = Query(75.0, description="Minimum confirmation score threshold"),
+    limit: int | None = Query(None, description="Pre-screening candidate flight limit (None for all flights in period)"),
+    hotspot: str | None = Query(None, description="Optional hotspot zone filter key"),
+) -> dict[str, Any]:
+    """Scan the network for commercial flights displaying signatures of GNSS spoofing, speed teleportation, and vertical spikes."""
+    from flightml.eval.gnss_jamming_spoofing import scan_network_gnss_interference
+    ds = FlightDataset(period=period)
+    rep = scan_network_gnss_interference(ds, sample_limit=limit, min_score=min_score, hotspot_filter=hotspot)
+    return rep.to_dict()
+
+
+@app.get("/api/v1/gnss/flight/{ectrl_id}")
+def inspect_flight_gnss_endpoint(
+    ectrl_id: int,
+    period: str = Query("202402", description="Archive period"),
+) -> dict[str, Any]:
+    """Perform detailed kinematic envelope and terminal-proximity analysis for a single flight."""
+    from flightml.eval.gnss_jamming_spoofing import analyze_flight_gnss_interference
+    ds = FlightDataset(period=period)
+    rep = analyze_flight_gnss_interference(ds, ectrl_id)
+    if not rep:
+        raise HTTPException(status_code=404, detail=f"Flight {ectrl_id} not found or insufficient trajectory telemetry")
+    return rep.to_dict()
+
+
+
+
+
+
 @app.get("/api/v1/weather/impact")
 def get_weather_impact_endpoint(
     start_date: str | None = Query(default=None, description="Start date (YYYY-MM-DD), defaults to period start"),
@@ -814,6 +872,9 @@ def get_tail_swaps_endpoint(
     return res.to_dict()
 
 
+
+
+
 # ----------------- v3 Endpoints: Longitudinal, Predictive & Economics -----------------
 
 @app.get("/api/v3/longitudinal/timeline")
@@ -1046,4 +1107,7 @@ def get_passenger_itinerary_risk_endpoint(
         debug=debug,
     )
     return res.to_dict()
+
+
+
 

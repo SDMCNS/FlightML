@@ -72,3 +72,7 @@ models/
 # Internal sprint & planning roadmaps
 docs/v3_sprint.md
 docs/v4_plan.md
+
+# Frontend (Node / Vite)
+frontend/node_modules/
+frontend/dist/
