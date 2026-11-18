@@ -1683,21 +1683,22 @@ with tab_cat_single:
 
         if wrap_rep:
             w1, w2, w3, w4 = st.columns(4)
-            w1.metric("Aircraft Type", f"{wrap_rep.ac_type}")
+            w1.metric("Aircraft Type", f"{wrap_rep.ac_type}", f"WRAP: {wrap_rep.canonical_wrap_type}")
             w2.metric("Envelope Normalcy Score", f"{wrap_rep.overall_normalcy_score_pct:.1f}%")
-            w3.metric("Anomalies Detected", f"{wrap_rep.anomalous_metrics_count}")
-            w4.metric("Flight Phase", f"{wrap_rep.flight_phase}")
+            w3.metric("Envelope Violations", f"{wrap_rep.envelope_violations_count}")
+            w4.metric("Waypoints Analyzed", f"{wrap_rep.total_waypoints:,}")
 
             st.markdown("### 📋 Trajectory Kinematics vs. OpenAP WRAP Model Boundaries")
             wrap_metrics_data = [
                 {
+                    "Flight Phase": m.phase,
                     "Kinematic Metric": m.description,
-                    "Flown Value": f"{m.observed_val:.2f} {m.unit}",
-                    "OpenAP Nominal": f"{m.opt_val:.2f} {m.unit}",
-                    "Min Boundary": f"{m.min_val:.2f} {m.unit}",
-                    "Max Boundary": f"{m.max_val:.2f} {m.unit}",
+                    "Flown Value": f"{m.observed_value:.2f} {m.observed_unit}",
+                    "OpenAP Nominal": f"{m.opt_val:.2f} {m.observed_unit}",
+                    "Min Boundary": f"{m.min_val:.2f} {m.observed_unit}",
+                    "Max Boundary": f"{m.max_val:.2f} {m.observed_unit}",
                     "Percentile": f"{m.percentile_pct:.1f}%",
-                    "Status": "⚠️ ANOMALOUS" if m.is_anomalous else "✅ NOMINAL",
+                    "Status": "⚠️ VIOLATION" if "ANOMALOUS" in m.status else "✅ NOMINAL",
                 }
                 for m in wrap_rep.metrics
             ]
@@ -3630,21 +3631,22 @@ with tab_cat_system:
 
         if apt_ops_rep:
             ao1, ao2, ao3, ao4, ao5 = st.columns(5)
+            daily_m = apt_ops_rep.total_movements / 31.0
             ao1.metric("Airport", f"{apt_ops_rep.airport_ident}", apt_ops_rep.name[:25])
-            ao2.metric("Total Movements", f"{apt_ops_rep.total_movements:,}", f"{apt_ops_rep.daily_movements:.0f}/day")
+            ao2.metric("Total Movements", f"{apt_ops_rep.total_movements:,}", f"{daily_m:.0f}/day")
             ao3.metric("Departures / Arrivals", f"{apt_ops_rep.total_departures:,} / {apt_ops_rep.total_arrivals:,}")
             ao4.metric("Mean Dep Delay", f"{apt_ops_rep.mean_dep_delay_min:+.1f} min")
             ao5.metric("Mean Arr Delay", f"{apt_ops_rep.mean_arr_delay_min:+.1f} min")
 
             st.markdown("---")
-            st.markdown(f"### 🌬️ Surface Weather & Runway Vector Extrapolation ({apt_ops_rep.metar_source})")
+            wx = apt_ops_rep.weather or {}
+            st.markdown(f"### 🌬️ Surface Weather & Runway Vector Extrapolation ({wx.get('source', 'METAR')})")
             w_col1, w_col2 = st.columns([1, 2])
             with w_col1:
                 st.markdown(
-                    f"- **Surface Wind:** `{apt_ops_rep.wind_direction_deg}° at {apt_ops_rep.wind_speed_kts} kts`"
-                    f"{f' (Gusts: {apt_ops_rep.wind_gust_kts} kts)' if apt_ops_rep.wind_gust_kts > 0 else ''}\n"
-                    f"- **Temperature / Dewpoint:** `{apt_ops_rep.temperature_c}°C / {apt_ops_rep.dewpoint_c}°C`\n"
-                    f"- **Visibility / Altimeter:** `{apt_ops_rep.visibility_miles} SM / {apt_ops_rep.altimeter_inhg} inHg`\n"
+                    f"- **Surface Wind:** `{wx.get('wind_dir_deg', 0):.0f}° at {wx.get('wind_speed_kts', 0):.0f} kts`\n"
+                    f"- **Temperature:** `{wx.get('temperature_c', 15):.1f}°C`\n"
+                    f"- **Visibility / QNH:** `{wx.get('visibility_km', 10):.1f} km / {wx.get('qnh_hpa', 1013):.0f} hPa`\n"
                     f"- **Elevation:** `{apt_ops_rep.elevation_ft:.0f} ft MSL`"
                 )
             with w_col2:
@@ -3657,23 +3659,21 @@ with tab_cat_system:
             st.markdown("### 🛫 Aerodrome Runway Crosswind & Headwind Breakdown")
             rwy_data = [
                 {
-                    "Runway": r.designator,
+                    "Runway Designator": f"{r.le_ident}/{r.he_ident}",
                     "Length (ft)": f"{r.length_ft:,.0f}",
                     "Surface": r.surface,
-                    "LE Ident": r.le_ident,
-                    "HE Ident": r.he_ident,
                     "Preferred End": r.preferred_end,
                     "Along-Track Wind": f"{abs(r.le_headwind_kts):.1f} kts ({'Headwind' if r.le_headwind_kts >= 0 else 'Tailwind'})",
                     "Crosswind": f"{r.le_crosswind_kts:.1f} kts",
-                    "Advisory": r.crosswind_advisory,
+                    "Status": "⚠️ CROSSWIND EXCEEDED" if r.le_exceeds_crosswind_limit else "✅ NOMINAL",
                 }
                 for r in apt_ops_rep.runways
             ]
             st.dataframe(pd.DataFrame(rwy_data), use_container_width=True)
 
-            if apt_ops_rep.hourly_movements:
+            if apt_ops_rep.hourly_distribution:
                 st.markdown("### 📈 Diurnal Hourly Movement Distribution (UTC)")
-                hour_df = pd.DataFrame(apt_ops_rep.hourly_movements)
+                hour_df = pd.DataFrame(apt_ops_rep.hourly_distribution)
                 st.bar_chart(hour_df.set_index("hour_utc")[["departures", "arrivals"]])
 
     with sys_sub2:
