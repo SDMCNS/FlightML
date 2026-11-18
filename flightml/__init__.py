@@ -52,6 +52,11 @@ from flightml.eval.contrail_climate import (
     analyze_flight_wind_and_contrails,
     UpperAirImpactReport,
 )
+from flightml.eval.eco_route_optimizer import (
+    optimize_eco_minimal_contrail_trajectory,
+    EcoRouteComparisonReport,
+    EcoRouteWaypoint,
+)
 
 # Efficiency & Performance Benchmarking
 from flightml.eval.flight_twins import compare_twin_flights, TwinFlightComparison
@@ -160,6 +165,9 @@ __all__ = [
     "CRCOChargeReport",
     "analyze_flight_wind_and_contrails",
     "UpperAirImpactReport",
+    "optimize_eco_minimal_contrail_trajectory",
+    "EcoRouteComparisonReport",
+    "EcoRouteWaypoint",
     # Evaluation
     "compare_twin_flights",
     "TwinFlightComparison",

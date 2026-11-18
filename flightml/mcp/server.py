@@ -354,6 +354,32 @@ def create_mcp_server() -> FastMCP:
             return json.dumps({"error": f"Contrail evaluation failed: {exc}"}, indent=2)
 
     # -------------------------------------------------------------------------
+    # TOOL: optimize_eco_flight_trajectory
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def optimize_eco_flight_trajectory(
+        flight_id: str | int,
+        period: str = "202510",
+    ) -> str:
+        """Synthesize an alternative eco-optimal trajectory (horizontal and vertical)
+        balancing fuel burn, persistent contrails (ISSR), direct CO2, and cruise NOx emissions
+        while strictly observing aircraft envelope capabilities and RVSM step-climb rules.
+
+        Args:
+            flight_id: Eurocontrol Flight ID (ectrl_id) to evaluate.
+            period: Eurocontrol archive cycle period (default '202510').
+        """
+        try:
+            from flightml.eval.eco_route_optimizer import optimize_eco_minimal_contrail_trajectory
+            ds = FlightDataset(period=period)
+            rep = optimize_eco_minimal_contrail_trajectory(ds, int(flight_id))
+            if not rep:
+                return json.dumps({"error": f"Flight {flight_id} not found in period {period}"}, indent=2)
+            return json.dumps(rep.to_dict(), indent=2, default=str)
+        except Exception as exc:
+            return json.dumps({"error": f"Eco-route optimization failed: {exc}"}, indent=2)
+
+    # -------------------------------------------------------------------------
     # TOOL: get_airport_capacity
     # -------------------------------------------------------------------------
     @server.tool()

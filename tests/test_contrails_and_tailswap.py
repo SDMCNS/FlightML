@@ -81,3 +81,64 @@ def test_tail_swap_optimizer_and_hetero_gnn():
     assert r_ts.status_code == 200
     assert r_ts.json()["operator"] == "RYR"
 
+
+def test_eco_optimal_minimal_contrail_trajectory():
+    import json
+    from typer.testing import CliRunner
+    from flightml.cli import app as cli_app
+    from flightml.eval.eco_route_optimizer import optimize_eco_minimal_contrail_trajectory
+    from flightml.mcp.server import create_mcp_server
+    from flightml.viz.map_builder import create_contrail_horizontal_map
+
+    ds = FlightDataset(period="202510")
+    row = ds.cursor.execute(
+        "SELECT ectrl_id FROM flights WHERE actual_distance_nm >= 500 LIMIT 1"
+    ).fetchone()
+    assert row is not None
+    fid = int(row[0])
+
+    ua_client = UpperAirClient(use_live_api=False)
+    eco_rep = optimize_eco_minimal_contrail_trajectory(ds, ectrl_id=fid, upper_air_client=ua_client)
+    assert eco_rep is not None
+    assert eco_rep.ectrl_id == fid
+    assert eco_rep.operational_ceiling_fl >= 300.0
+    assert eco_rep.eco_fuel_kg > 0.0
+    assert eco_rep.eco_co2_kg > 0.0
+    assert eco_rep.eco_nox_kg > 0.0
+    assert isinstance(eco_rep.net_climate_reduction_pct, float)
+    assert len(eco_rep.eco_waypoints) > 0
+    assert eco_rep.is_within_aircraft_envelope is True
+
+    # Verify aircraft capabilities & ceiling constraint
+    max_fl = max(w.flight_level for w in eco_rep.eco_waypoints)
+    assert max_fl <= eco_rep.operational_ceiling_fl
+
+    # Verify horizontal map with eco_route_waypoints
+    fl_info = ds.get_flight(fid) or {}
+    trajs = ds.get_trajectory(fid)
+    act_df = trajs["actual"]
+    m = create_contrail_horizontal_map(
+        fl_info,
+        act_df,
+        contrail_segments=None,
+        eco_route_waypoints=eco_rep.eco_waypoints,
+    )
+    assert m is not None
+
+    # Test CLI Command
+    runner = CliRunner()
+    res = runner.invoke(cli_app, ["eco-route", str(fid), "--period", "202510", "--json"])
+    assert res.exit_code == 0
+    cli_data = json.loads(res.stdout)
+    assert cli_data["ectrl_id"] == fid
+    assert "eco_fuel_kg" in cli_data
+    assert "net_climate_reduction_pct" in cli_data
+
+    # Test MCP Server Tool
+    from flightml.mcp.server import create_mcp_server
+    import asyncio
+    mcp_server = create_mcp_server()
+    tools = asyncio.run(mcp_server.list_tools())
+    tool_names = [t.name for t in tools]
+    assert "optimize_eco_flight_trajectory" in tool_names
+

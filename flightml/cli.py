@@ -65,6 +65,7 @@ from flightml.geo.conflict_scanner import (
 )
 from flightml.weather.runway_safety import assess_flight_runway_safety
 from flightml.eval.contrail_climate import analyze_flight_wind_and_contrails
+from flightml.eval.eco_route_optimizer import optimize_eco_minimal_contrail_trajectory
 from flightml.sim.tail_swap_optimizer import optimize_hub_tail_swaps
 from flightml.eval.multi_level_kpis import get_dataset_date_bounds
 from flightml.data.archive_ingest import EurocontrolArchiveIngestor, list_available_periods
@@ -2472,6 +2473,82 @@ def contrail_impact_cmd(
                 seg.alt_deviation_note,
             )
         console.print(s_table)
+
+
+@app.command("eco-route")
+def eco_route_cmd(
+    ectrl_id: int = typer.Argument(..., help="Eurocontrol Flight ID"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol period"),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON comparison report"),
+) -> None:
+    """Synthesize an alternative eco-optimal trajectory balancing fuel burn, contrails, CO2, and cruise NOx emissions."""
+    with console.status(f"[cyan]Optimizing multi-objective eco-trajectory for flight {ectrl_id}..."):
+        ds = FlightDataset(period=period)
+        rep = optimize_eco_minimal_contrail_trajectory(ds, ectrl_id=ectrl_id)
+
+    if not rep:
+        console.print(f"[red]Flight {ectrl_id} not found in period {period}[/red]")
+        raise typer.Exit(code=1)
+
+    if json_output:
+        import json as _json
+        console.print_json(_json.dumps(rep.to_dict(), default=str))
+        return
+
+    table = Table(
+        title=f"🌿 Alternative Eco-Optimal Trajectory — Flight {rep.ectrl_id} ({rep.adep} ➔ {rep.ades})",
+        header_style="bold green",
+    )
+    table.add_column("Environmental / Operational Metric", style="cyan")
+    table.add_column("As-Flown Profile", style="magenta")
+    table.add_column("Eco-Optimal Route", style="bold green")
+    table.add_column("Trade-Off / Net Impact", style="bold yellow")
+
+    table.add_row(
+        "Persistent Contrail Exposure",
+        f"{rep.as_flown_contrail_nm:.1f} nm",
+        f"{rep.eco_contrail_nm:.1f} nm",
+        f"-{rep.contrail_avoided_nm:.1f} nm ({rep.contrail_avoided_pct:.0f}% avoided)",
+    )
+    table.add_row(
+        "Persistent Contrail Cirrus (CO₂e)",
+        f"{rep.as_flown_contrail_co2e_kg:,.0f} kg",
+        f"{rep.eco_contrail_co2e_kg:,.0f} kg",
+        f"-{rep.as_flown_contrail_co2e_kg - rep.eco_contrail_co2e_kg:,.0f} kg CO₂e",
+    )
+    table.add_row(
+        "Fuel Consumption (Jet-A)",
+        f"{rep.as_flown_fuel_kg:,.0f} kg",
+        f"{rep.eco_fuel_kg:,.0f} kg",
+        f"{rep.fuel_delta_kg:+,.0f} kg ({rep.fuel_delta_pct:+.1f}%) | €{rep.fuel_cost_delta_eur:+,.2f}",
+    )
+    table.add_row(
+        "Direct Engine CO₂",
+        f"{rep.as_flown_co2_kg:,.0f} kg",
+        f"{rep.eco_co2_kg:,.0f} kg",
+        f"{rep.co2_delta_kg:+,.0f} kg CO₂",
+    )
+    table.add_row(
+        "Cruise NOₓ Emissions",
+        f"{rep.as_flown_nox_kg:.1f} kg",
+        f"{rep.eco_nox_kg:.1f} kg",
+        f"{rep.nox_delta_kg:+.1f} kg NOₓ",
+    )
+    table.add_row(
+        "Total Net Climate Impact (CO₂e)",
+        f"[bold]{rep.as_flown_total_climate_co2e_kg / 1000.0:.2f} t[/bold]",
+        f"[bold green]{rep.eco_total_climate_co2e_kg / 1000.0:.2f} t[/bold green]",
+        f"[bold yellow]{rep.net_climate_delta_kg / 1000.0:+.2f} t ({rep.net_climate_reduction_pct:-.1f}% reduction)[/bold yellow]",
+    )
+    console.print(table)
+    console.print(f"[dim]{rep.operational_feasibility_summary}[/dim]")
+
+    if rep.tactical_maneuvers_summary:
+        m_table = Table(title="Tactical Altitude & Environmental Maneuvers", header_style="bold cyan")
+        m_table.add_column("Maneuver & Operational Rationale", style="green")
+        for m_note in rep.tactical_maneuvers_summary:
+            m_table.add_row(m_note)
+        console.print(m_table)
 
 
 @app.command("optimize-tail-swaps")

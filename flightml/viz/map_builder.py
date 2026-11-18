@@ -339,6 +339,7 @@ def create_contrail_horizontal_map(
     flight_info: dict[str, Any],
     actual_df: pd.DataFrame,
     contrail_segments: list[Any] | None = None,
+    eco_route_waypoints: list[Any] | None = None,
     output_html_path: Path | str | None = None,
 ) -> folium.Map:
     """
@@ -483,20 +484,73 @@ def create_contrail_horizontal_map(
 
         contrail_group.add_to(m)
 
+    # 3. Alternative Eco-Optimal Route
+    has_eco = False
+    if eco_route_waypoints:
+        has_eco = True
+        eco_group = folium.FeatureGroup(name="🌿 Alternative Eco-Optimal Route (Minimal Contrails & Balanced Emissions)", show=True)
+        eco_coords = []
+        for wp in eco_route_waypoints:
+            w_dict = wp.to_dict() if hasattr(wp, "to_dict") else (wp if isinstance(wp, dict) else wp.__dict__)
+            w_lat = float(w_dict.get("latitude", 0.0))
+            w_lon = float(w_dict.get("longitude", 0.0))
+            if _is_finite_coord(w_lat) and _is_finite_coord(w_lon) and abs(w_lat) > 0.1:
+                eco_coords.append([w_lat, w_lon])
+                fl_diff = float(w_dict.get("fl_delta_vs_flown", 0.0))
+                w_fl = float(w_dict.get("flight_level", 0.0))
+                reason = str(w_dict.get("deviation_reason", ""))
+                # If there was a tactical altitude deviation, put a marker on the map
+                if abs(fl_diff) >= 15.0:
+                    folium.CircleMarker(
+                        location=[w_lat, w_lon],
+                        radius=6.0,
+                        color="#27ae60",
+                        weight=2,
+                        fill=True,
+                        fill_color="#2ecc71",
+                        fill_opacity=0.95,
+                        tooltip=f"🌿 Eco Tactical Shift: FL{w_fl:.0f} ({fl_diff:+.0f} FL) — {reason}",
+                        popup=folium.Popup(
+                            f"""
+                            <div style="font-family: sans-serif; min-width: 220px; font-size: 12.5px;">
+                                <b style="color: #27ae60; font-size: 13.5px;">🌿 Eco-Optimal Maneuver</b><br>
+                                <hr style="margin: 4px 0;">
+                                <b>Eco Flight Level:</b> FL{w_fl:.0f} (Flown: {w_fl - fl_diff:.0f})<br>
+                                <b>Altitude Shift:</b> {fl_diff:+.0f} FL<br>
+                                <b>Advisory:</b> {reason}
+                            </div>
+                            """,
+                            max_width=270,
+                        ),
+                    ).add_to(eco_group)
+
+        if eco_coords:
+            folium.PolyLine(
+                eco_coords,
+                color="#2ecc71",
+                weight=4.5,
+                dash_array="8, 6",
+                opacity=0.95,
+                tooltip="🌿 Alternative Eco-Optimal Trajectory (Balanced Fuel, NOx & Contrail Avoidance)",
+            ).add_to(eco_group)
+            eco_group.add_to(m)
+
     folium.LayerControl(position="topright", collapsed=True).add_to(m)
 
     c_status = f'<span style="color: #00f0ff; font-weight: bold;">{tot_c_dist:.1f} nm in ISSR ({len(c_segs)} segments)</span>' if c_segs else '<span style="color: #27ae60; font-weight: bold;">Clean Air (0 nm contrail)</span>'
+    eco_legend_line = '<br><span style="color: #2ecc71; font-weight: bold;">-- Alternative Eco-Optimal Route</span>' if has_eco else ""
+    info_box_height = 138 if has_eco else 118
     info_html = f"""
     <div style="position: fixed;
-                bottom: 25px; left: 15px; width: 360px; height: 118px;
+                bottom: 25px; left: 15px; width: 360px; height: {info_box_height}px;
                 background-color: white; border:2px solid #bdc3c7; border-radius: 8px;
                 z-index: 9999; font-size:12.5px; font-family: sans-serif;
                 padding: 10px; box-shadow: 2px 2px 6px rgba(0,0,0,0.2);">
-        <b style="font-size: 14px; color: #2c3e50;">🌬️ Contrail Climate &amp; Flown Route — #{ectrl_id}</b><br>
+        <b style="font-size: 14px; color: #2c3e50;">🌬️ Contrail Climate &amp; Eco Trajectory — #{ectrl_id}</b><br>
         <b>Route:</b> {adep} &rarr; {ades} ({op} - {ac})<br>
         <b>Contrail Status:</b> {c_status}<br>
-        <span style="color: #8e44ad;">— General Flown Route</span> | <span style="color: #00f0ff; font-weight: bold;">━ Contrail-Forming Elements</span><br>
-        <span style="font-size: 11px; color: #7f8c8d;">ISSR: Schmidt-Appleman T &le; T_SAC &amp; RHi &ge; 100%</span>
+        <span style="color: #8e44ad;">— Flown Route</span> | <span style="color: #00f0ff; font-weight: bold;">━ Contrail (ISSR)</span>{eco_legend_line}<br>
+        <span style="font-size: 11px; color: #7f8c8d;">Balanced: Fuel + CO₂ + Contrail Cirrus + NOₓ</span>
     </div>
     """
     m.get_root().html.add_child(folium.Element(info_html))
