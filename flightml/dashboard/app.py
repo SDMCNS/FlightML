@@ -128,6 +128,17 @@ from flightml.models.st_gnn import SpatioTemporalDelayEngine
 from flightml.sim.airspace_closure import AirspaceClosureSimulator
 from flightml.sim.marl_atfm import ASSUMPTIONS_GLOSSARY, MultiAgentATFMSimulator
 from flightml.eval.passenger_journey import PassengerJourneyEngine
+from flightml.viz.math_accordions import (
+    render_4d_rnp_math_accordion,
+    render_cdo_cco_math_accordion,
+    render_fuel_emissions_math_accordion,
+    render_upper_air_contrail_math_accordion,
+    render_fra_inefficiency_math_accordion,
+    render_gnss_jamming_math_accordion,
+    render_economic_charges_math_accordion,
+    render_experimental_ai_math_accordion,
+    render_passenger_copilot_math_accordion,
+)
 
 
 
@@ -811,6 +822,10 @@ with tab_cat_single:
         else:
             st.warning(f"Flight ID {active_flight_id} not found in period {selected_period}.")
 
+        # ----------------- View Mathematics & Physics Accordion -----------------
+        render_4d_rnp_math_accordion()
+        render_upper_air_contrail_math_accordion()
+
         # ----------------- TAB WORLD NAV: Global Navaids World Map Explorer -----------------
 
     with sf_sub2:
@@ -898,6 +913,9 @@ with tab_cat_single:
                     "Identifies city pairs where ATC tactical or RAD restrictions systematically cap aircraft ≥2,000 ft below their filed optimal cruise flight level."
                 )
                 st.dataframe(pd.DataFrame(cap_res["top_capped_corridors"]), use_container_width=True)
+
+        # ----------------- View Mathematics & Physics Accordion -----------------
+        render_cdo_cco_math_accordion()
 
         # ----------------- TAB 5: Delay & Runway Diagnostics -----------------
 
@@ -1593,6 +1611,9 @@ with tab_cat_single:
                 )
             else:
                 st.dataframe(all_fuel_df, use_container_width=True)
+
+        # ----------------- View Mathematics & Physics Accordion -----------------
+        render_fuel_emissions_math_accordion()
 
         # ----------------- TAB 5: Flight Notes & Anomaly Explanations -----------------
     with sf_sub5:
@@ -3129,6 +3150,9 @@ with tab_cat_system:
                     use_container_width=True,
                 )
 
+        # ----------------- View Mathematics & Physics Accordion -----------------
+        render_fra_inefficiency_math_accordion()
+
         # ----------------- TAB 2: Trajectory Explorer -----------------
 
     with sys_sub_gnss:
@@ -3475,6 +3499,9 @@ with tab_cat_system:
                     st.dataframe(pd.DataFrame(ev_rows), use_container_width=True)
                 else:
                     st.caption("No individual threshold-breaching telemetry events recorded.")
+
+        # ----------------- View Mathematics & Physics Accordion -----------------
+        render_gnss_jamming_math_accordion()
 
     with sys_sub2:
         st.header("Macro Evolution, FRA Structural Shift, Weather Correlation & AIRAC Diffing")
@@ -4995,6 +5022,9 @@ with tab_cat_econ:
                 ])
                 st.dataframe(occ_df, use_container_width=True)
 
+    # ----------------- View Mathematics & Physics Accordion -----------------
+    render_economic_charges_math_accordion()
+
 # =============================================================================
 # 7. EXPERIMENTAL AI & MACHINE LEARNING LAB
 # =============================================================================
@@ -5970,6 +6000,9 @@ with tab_cat_ai_lab:
                     """
                 )
 
+    # ----------------- View Mathematics & Physics Accordion -----------------
+    render_experimental_ai_math_accordion()
+
 # =============================================================================
 # 8. PASSENGER TRAVEL COPILOT & ITINERARY RISK
 # =============================================================================
@@ -6238,6 +6271,9 @@ with tab_cat_passenger:
             if dbg.get("passenger_rights_audit"):
                 with st.expander("⚖️ Statutory Passenger Rights & Geodesic Calculation Audit", expanded=True):
                     st.json(dbg["passenger_rights_audit"])
+
+    # ----------------- View Mathematics & Physics Accordion -----------------
+    render_passenger_copilot_math_accordion()
 
 # =============================================================================
 # 9. FLIGHT ANNOTATIONS & ANOMALY NOTES
