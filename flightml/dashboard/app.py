@@ -3237,11 +3237,7 @@ with tab_cat_system:
         gk2.metric(
             "Confirmed Spoofing",
             f"{scan_rep.spoofing_confirmed_count:,}",
-            "Score ≥ 75"
-        )
-            "Confirmed Spoofing",
-            f"{scan_rep.spoofing_confirmed_count}",
-            "Speed (>750 kts) / Vert (>6,000 fpm)",
+            "Score ≥ 75 (Teleportation / Rate Breach)",
             delta_color="inverse" if scan_rep.spoofing_confirmed_count > 0 else "normal",
         )
         gk3.metric(
