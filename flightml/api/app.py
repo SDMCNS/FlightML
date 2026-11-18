@@ -1389,7 +1389,7 @@ def get_flight_wrap_analysis_endpoint(
 
 @app.get("/api/v1/rnav/dme/coverage")
 def get_dme_rnav_coverage_endpoint(
-    flight_level: int = Query(default=300, description="Flight level (e.g. 100, 200, 300, 390)"),
+    flight_level: int = Query(default=300, description="Flight level in 1,000 ft increments (e.g. 10, 50, 100, 200, 300, 390)"),
     lat_min: float = Query(default=48.0),
     lat_max: float = Query(default=54.0),
     lon_min: float = Query(default=-3.0),
@@ -1407,6 +1407,36 @@ def get_dme_rnav_coverage_endpoint(
         inactive_idents=inact_list,
     )
     return rep.to_dict()
+
+
+@app.get("/api/v1/surveillance/radar/coverage")
+def get_radar_surveillance_coverage_endpoint(
+    flight_level: int = Query(default=300, description="Flight level in 1,000 ft increments (e.g. 10, 50, 100, 200, 300, 450)"),
+    lat_min: float = Query(default=43.0),
+    lat_max: float = Query(default=56.0),
+    lon_min: float = Query(default=-5.0),
+    lon_max: float = Query(default=15.0),
+    inactive: str = Query(default="", description="Comma-separated inactive radar IDs"),
+) -> dict[str, Any]:
+    """
+    Evaluate Primary / Secondary Radar surveillance coverage with 10x10 NM cells,
+    prioritizing radars within 5 NM of an airport and verifying:
+    - Dual-head coverage (>= 2 radars) above FL100
+    - Single-head coverage (>= 1 radar) below FL100
+    - Dual radar coverage to the ground at airports with > 500 daily movements
+    - Greedy / learning rationalization to recommend deactivations without compromising safety.
+    """
+    from flightml.eval.radar_coverage import get_radar_coverage_report
+    ds = FlightDataset()
+    inact_list = [i.strip() for i in inactive.split(",") if i.strip()]
+    rep = get_radar_coverage_report(
+        ds,
+        flight_level=flight_level,
+        bbox=(lat_min, lat_max, lon_min, lon_max),
+        inactive_ids=inact_list,
+    )
+    return rep.to_dict()
+
 
 
 

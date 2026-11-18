@@ -16,6 +16,7 @@ import flightml.math as fmath
 from flightml.eval.airport_ops import get_airport_operations_report, assess_runways_with_wind
 from flightml.eval.openap_wrap_engine import analyze_flight_wrap_envelope
 from flightml.eval.dme_rnav_coverage import get_dme_rnav_coverage_report
+from flightml.eval.radar_coverage import get_radar_coverage_report
 from flightml.eval.longitudinal_airspace_modernization import (
     get_vertical_capping_analysis,
     get_fixed_airways_vs_fra_analysis,
@@ -115,3 +116,33 @@ def test_use_cases_6_and_7_longitudinal_capping_and_fra(dataset: FlightDataset):
     assert fra["total_fuel_saved_tonnes"] > 0.0
     assert fra["total_co2_avoided_tonnes"] > 0.0
     assert len(fra["top_beneficiary_routes"]) > 0
+
+
+def test_radar_surveillance_coverage_and_optimization(dataset: FlightDataset):
+    """
+    Verify Primary / Secondary Radar surveillance coverage with 10x10 NM cells:
+    - Prioritizing radar heads within 5 NM of an airport
+    - Dual-head coverage target (>= 2) above FL100
+    - Single-head coverage target (>= 1) below FL100
+    - Dual radar coverage to ground for high-density airports (> 500 movements/day)
+    - Optimization / learning algorithm for safe redundant head deactivations
+    """
+    # Test high flight level (FL300)
+    rep300 = get_radar_coverage_report(dataset, flight_level=300)
+    assert rep300.flight_level == 300
+    assert rep300.altitude_ft == 30000
+    assert rep300.total_radars_count > 50
+    assert rep300.airport_radars_count > 20
+    assert rep300.coverage_percentage >= 95.0
+    assert rep300.target_met_percentage >= 95.0
+    assert len(rep300.high_density_airports) > 0
+    assert rep300.high_density_dual_ground_pct >= 50.0
+    assert len(rep300.suggested_deactivations) > 0
+
+    # Test lower flight level (FL060, 6,000 ft - 1,000 ft increments)
+    rep60 = get_radar_coverage_report(dataset, flight_level=60)
+    assert rep60.flight_level == 60
+    assert rep60.altitude_ft == 6000
+    # At FL < 100, single head coverage satisfies the target
+    assert rep60.target_met_percentage >= 90.0
+

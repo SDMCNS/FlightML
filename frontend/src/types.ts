@@ -373,4 +373,76 @@ export interface AirwayFRADividendReport {
   }[];
 }
 
+export interface RadarStation {
+  id: string;
+  name: string;
+  type: string;
+  latitude: number;
+  longitude: number;
+  elevation_ft: number;
+  mode_s: boolean;
+  is_military: boolean;
+  max_range_nm: number;
+  is_active: boolean;
+  is_airport_radar: boolean;
+  nearest_airport_ident?: string;
+  nearest_airport_name?: string;
+  nearest_airport_dist_nm?: number;
+}
+
+export interface AirportGroundCoverage {
+  ident: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  elevation_ft: number;
+  daily_movements: number;
+  visible_radar_count: number;
+  meets_dual_radar_target: boolean;
+  covering_radars: string[];
+}
+
+export interface RadarGridCell {
+  lat: number;
+  lon: number;
+  visible_radars_count: number;
+  coverage_status: 'HIGH_REDUNDANCY' | 'DUAL_HEAD' | 'SINGLE_HEAD' | 'OUTAGE';
+  target_met: boolean;
+}
+
+export interface RadarOptimizationSuggestion {
+  radar_id: string;
+  name: string;
+  is_airport_radar: boolean;
+  nearest_airport?: string;
+  coverage_loss_pct: number;
+  remaining_dual_coverage_pct: number;
+  recommendation: string;
+  annual_power_savings_kwh: number;
+  annual_cost_savings_eur: number;
+}
+
+export interface RadarCoverageReport {
+  flight_level: number;
+  altitude_ft: number;
+  cell_size_nm: number;
+  total_grid_cells: number;
+  covered_cells_count: number;
+  dual_head_cells_count: number;
+  single_head_cells_count: number;
+  outage_cells_count: number;
+  target_met_percentage: number;
+  coverage_percentage: number;
+  total_radars_count: number;
+  active_radars_count: number;
+  inactive_radars_count: number;
+  airport_radars_count: number;
+  high_density_airports: AirportGroundCoverage[];
+  high_density_dual_ground_pct: number;
+  suggested_deactivations: RadarOptimizationSuggestion[];
+  radars: RadarStation[];
+  cells_summary: RadarGridCell[];
+}
+
+
 
