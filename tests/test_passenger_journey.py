@@ -313,5 +313,26 @@ def test_hub_mct_database_and_connection_types():
     assert matched_prof is not None
     assert "AirTrain" in matched_prof.notes
 
+    # 4. Unlisted Hub Placeholder Common Sense Numbers
+    unlisted_prof = get_hub_mct_profile("ZZZZ")
+    assert unlisted_prof is not None
+    assert unlisted_prof.is_placeholder is True
+    assert unlisted_prof.d_to_d_min == 45
+    assert unlisted_prof.d_to_i_min == 60
+    assert unlisted_prof.i_to_d_min == 90
+    assert unlisted_prof.i_to_i_min == 60
+    assert "Standard industry MCT baseline" in unlisted_prof.notes
+
+    # Unlisted hub with domestic connection
+    mct_unlisted_d, type_d, prof_d = get_applicable_mct("ZZZZ", origin_country="US", dest_country="US", hub_country="US")
+    assert type_d == "D_to_D"
+    assert mct_unlisted_d == 45
+    assert prof_d.is_placeholder is True
+
+    # Unlisted hub with international to domestic connection
+    mct_unlisted_id, type_id, prof_id = get_applicable_mct("ZZZZ", origin_country="GB", dest_country="US", hub_country="US")
+    assert type_id == "I_to_D"
+    assert mct_unlisted_id == 90
+
 
 

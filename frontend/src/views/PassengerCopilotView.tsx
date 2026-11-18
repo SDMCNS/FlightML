@@ -160,6 +160,35 @@ export const PassengerCopilotView: React.FC = () => {
               <h4>
                 {hubProfile.airport} ({hubProfile.iata} / {hubProfile.icao})
               </h4>
+              {hubProfile.is_placeholder ? (
+                <span
+                  style={{
+                    background: 'rgba(148, 163, 184, 0.15)',
+                    color: '#94a3b8',
+                    border: '1px solid #475569',
+                    fontSize: '11px',
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    fontWeight: 500,
+                  }}
+                >
+                  Industry Baseline (Placeholder)
+                </span>
+              ) : (
+                <span
+                  style={{
+                    background: 'rgba(59, 130, 246, 0.2)',
+                    color: '#60a5fa',
+                    border: '1px solid #2563eb',
+                    fontSize: '11px',
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    fontWeight: 500,
+                  }}
+                >
+                  Verified Hub Profile
+                </span>
+              )}
             </div>
             <span className="badge-tag">{hubProfile.city}, {hubProfile.country}</span>
           </div>

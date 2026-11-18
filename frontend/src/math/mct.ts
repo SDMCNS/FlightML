@@ -26,6 +26,7 @@ export interface HubMCTEntry {
   i_to_d_min: number;
   i_to_i_min: number;
   notes: string;
+  is_placeholder?: boolean;
 }
 
 export const GLOBAL_HUB_MCT_DATA: Record<string, HubMCTEntry> = {
@@ -388,8 +389,35 @@ export const GLOBAL_HUB_MCT_DATA: Record<string, HubMCTEntry> = {
   }
 };
 
-export function getHubMCTProfile(code: string): HubMCTEntry | null {
-  if (!code) return null;
+export const COMMON_SENSE_MCT_DEFAULTS = {
+  D_to_D: "45 min",
+  D_to_I: "60 min",
+  I_to_D: "90 min",
+  I_to_I: "60 min",
+  d_to_d_min: 45,
+  d_to_i_min: 60,
+  i_to_d_min: 90,
+  i_to_i_min: 60,
+  notes: "Standard industry MCT baseline (unlisted transit hub): 45m Domestic, 60m International transit, 90m Border/Customs re-screening.",
+  is_placeholder: true,
+};
+
+export function createPlaceholderHubMCT(code: string): HubMCTEntry {
+  const clean = code ? code.trim().toUpperCase() : 'HUB';
+  const isIcao = clean.length === 4;
+  return {
+    airport: `Transit Hub (${clean})`,
+    city: 'Transit Gateway',
+    country: 'Standard Airspace',
+    country_code: 'XX',
+    icao: isIcao ? clean : `K${clean}`,
+    iata: isIcao ? clean.slice(1) : clean,
+    ...COMMON_SENSE_MCT_DEFAULTS,
+  };
+}
+
+export function getHubMCTProfile(code: string, fallbackToDefault: boolean = true): HubMCTEntry | null {
+  if (!code) return fallbackToDefault ? createPlaceholderHubMCT('DEFAULT') : null;
   const clean = code.trim().toUpperCase();
   // Direct match by IATA
   if (GLOBAL_HUB_MCT_DATA[clean]) {
@@ -400,6 +428,9 @@ export function getHubMCTProfile(code: string): HubMCTEntry | null {
     if (entry.icao === clean) {
       return entry;
     }
+  }
+  if (fallbackToDefault) {
+    return createPlaceholderHubMCT(clean);
   }
   return null;
 }

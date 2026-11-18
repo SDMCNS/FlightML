@@ -33,6 +33,7 @@ class HubMCTProfile:
     i_to_i_min: int
     notes: str
     raw_strings: dict[str, str]
+    is_placeholder: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -373,12 +374,65 @@ for iata_code, data in RAW_HUB_MCT_DATA.items():
     HUB_MCT_INDEX[data["icao"]] = profile
 
 
-def resolve_hub_mct(ident: str) -> HubMCTProfile | None:
-    """Resolve Hub MCT profile by either 3-letter IATA (e.g. 'JFK') or 4-letter ICAO (e.g. 'KJFK')."""
+def create_placeholder_mct_profile(
+    ident: str,
+    airport_name: str | None = None,
+    city: str | None = None,
+    country: str | None = None,
+    country_code: str | None = None,
+) -> HubMCTProfile:
+    """
+    Generate common-sense placeholder connection times for any unlisted transit hub:
+    - D_to_D: 45 min (standard domestic terminal / same-concourse transfer)
+    - D_to_I: 60 min (standard passport exit check & international concourse transfer)
+    - I_to_D: 90 min (standard immigration border control, baggage reclaim, and TSA re-screening)
+    - I_to_I: 60 min (standard international transit security re-screening)
+    """
+    clean = ident.strip().upper() if ident else "DEFAULT"
+    is_icao = (len(clean) == 4 and clean.isalpha())
+    iata = clean if not is_icao else clean[1:]
+    icao = clean if is_icao else f"K{clean}"
+    name = airport_name or f"Transit Hub ({clean})"
+    cit = city or "Transit Hub"
+    cntry = country or "Standard Airspace"
+    c_code = country_code or "XX"
+
+    return HubMCTProfile(
+        iata=iata,
+        icao=icao,
+        airport=name,
+        city=cit,
+        country=cntry,
+        country_code=c_code,
+        d_to_d_min=45,
+        d_to_i_min=60,
+        i_to_d_min=90,
+        i_to_i_min=60,
+        notes="Standard industry MCT baseline: 45m Domestic, 60m International transit, 90m Border/Customs re-screening.",
+        raw_strings={
+            "D_to_D": "45 min",
+            "D_to_I": "60 min",
+            "I_to_D": "90 min",
+            "I_to_I": "60 min",
+        },
+        is_placeholder=True,
+    )
+
+
+def resolve_hub_mct(ident: str, fallback_to_default: bool = True) -> HubMCTProfile | None:
+    """
+    Resolve Hub MCT profile by either 3-letter IATA (e.g. 'JFK') or 4-letter ICAO (e.g. 'KJFK').
+    If the airport is not in the curated list and fallback_to_default=True,
+    returns a standard common-sense placeholder profile (45m/60m/90m/60m).
+    """
     if not ident:
-        return None
+        return create_placeholder_mct_profile("DEFAULT") if fallback_to_default else None
     code = ident.strip().upper()
-    return HUB_MCT_INDEX.get(code)
+    if code in HUB_MCT_INDEX:
+        return HUB_MCT_INDEX[code]
+    if fallback_to_default:
+        return create_placeholder_mct_profile(code)
+    return None
 
 
 get_hub_mct_profile = resolve_hub_mct
@@ -429,35 +483,36 @@ def get_applicable_mct(
     conn_type: ConnectionType = "I_to_I",
     origin_country: str | None = None,
     dest_country: str | None = None,
-) -> tuple[int, ConnectionType, HubMCTProfile | None]:
+    hub_country: str | None = None,
+) -> tuple[int, ConnectionType, HubMCTProfile]:
     """
     Retrieve applicable minimum connection time (MCT) in minutes, connection type,
-    and profile for a specified hub.
+    and profile for a specified hub. If unlisted, uses common-sense placeholder numbers.
     """
-    profile = resolve_hub_mct(hub_ident)
+    profile = resolve_hub_mct(hub_ident, fallback_to_default=True)
+    if profile is None:
+        profile = create_placeholder_mct_profile(hub_ident)
+
     resolved_type = conn_type
+    effective_hub_country = hub_country or (profile.country_code if profile.country_code != "XX" else None)
 
-    if profile and origin_country and dest_country:
-        inbound_is_domestic = _match_country(origin_country, profile.country_code, profile.country)
-        outbound_is_domestic = _match_country(dest_country, profile.country_code, profile.country)
-        if inbound_is_domestic and outbound_is_domestic:
-            resolved_type = "D_to_D"
-        elif inbound_is_domestic and not outbound_is_domestic:
-            resolved_type = "D_to_I"
-        elif not inbound_is_domestic and outbound_is_domestic:
-            resolved_type = "I_to_D"
+    if origin_country and dest_country:
+        if effective_hub_country:
+            inbound_is_domestic = _match_country(origin_country, effective_hub_country, profile.country)
+            outbound_is_domestic = _match_country(dest_country, effective_hub_country, profile.country)
+            if inbound_is_domestic and outbound_is_domestic:
+                resolved_type = "D_to_D"
+            elif inbound_is_domestic and not outbound_is_domestic:
+                resolved_type = "D_to_I"
+            elif not inbound_is_domestic and outbound_is_domestic:
+                resolved_type = "I_to_D"
+            else:
+                resolved_type = "I_to_I"
         else:
-            resolved_type = "I_to_I"
+            if origin_country.strip().upper() == dest_country.strip().upper():
+                resolved_type = "D_to_D"
+            else:
+                resolved_type = "I_to_I"
 
-    if profile:
-        mct_min = profile.get_mct_for_type(resolved_type)
-        return mct_min, resolved_type, profile
-
-    # Standard global defaults if hub is not in specialized database
-    fallback_defaults = {
-        "D_to_D": 45,
-        "D_to_I": 60,
-        "I_to_D": 90,
-        "I_to_I": 75,
-    }
-    return fallback_defaults.get(resolved_type, 60), resolved_type, None
+    mct_min = profile.get_mct_for_type(resolved_type)
+    return mct_min, resolved_type, profile

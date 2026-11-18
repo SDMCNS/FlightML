@@ -787,6 +787,7 @@ class PassengerJourneyEngine:
             hub_clean,
             origin_country=orig_info.get("iso_country"),
             dest_country=dest_info.get("iso_country"),
+            hub_country=apt_info.get("iso_country"),
         )
 
         resolved_hub_name = hub_profile.airport if hub_profile else (hub_meta.get("name") if hub_meta else apt_info.get("name", f"Airport {hub_clean}"))
