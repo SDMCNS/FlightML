@@ -678,4 +678,32 @@ flightml gnss-inspect 292150998 --period 202510
 flightml gnss-inspect 292150998 --period 202510 --json
 ```
 
+---
+
+## 33. Synthetic Demo Dataset Generation
+
+### `flightml generate-demo`
+Generate an anonymized, production-grade synthetic dataset of **1,000,000 flights** (or custom count) derived from empirical Eurocontrol DDR2 flight archives to showcase the full FlightML platform:
+- **Flight Path Preservation**: Actual radar trajectory coordinates (latitude, longitude, flight level, sequence number) and filed flight plans are preserved for authentic routing.
+- **Like-for-Like Aircraft Swapping**: Aircraft types are randomized strictly within physically and aerodynamically compatible certified peer groups (e.g. `NARROWBODY_STD`: A320, B738, A20N, B38M, A319, B737; `WIDEBODY_HEAVY`: A359, A35K, B772, B77W, B77L, A343; `REGIONAL_PROP`: AT72, AT76, DH8D; `BIZJET`: C56X, CL30, GLF5, etc.).
+- **Traceable Synthetic Registrations**: Real aircraft registrations (tail numbers) are deterministically pseudonymized to synthetic format (`SYNTH-00001`, `SYNTH-00042`). Multi-leg rotations flown by the same physical airframe maintain identical synthetic tails to preserve turnaround buffers, fleet utilization, and tail-swap recovery optimization.
+- **Pseudonymized Operator Codes**: Operator identifiers are replaced with fictional synthetic airline codes (`AEX`, `AUR`, `NOV`, `SKY`, `VEX`, `SOL`, etc.).
+- **Same-Day Departure Invariant**: Off-block times and trajectory waypoint timestamps are shifted by controlled random offsets (e.g. $\pm 45$ min) with boundary clamping to strictly guarantee that flights remain on the exact same calendar operating day.
+- **Native Parquet Storage**: Transformed datasets are written directly into `data/parquet/periods/<period_name>/` (`flights.parquet`, `flights_actual.parquet`, `flights_planned.parquet`) with Zstandard (ZSTD) compression, immediately recognized by `FlightDataset(period='<period_name>')` and the Streamlit dashboard sidebar period dropdown.
+
+```bash
+# Generate full 1,000,000 flight demo dataset from 202510 and 202506 archives
+flightml generate-demo --count 1000000 --periods 202510,202506 --name demo_1m
+
+# Fast generation of a smaller custom demo slice (e.g. 50,000 flights)
+flightml generate-demo --count 50000 --periods 202510 --name demo_quick
+
+# Custom tail prefix and shift bounds
+flightml generate-demo --count 100000 --name demo_custom --tail-prefix AIR- --max-shift 30 --seed 42
+
+# Or invoke the standalone generation script directly
+python scripts/generate_synthetic_demo_dataset.py --count 1000000 --name demo_1m
+```
+
+
 

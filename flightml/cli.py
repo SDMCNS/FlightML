@@ -3683,5 +3683,28 @@ def cli_gnss_inspect(
         console.print(t_events)
 
 
+@app.command(name="generate-demo")
+def cli_generate_demo(
+    count: int = typer.Option(1_000_000, "--count", "-n", help="Number of flights to generate (default: 1,000,000)"),
+    periods: str = typer.Option("202510,202506", "--periods", "-p", help="Comma-separated source periods"),
+    name: str = typer.Option("demo_1m", "--name", help="Name of the demo period directory (default: demo_1m)"),
+    tail_prefix: str = typer.Option("SYNTH-", "--tail-prefix", help="Prefix for synthetic tail numbers"),
+    max_shift: int = typer.Option(45, "--max-shift", help="Max time shift in minutes (same-day guaranteed)"),
+    seed: int = typer.Option(42, "--seed", help="Random seed for reproducibility"),
+) -> None:
+    """Generate an anonymized, production-grade synthetic 1M flight demo dataset."""
+    from flightml.data.synthetic_generator import generate_synthetic_demo_dataset
+
+    period_list = [p.strip() for p in periods.split(",") if p.strip()]
+    generate_synthetic_demo_dataset(
+        target_flights=count,
+        source_periods=period_list,
+        period_name=name,
+        tail_prefix=tail_prefix,
+        max_time_shift_minutes=max_shift,
+        seed=seed,
+    )
+
+
 if __name__ == "__main__":
     app()
