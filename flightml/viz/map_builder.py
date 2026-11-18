@@ -7,7 +7,11 @@ from typing import Any
 import folium
 import pandas as pd
 
-from flightml.geo.geodesy import circular_mean_longitude, split_polyline_at_antimeridian
+from flightml.geo.geodesy import (
+    circular_mean_longitude,
+    circular_mean_coords,
+    split_polyline_at_antimeridian,
+)
 from flightml.geo.trajectory import analyze_trajectory
 
 
@@ -1636,29 +1640,108 @@ def create_gnss_interference_network_map(
             tooltip=f"ADES: {rep.ades} (#{eid})",
         ).add_to(target_fg)
 
-        # Highlight Selected Flight if active
+        # Highlight Selected Flight if active with contrail-style multi-layer glowing segments
         if is_selected:
+            # Base flown route
             create_safe_polyline(
                 locations=pts,
-                color="#00f0ff",
-                weight=5.0,
-                opacity=0.95,
+                color="#8e44ad",
+                weight=4.0,
+                opacity=0.7,
                 tooltip=f"🎯 FOCUS: Flight #{eid} ({rep.adep}➔{rep.ades})",
                 popup=folium.Popup(popup_html, max_width=320),
             ).add_to(fg_highlight)
 
+            # Imposed anomalous segments (casing + neon core + endpoint boundary markers)
+            anom_segs = getattr(rep, "anomalous_segments", []) or []
+            for seg in anom_segs:
+                s_dict = seg.to_dict() if hasattr(seg, "to_dict") else (seg if isinstance(seg, dict) else seg.__dict__)
+                lat1 = float(s_dict.get("start_lat", 0.0))
+                lon1 = float(s_dict.get("start_lon", 0.0))
+                lat2 = float(s_dict.get("end_lat", 0.0))
+                lon2 = float(s_dict.get("end_lon", 0.0))
+                if not (_is_finite_coord(lat1) and _is_finite_coord(lon1) and _is_finite_coord(lat2) and _is_finite_coord(lon2)):
+                    continue
+
+                a_type = str(s_dict.get("anomaly_type", "ANOMALY"))
+                m_val = float(s_dict.get("metric_value", 0.0))
+                m_unit = str(s_dict.get("metric_unit", ""))
+                fl_st = float(s_dict.get("flight_level_start", 0.0))
+                fl_en = float(s_dict.get("flight_level_end", 0.0))
+                d_nm = float(s_dict.get("distance_nm", 0.0))
+                d_s = float(s_dict.get("duration_s", 0.0))
+                desc_txt = str(s_dict.get("description", ""))
+
+                if a_type in ["SPEED_TELEPORTATION", "ALTITUDE_GLITCH"]:
+                    core_col = "#ff0055"
+                    fill_col = "#c0392b"
+                elif a_type == "VERTICAL_RATE_SPIKE":
+                    core_col = "#ff4757"
+                    fill_col = "#d35400"
+                elif a_type == "APPROACH_POSITION_JUMP":
+                    core_col = "#e056fd"
+                    fill_col = "#8e44ad"
+                else:
+                    core_col = "#ffa502"
+                    fill_col = "#d35400"
+
+                # 1. Dark casing polyline
+                create_safe_polyline(
+                    locations=[[lat1, lon1], [lat2, lon2]],
+                    color="#2d0c3a",
+                    weight=8,
+                    opacity=0.80,
+                ).add_to(fg_highlight)
+
+                # 2. Glowing core line
+                create_safe_polyline(
+                    locations=[[lat1, lon1], [lat2, lon2]],
+                    color=core_col,
+                    weight=5.5,
+                    opacity=0.98,
+                    tooltip=f"⚡ {a_type}: {m_val:,.0f} {m_unit} | FL{fl_st:.0f}➔FL{fl_en:.0f} ({d_nm:.1f}nm)",
+                    popup=folium.Popup(
+                        f"""
+                        <div style="font-family: sans-serif; min-width: 230px; font-size: 12px;">
+                            <b style="color: {core_col}; font-size: 13.5px;">⚡ GNSS Telemetry Breach: {html.escape(a_type)}</b><br>
+                            <hr style="margin: 4px 0;">
+                            <b>Observed Metric:</b> {m_val:,.1f} {html.escape(m_unit)}<br>
+                            <b>Altitude:</b> FL{fl_st:.0f} ➔ FL{fl_en:.0f}<br>
+                            <b>Segment Duration:</b> {d_s:.0f}s ({d_nm:.1f} nm)<br>
+                            <hr style="margin: 4px 0;">
+                            <span style="color: #444; font-size: 11px;">{html.escape(desc_txt)}</span>
+                        </div>
+                        """,
+                        max_width=290,
+                    ),
+                ).add_to(fg_highlight)
+
+                # 3. Incident boundary markers
+                folium.CircleMarker(
+                    location=[lat1, lon1],
+                    radius=5.5,
+                    color=core_col,
+                    fill=True,
+                    fill_color=fill_col,
+                    fill_opacity=1.0,
+                    tooltip=f"Incident Point: FL{fl_st:.0f}",
+                ).add_to(fg_highlight)
+
         # Plot individual Anomaly Trigger Pins (top events)
         for ev in rep.events[:4]:
             if _is_finite_coord(ev.latitude) and _is_finite_coord(ev.longitude):
-                if ev.anomaly_type == "TELEPORTATION_SPEED":
+                if ev.anomaly_type in ["SPEED_TELEPORTATION", "TELEPORTATION_SPEED"]:
                     p_col = "#e74c3c"
                     p_lbl = f"⚡ Teleport: {ev.metric_value:,.0f} kts"
                 elif ev.anomaly_type == "VERTICAL_RATE_SPIKE":
                     p_col = "#d35400"
                     p_lbl = f"↕️ Vert Spike: {ev.metric_value:,.0f} fpm"
-                elif ev.anomaly_type == "TELEMETRY_DROPOUT":
-                    p_col = "#8e44ad"
-                    p_lbl = f"📡 Signal Loss: {ev.metric_value:.1f} min"
+                elif ev.anomaly_type == "APPROACH_POSITION_JUMP":
+                    p_col = "#e056fd"
+                    p_lbl = f"🛬 Approach Jump: {ev.metric_value:,.1f} {ev.metric_unit}"
+                elif ev.anomaly_type == "ALTITUDE_GLITCH":
+                    p_col = "#c0392b"
+                    p_lbl = f"⚠️ Alt Glitch: {ev.metric_value:,.0f} FL"
                 else:
                     p_col = "#f39c12"
                     p_lbl = f"🔀 Track Jitter: {ev.metric_value:.0f}°"
@@ -1689,7 +1772,7 @@ def create_gnss_interference_network_map(
     tot_flagged = getattr(scan_report, "flagged_flights_count", len(flagged_flights))
     conf_c = getattr(scan_report, "spoofing_confirmed_count", 0)
     susp_c = getattr(scan_report, "spoofing_suspected_count", 0)
-    jam_c = getattr(scan_report, "jamming_probable_count", 0)
+    appr_c = getattr(scan_report, "jamming_probable_count", 0)
 
     legend_html = f"""
     <div style="position: fixed; bottom: 20px; left: 15px; max-width: 440px;
@@ -1702,14 +1785,14 @@ def create_gnss_interference_network_map(
         <div style="color: #444; margin-bottom: 6px; font-size: 11.5px;">
             <b>Flagged Flights:</b> <span style="color: #c0392b; font-weight: bold;">{tot_flagged:,}</span> |
             <b>Confirmed Spoofing:</b> <span style="color: #e74c3c; font-weight: bold;">{conf_c}</span> |
-            <b>Suspected:</b> <span style="color: #f39c12; font-weight: bold;">{susp_c}</span> |
-            <b>Jamming:</b> <span style="color: #8e44ad; font-weight: bold;">{jam_c}</span>
+            <b>Suspected:</b> <span style="color: #f39c12; font-weight: bold;">{susp_c}</span>
         </div>
         <div style="font-size: 11px; line-height: 1.45; color: #555;">
-            <span style="color: #e74c3c; font-weight: bold;">&#9644;&#9644; Red:</span> Confirmed Spoofing (&gt;750 kts teleport, vertical jumps &gt;7,500 fpm)<br/>
-            <span style="color: #f39c12; font-weight: bold;">&#9644;&#9644; Amber:</span> Suspected Spoofing (Erratic track jitter, circular ghost patterns)<br/>
-            <span style="color: #8e44ad; font-weight: bold;">&#9644;&#9644; Purple:</span> Probable Jamming (&gt;480s telemetry dropouts in controlled airspace)<br/>
-            <span style="color: #00bcd4; font-weight: bold;">&#9644;&#9644; Cyan:</span> Currently Selected / Inspected Flight Trajectory<br/>
+            <span style="color: #ff0055; font-weight: bold;">&#9644;&#9644; Neon Red:</span> Speed Teleportation (&gt;750 kts) &amp; Altitude Glitches<br/>
+            <span style="color: #ff4757; font-weight: bold;">&#9644;&#9644; Coral:</span> Unphysical Vertical Spikes (&gt;6,000 ft/min)<br/>
+            <span style="color: #ffa502; font-weight: bold;">&#9644;&#9644; Amber:</span> Erratic Track Jitter &amp; False Circle Loops (&gt;65° flip)<br/>
+            <span style="color: #e056fd; font-weight: bold;">&#9644;&#9644; Magenta:</span> Terminal Approach Position Jumps (&gt;320 kts below FL100)<br/>
+            <span style="color: #8e44ad; font-weight: bold;">&#9644;&#9644; Purple:</span> Flown Radar Trajectory (Base Profile)<br/>
             <span style="color: #7f8c8d; font-weight: bold;">&#9633; Shaded Zones:</span> Known EW / GNSS Interference Conflict Hotspots
         </div>
     </div>
@@ -1723,5 +1806,207 @@ def create_gnss_interference_network_map(
         m.save(str(out_p))
 
     return m
+
+
+def create_gnss_flight_route_map(
+    dataset: Any,
+    gnss_report: Any,
+    output_html_path: Path | str | None = None,
+) -> folium.Map:
+    """
+    Generate an interactive Leaflet/Folium map for an individual flight exhibiting GNSS anomalies,
+    using the exact same multi-layer highlighted segment approach as the contrail ISSR map:
+    - Flown radar trajectory (solid purple)
+    - Imposed anomalous segments (dark casing + glowing neon core line: red/amber/magenta)
+    - Incident origin/boundary circle markers
+    - Electronic warfare hotspot boundary rectangles (if traversed)
+    - Interactive hover tooltips and rich HTML diagnostic popups
+    """
+    from flightml.eval.gnss_jamming_spoofing import GNSS_HOTSPOTS
+
+    eid = gnss_report.ectrl_id
+    trajs = dataset.get_trajectory(eid)
+    actual_df = trajs.get("actual", pd.DataFrame())
+
+    if actual_df.empty or len(actual_df) < 2:
+        # Fallback basic map
+        return folium.Map(location=[50.0, 10.0], zoom_start=4)
+
+    pts = [
+        [float(r["latitude"]), float(r["longitude"])]
+        for _, r in actual_df.iterrows()
+        if _is_finite_coord(r.get("latitude")) and _is_finite_coord(r.get("longitude"))
+    ]
+
+    c_lat, c_lon = circular_mean_coords(pts)
+
+    m = folium.Map(
+        location=[c_lat, c_lon],
+        zoom_start=5,
+        tiles=None,
+    )
+
+    folium.TileLayer(
+        tiles="https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+        attr="&copy; OpenStreetMap contributors, Humanitarian OpenStreetMap Team",
+        name="Humanitarian (Unblocked)",
+        subdomains="abc",
+        show=True,
+        control=True,
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community",
+        name="Satellite Imagery",
+        show=False,
+        control=True,
+    ).add_to(m)
+
+    # 1. Hotspots Layer
+    hotspots_layer = folium.FeatureGroup(name="⚠️ Electronic Warfare Hotspot Zones", show=True).add_to(m)
+    for k in getattr(gnss_report, "hotspots_traversed", []):
+        zone = GNSS_HOTSPOTS.get(k)
+        if zone:
+            folium.Rectangle(
+                bounds=[[zone["min_lat"], zone["min_lon"]], [zone["max_lat"], zone["max_lon"]]],
+                color=zone.get("color", "#e74c3c"),
+                weight=2,
+                dash_array="6, 6",
+                fill=True,
+                fill_color=zone.get("color", "#e74c3c"),
+                fill_opacity=0.15,
+                tooltip=f"⚠️ {zone['name']}",
+            ).add_to(hotspots_layer)
+
+    # 2. Flown Route (Purple base line)
+    route_group = folium.FeatureGroup(name=f"✈️ Flown Route (#{eid})", show=True).add_to(m)
+    create_safe_polyline(
+        locations=pts,
+        color="#8e44ad",
+        weight=4,
+        opacity=0.85,
+        tooltip=f"Flight #{eid}: {gnss_report.adep} ➔ {gnss_report.ades}",
+    ).add_to(route_group)
+
+    # ADEP / ADES markers
+    folium.Marker(
+        location=pts[0],
+        tooltip=f"Departure: {gnss_report.adep}",
+        icon=folium.Icon(color="green", icon="plane-departure", prefix="fa"),
+    ).add_to(route_group)
+    folium.Marker(
+        location=pts[-1],
+        tooltip=f"Destination: {gnss_report.ades}",
+        icon=folium.Icon(color="red", icon="plane-arrival", prefix="fa"),
+    ).add_to(route_group)
+
+    # 3. Imposed Anomalous Telemetry Segments (Exact Contrail Highlighting Approach)
+    anom_group = folium.FeatureGroup(name="⚡ Highlighted GNSS Anomaly Segments", show=True).add_to(m)
+    anom_segs = getattr(gnss_report, "anomalous_segments", []) or []
+
+    for idx, seg in enumerate(anom_segs):
+        s_dict = seg.to_dict() if hasattr(seg, "to_dict") else (seg if isinstance(seg, dict) else seg.__dict__)
+        lat1 = float(s_dict.get("start_lat", 0.0))
+        lon1 = float(s_dict.get("start_lon", 0.0))
+        lat2 = float(s_dict.get("end_lat", 0.0))
+        lon2 = float(s_dict.get("end_lon", 0.0))
+        if not (_is_finite_coord(lat1) and _is_finite_coord(lon1) and _is_finite_coord(lat2) and _is_finite_coord(lon2)):
+            continue
+
+        a_type = str(s_dict.get("anomaly_type", "ANOMALY"))
+        m_val = float(s_dict.get("metric_value", 0.0))
+        m_unit = str(s_dict.get("metric_unit", ""))
+        fl_st = float(s_dict.get("flight_level_start", 0.0))
+        fl_en = float(s_dict.get("flight_level_end", 0.0))
+        dist_nm = float(s_dict.get("distance_nm", 0.0))
+        dur_s = float(s_dict.get("duration_s", 0.0))
+        desc = str(s_dict.get("description", ""))
+
+        if a_type in ["SPEED_TELEPORTATION", "ALTITUDE_GLITCH"]:
+            core_color = "#ff0055"
+            fill_color = "#c0392b"
+        elif a_type == "VERTICAL_RATE_SPIKE":
+            core_color = "#ff4757"
+            fill_color = "#d35400"
+        elif a_type == "APPROACH_POSITION_JUMP":
+            core_color = "#e056fd"
+            fill_color = "#8e44ad"
+        else:
+            core_color = "#ffa502"
+            fill_color = "#d35400"
+
+        # Casing line (thick dark)
+        create_safe_polyline(
+            locations=[[lat1, lon1], [lat2, lon2]],
+            color="#2d0c3a",
+            weight=8,
+            opacity=0.75,
+        ).add_to(anom_group)
+
+        # Glowing core line (neon)
+        create_safe_polyline(
+            locations=[[lat1, lon1], [lat2, lon2]],
+            color=core_color,
+            weight=5.5,
+            opacity=0.98,
+            tooltip=f"⚡ {a_type}: {m_val:,.0f} {m_unit} | FL{fl_st:.0f}➔FL{fl_en:.0f} ({dist_nm:.1f}nm in {dur_s:.0f}s)",
+            popup=folium.Popup(
+                f"""
+                <div style="font-family: sans-serif; min-width: 230px; font-size: 12px;">
+                    <b style="color: {core_color}; font-size: 13.5px;">⚡ GNSS Telemetry Breach: {html.escape(a_type)}</b><br>
+                    <hr style="margin: 4px 0;">
+                    <b>Observed Metric:</b> {m_val:,.1f} {html.escape(m_unit)}<br>
+                    <b>Altitude:</b> FL{fl_st:.0f} ➔ FL{fl_en:.0f}<br>
+                    <b>Segment Duration:</b> {dur_s:.0f}s ({dist_nm:.1f} nm)<br>
+                    <hr style="margin: 4px 0;">
+                    <span style="color: #444; font-size: 11px;">{html.escape(desc)}</span>
+                </div>
+                """,
+                max_width=290,
+            ),
+        ).add_to(anom_group)
+
+        # Segment boundary incident marker
+        folium.CircleMarker(
+            location=[lat1, lon1],
+            radius=6.0,
+            color=core_color,
+            fill=True,
+            fill_color=fill_color,
+            fill_opacity=1.0,
+            tooltip=f"Incident Origin: FL{fl_st:.0f}",
+        ).add_to(anom_group)
+
+    # 4. Floating Legend & Header Box
+    status_label = gnss_report.gnss_status
+    status_color = "#ff0055" if status_label == "CONFIRMED_SPOOFING" else "#ffa502" if status_label == "SUSPECTED_SPOOFING" else "#27ae60"
+
+    info_html = f"""
+    <div style="position: fixed;
+                bottom: 25px; left: 15px; width: 380px; height: 135px;
+                background-color: white; border:2px solid #bdc3c7; border-radius: 8px;
+                z-index: 9999; font-size:12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                padding: 10px; box-shadow: 2px 2px 6px rgba(0,0,0,0.2);">
+        <b style="font-size: 13.5px; color: #2c3e50;">🛰️ GNSS Anomaly Inspector — #{eid}</b><br>
+        <b>Route:</b> {gnss_report.adep} &rarr; {gnss_report.ades} ({gnss_report.ac_operator} - {gnss_report.ac_type})<br>
+        <b>Verdict:</b> <span style="color: {status_color}; font-weight: bold;">{status_label}</span> (Score: {gnss_report.anomaly_score:.0f}/100)<br>
+        <hr style="margin: 4px 0;">
+        <span style="color: #8e44ad;">— Flown Route</span> |
+        <span style="color: #ff0055; font-weight: bold;">━ Teleport / Glitch</span> |
+        <span style="color: #ffa502; font-weight: bold;">━ Track Jitter</span><br>
+        <span style="font-size: 11px; color: #7f8c8d;">Indicators: Speed Teleport, Vertical Spike, Approach Jump, Track Flip</span>
+    </div>
+    """
+    m.get_root().html.add_child(folium.Element(info_html))
+    folium.LayerControl(position="topright", collapsed=True).add_to(m)
+
+    if output_html_path:
+        out_p = Path(output_html_path)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        m.save(str(out_p))
+
+    return m
+
 
 

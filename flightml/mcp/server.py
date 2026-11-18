@@ -1361,8 +1361,8 @@ def create_mcp_server() -> FastMCP:
         """Scan historical European and international flights for GNSS (GPS) jamming and spoofing anomalies.
 
         Detects kinematic teleportation speed jumps (> 750 kts), unphysical vertical velocity spikes
-        (> 7,500 ft/min), sudden altitude telemetry glitches, erratic zigzag track jitter, and extended
-        position dropouts in controlled airspace.
+        (> 6,000 ft/min), sudden altitude telemetry glitches, erratic zigzag track jitter, and jumping
+        positions or speed breaches on terminal approach. Telemetry dropouts are excluded as an indicator.
 
         Args:
             period: Eurocontrol period (e.g. '202510', '202402', or empty for active default).

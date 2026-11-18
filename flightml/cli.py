@@ -3574,7 +3574,7 @@ def cli_gnss_scan(
             f"Flagged: {rep.flagged_flights_count:,}[/dim]\n"
             f"[red]Confirmed Spoofing: {rep.spoofing_confirmed_count}[/red] | "
             f"[yellow]Suspected Spoofing: {rep.spoofing_suspected_count}[/yellow] | "
-            f"[magenta]Probable Jamming: {rep.jamming_probable_count}[/magenta]",
+            f"[magenta]Approach / Jitter Anomalies: {rep.jamming_probable_count}[/magenta]",
             border_style="cyan",
         )
     )
@@ -3596,7 +3596,7 @@ def cli_gnss_scan(
     table.add_column("A/C", width=6)
     table.add_column("Max Speed", justify="right", width=12)
     table.add_column("Max VS", justify="right", width=12)
-    table.add_column("Max Gap", justify="right", width=9)
+    table.add_column("Track Jitter", justify="right", width=12)
     table.add_column("Hotspots", style="dim", width=24)
 
     for f in rep.flagged_flights[:25]:
@@ -3610,7 +3610,7 @@ def cli_gnss_scan(
             f.ac_type,
             f"{f.max_groundspeed_kts:,.0f} kts",
             f"{f.max_vertical_speed_fpm:,.0f} fpm",
-            f"{f.max_telemetry_gap_s/60.0:.1f}m",
+            f"{f.max_track_jitter_deg:.0f}°",
             ", ".join(f.hotspots_traversed) if f.hotspots_traversed else "Open Airspace",
         )
 
@@ -3655,9 +3655,9 @@ def cli_gnss_inspect(
     t_metrics.add_column("Operational Airframe Envelope", style="dim")
 
     t_metrics.add_row("Max Kinematic Speed", f"{rep.max_groundspeed_kts:,.0f} kts", "Nominal: 300–620 kts (Breach > 750 kts)")
-    t_metrics.add_row("Max Vertical Velocity", f"{rep.max_vertical_speed_fpm:,.0f} fpm", "Nominal: 1,000–3,500 fpm (Breach > 7,500 fpm)")
-    t_metrics.add_row("Max Telemetry Dropout", f"{rep.max_telemetry_gap_s/60.0:.1f} min", "Nominal: < 2 min in radar airspace (Breach > 8 min)")
-    t_metrics.add_row("Max Track Jitter", f"{rep.max_track_jitter_deg:.0f}°", "Nominal: < 45° standard turns (Breach > 85°)")
+    t_metrics.add_row("Max Vertical Velocity", f"{rep.max_vertical_speed_fpm:,.0f} fpm", "Nominal: 1,000–3,500 fpm (Breach > 6,000 fpm)")
+    t_metrics.add_row("Track Angle Jitter", f"{rep.max_track_jitter_deg:.0f}°", "Nominal: < 45° standard turns (Breach > 65°)")
+    t_metrics.add_row("Highlighted Anomaly Segments", f"{len(rep.anomalous_segments)}", "Identified kinematic & aerodynamic violation segments")
     console.print(t_metrics)
 
     if rep.events:

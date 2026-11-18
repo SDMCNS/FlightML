@@ -111,6 +111,7 @@ from flightml.viz.map_builder import (
     create_world_navaids_map,
     create_fra_boundary_map,
     create_gnss_interference_network_map,
+    create_gnss_flight_route_map,
 )
 from flightml.viz.html_exporter import (
     generate_static_html_report,
@@ -3134,9 +3135,9 @@ with tab_cat_system:
         st.header("🛰️ Network GNSS Jamming & Spoofing Anomaly Detector")
         st.caption(
             "Detects commercial flights exhibiting signatures of Global Navigation Satellite System (GNSS / GPS) "
-            "jamming and spoofing: impossible kinematic teleportation jumps (> 750 kts), unphysical vertical rate spikes (> 7,500 ft/min), "
-            "sudden altitude glitches, erratic track jitter / circular spoofing, and extended telemetry dropouts (> 480s) "
-            "across European and geopolitical electronic warfare airspace corridors."
+            "jamming and spoofing: impossible kinematic teleportation jumps (> 750 kts), unphysical vertical rate spikes (> 6,000 ft/min), "
+            "sudden altitude glitches, erratic track jitter / circular spoofing, and jumping positions or speed breaches on terminal approach. "
+            "Telemetry reporting dropouts are excluded as an indicator due to non-uniform waypoint reporting intervals."
         )
 
         col_g1, col_g2, col_g3, col_g4 = st.columns([1.2, 1.4, 1.8, 1.6])
@@ -3151,7 +3152,7 @@ with tab_cat_system:
         with col_g2:
             gnss_status_filter = st.selectbox(
                 "Anomaly Severity Filter:",
-                options=["All Flagged", "Confirmed Spoofing", "Suspected Spoofing", "Probable Jamming"],
+                options=["All Flagged", "Confirmed Spoofing", "Suspected Spoofing", "Terminal Approach Jumps"],
                 index=0,
                 key=f"gnss_status_filter_{selected_period}",
                 help="Filter by anomaly classification severity."
@@ -3168,12 +3169,12 @@ with tab_cat_system:
         with col_g4:
             min_score_val = st.slider(
                 "Min Anomaly Score:",
-                min_value=30.0,
+                min_value=25.0,
                 max_value=90.0,
                 value=35.0,
                 step=5.0,
                 key=f"gnss_min_score_{selected_period}",
-                help="Lower thresholds surface mild position dropouts; higher thresholds isolate extreme kinematic teleportations."
+                help="Threshold isolates extreme kinematic teleportations, vertical rate breaches, and erratic track jitter."
             )
 
         hotspot_key_arg = None
@@ -3197,8 +3198,8 @@ with tab_cat_system:
             filtered_flagged = [f for f in filtered_flagged if f.gnss_status == "CONFIRMED_SPOOFING"]
         elif gnss_status_filter == "Suspected Spoofing":
             filtered_flagged = [f for f in filtered_flagged if f.gnss_status == "SUSPECTED_SPOOFING"]
-        elif gnss_status_filter == "Probable Jamming":
-            filtered_flagged = [f for f in filtered_flagged if f.gnss_status == "PROBABLE_JAMMING"]
+        elif gnss_status_filter == "Terminal Approach Jumps":
+            filtered_flagged = [f for f in filtered_flagged if any(e.anomaly_type == "APPROACH_POSITION_JUMP" for e in f.events)]
 
         # Metric Row 1: Executive Network Interference KPIs
         gk1, gk2, gk3, gk4 = st.columns(4)
@@ -3210,18 +3211,19 @@ with tab_cat_system:
         gk2.metric(
             "Confirmed Spoofing",
             f"{scan_rep.spoofing_confirmed_count}",
-            "Impossible speed / vertical teleportation",
+            "Speed (>750 kts) / Vert (>6,000 fpm)",
             delta_color="inverse" if scan_rep.spoofing_confirmed_count > 0 else "normal",
         )
         gk3.metric(
             "Suspected Spoofing",
             f"{scan_rep.spoofing_suspected_count}",
-            "Severe track jitter / circular ghost loops",
+            "Track jitter (>65°) / Ghost loops",
         )
+        appr_anomaly_count = sum(1 for f in filtered_flagged if any(e.anomaly_type == "APPROACH_POSITION_JUMP" for e in f.events))
         gk4.metric(
-            "Probable Jamming",
-            f"{scan_rep.jamming_probable_count}",
-            "Extended position telemetry dropouts (>480s)",
+            "Approach Jumps",
+            f"{appr_anomaly_count}",
+            "Terminal jumps / Speeds >320kt below FL100",
         )
 
         st.markdown("---")
@@ -3245,7 +3247,7 @@ with tab_cat_system:
                         "Operator": f"{rep.ac_operator} ({rep.ac_type})",
                         "Max Speed": f"{rep.max_groundspeed_kts:,.0f} kts",
                         "Max VS": f"{rep.max_vertical_speed_fpm:,.0f} fpm",
-                        "Max Gap": f"{rep.max_telemetry_gap_s/60.0:.1f}m",
+                        "Track Jitter": f"{rep.max_track_jitter_deg:.0f}°",
                         "Hotspots": ", ".join(rep.hotspots_traversed) if rep.hotspots_traversed else "Open",
                     })
                 st.dataframe(pd.DataFrame(table_rows), use_container_width=True, height=360)
@@ -3281,7 +3283,7 @@ with tab_cat_system:
             if sel_rep:
                 st.markdown("---")
                 st.subheader(f"🔍 Flight #{selected_flt_id} Deep-Dive Anomaly Investigation")
-                
+
                 status_color = "red" if sel_rep.gnss_status == "CONFIRMED_SPOOFING" else "orange" if sel_rep.gnss_status == "SUSPECTED_SPOOFING" else "blue"
                 st.markdown(
                     f":{status_color}[**Classification Verdict:**] {sel_rep.summary_verdict} &nbsp;|&nbsp; "
@@ -3292,9 +3294,168 @@ with tab_cat_system:
 
                 d1, d2, d3, d4 = st.columns(4)
                 d1.metric("Max Kinematic Speed", f"{sel_rep.max_groundspeed_kts:,.0f} kts", "Exceeds airframe Mach envelope" if sel_rep.max_groundspeed_kts > 750 else "Nominal speed")
-                d2.metric("Max Vertical Rate", f"{sel_rep.max_vertical_speed_fpm:,.0f} fpm", "Structural vertical limit breach" if sel_rep.max_vertical_speed_fpm > 7500 else "Nominal rate")
-                d3.metric("Max Position Gap", f"{sel_rep.max_telemetry_gap_s/60.0:.1f} min", "Telemetry loss in controlled airspace" if sel_rep.max_telemetry_gap_s >= 480 else "Normal radar sampling")
-                d4.metric("Track Angle Jitter", f"{sel_rep.max_track_jitter_deg:.0f}°", "Severe zigzag bearing oscillation" if sel_rep.max_track_jitter_deg >= 85 else "Smooth turns")
+                d2.metric("Max Vertical Rate", f"{sel_rep.max_vertical_speed_fpm:,.0f} fpm", "Structural vertical limit breach" if sel_rep.max_vertical_speed_fpm > 6000 else "Nominal rate")
+                d3.metric("Track Angle Jitter", f"{sel_rep.max_track_jitter_deg:.0f}°", "Severe zigzag bearing oscillation" if sel_rep.max_track_jitter_deg >= 65 else "Smooth turns")
+                d4.metric("Incident Segments", f"{len(sel_rep.anomalous_segments)}", f"{sel_rep.total_anomaly_events} telemetry events recorded")
+
+                # Dedicated Inspection Subtabs: Horizontal Route Map vs Vertical Profile
+                g_tab1, g_tab2 = st.tabs([
+                    "🗺️ Horizontal Trajectory & Anomaly Map",
+                    "📈 Vertical Profile & Telemetry Anomalies",
+                ])
+
+                with g_tab1:
+                    st.caption("Detailed view of flown trajectory with imposed glowing multi-layer anomaly segments (red = speed teleportation / altitude glitch, coral = vertical rate spike, amber = track jitter, magenta = approach jump).")
+                    flt_map = create_gnss_flight_route_map(
+                        dataset=ds,
+                        gnss_report=sel_rep,
+                    )
+                    st_folium(
+                        flt_map,
+                        width=1200,
+                        height=540,
+                        returned_objects=[],
+                        key=f"gnss_flt_map_{selected_period}_{selected_flt_id}",
+                    )
+
+                with g_tab2:
+                    if sel_rep.annotated_profile:
+                        prof_df = pd.DataFrame(sel_rep.annotated_profile).dropna(subset=["flight_level", "cum_dist_nm"]).copy()
+                        base_x = alt.X("cum_dist_nm:Q", title="Cumulative Flown Distance Along Route (nm)")
+                        base_y = alt.Y("flight_level:Q", title="Flight Level (FL, 100s ft)", scale=alt.Scale(zero=True))
+
+                        # 1. Base vertical profile area & route line
+                        base_fl_area = alt.Chart(prof_df).mark_area(opacity=0.15, color="#8e44ad").encode(x=base_x, y=base_y)
+                        base_fl_line = alt.Chart(prof_df).mark_line(color="#8e44ad", strokeWidth=2.5).encode(
+                            x=base_x,
+                            y=base_y,
+                            tooltip=[
+                                alt.Tooltip("seq_num:Q", title="Waypoint #"),
+                                alt.Tooltip("time_over:N", title="Time (UTC)"),
+                                alt.Tooltip("cum_dist_nm:Q", title="Distance (nm)", format=".1f"),
+                                alt.Tooltip("flight_level:Q", title="Flight Level", format=".0f"),
+                                alt.Tooltip("speed_kts:Q", title="Groundspeed (kts)", format=".0f"),
+                                alt.Tooltip("vs_fpm:Q", title="Vertical Rate (fpm)", format=".0f"),
+                                alt.Tooltip("track_angle:Q", title="Track Angle (°)", format=".0f"),
+                                alt.Tooltip("is_anomaly:N", title="Is Anomaly"),
+                                alt.Tooltip("anomaly_type:N", title="Anomaly Type"),
+                            ],
+                        )
+
+                        chart_layers = [base_fl_area, base_fl_line]
+
+                        # 2. Imposed Anomalous Vertical Bands
+                        if sel_rep.anomalous_segments:
+                            anom_rect_data = []
+                            for s in sel_rep.anomalous_segments:
+                                s_dict = s.to_dict() if hasattr(s, "to_dict") else (s if isinstance(s, dict) else s.__dict__)
+                                x1 = float(s_dict.get("cum_dist_start_nm", 0.0))
+                                x2 = float(s_dict.get("cum_dist_end_nm", 0.0))
+                                if x2 <= x1:
+                                    x2 = x1 + max(1.0, float(s_dict.get("distance_nm", 1.0)))
+                                fl_st = float(s_dict.get("flight_level_start", 300.0))
+                                fl_en = float(s_dict.get("flight_level_end", 300.0))
+                                fl_min = min(fl_st, fl_en)
+                                fl_max = max(fl_st, fl_en)
+                                a_type = str(s_dict.get("anomaly_type", "ANOMALY"))
+                                m_val = float(s_dict.get("metric_value", 0.0))
+                                m_unit = str(s_dict.get("metric_unit", ""))
+                                desc = str(s_dict.get("description", ""))
+                                anom_rect_data.append({
+                                    "x1": x1,
+                                    "x2": x2,
+                                    "y1": max(0.0, fl_min - 15.0),
+                                    "y2": fl_max + 15.0,
+                                    "fl_start": fl_st,
+                                    "fl_end": fl_en,
+                                    "anomaly_type": a_type,
+                                    "metric_val": m_val,
+                                    "metric_unit": m_unit,
+                                    "description": desc,
+                                })
+
+                            if anom_rect_data:
+                                anom_band_df = pd.DataFrame(anom_rect_data)
+                                anom_band = alt.Chart(anom_band_df).mark_rect(opacity=0.25, color="#ff0055").encode(
+                                    x="x1:Q",
+                                    x2="x2:Q",
+                                    y="y1:Q",
+                                    y2="y2:Q",
+                                    tooltip=[
+                                        alt.Tooltip("anomaly_type:N", title="Anomaly Trigger"),
+                                        alt.Tooltip("metric_val:Q", title="Observed Metric", format=".1f"),
+                                        alt.Tooltip("metric_unit:N", title="Unit"),
+                                        alt.Tooltip("fl_start:Q", title="Start FL", format=".0f"),
+                                        alt.Tooltip("fl_end:Q", title="End FL", format=".0f"),
+                                        alt.Tooltip("description:N", title="Diagnosis"),
+                                    ],
+                                )
+                                chart_layers.insert(0, anom_band)
+
+                        # 3. Imposed Anomalous Waypoint Markers (Glowing neon points)
+                        anom_pts = prof_df[prof_df["is_anomaly"] == True]
+                        if not anom_pts.empty:
+                            anom_circle = alt.Chart(anom_pts).mark_circle(size=110, opacity=0.95).encode(
+                                x=base_x,
+                                y=base_y,
+                                color=alt.Color(
+                                    "anomaly_type:N",
+                                    scale=alt.Scale(
+                                        domain=["SPEED_TELEPORTATION", "VERTICAL_RATE_SPIKE", "ALTITUDE_GLITCH", "ERRATIC_TRACK_JITTER", "APPROACH_POSITION_JUMP"],
+                                        range=["#ff0055", "#ff4757", "#c0392b", "#ffa502", "#e056fd"],
+                                    ),
+                                    legend=alt.Legend(title="Anomaly Class", orient="top"),
+                                ),
+                                tooltip=[
+                                    alt.Tooltip("seq_num:Q", title="Waypoint #"),
+                                    alt.Tooltip("time_over:N", title="Time (UTC)"),
+                                    alt.Tooltip("cum_dist_nm:Q", title="Distance (nm)", format=".1f"),
+                                    alt.Tooltip("flight_level:Q", title="Flown FL", format=".0f"),
+                                    alt.Tooltip("speed_kts:Q", title="Groundspeed (kts)", format=".0f"),
+                                    alt.Tooltip("vs_fpm:Q", title="Vertical Rate (fpm)", format=".0f"),
+                                    alt.Tooltip("track_angle:Q", title="Track Angle (°)", format=".0f"),
+                                    alt.Tooltip("anomaly_type:N", title="⚡ Breach Type"),
+                                    alt.Tooltip("description:N", title="Diagnosis"),
+                                ],
+                            )
+                            chart_layers.append(anom_circle)
+
+                        vert_chart = alt.layer(*chart_layers).properties(
+                            title=f"📈 Vertical Flight Profile & GNSS Anomaly Overlay — Flight #{selected_flt_id}",
+                            width="container",
+                            height=340,
+                        ).interactive()
+
+                        st.altair_chart(vert_chart, use_container_width=True)
+
+                        # 4. Kinematic Speed Profile Along Flown Route
+                        speed_line = alt.Chart(prof_df).mark_line(color="#0984e3", strokeWidth=2.2).encode(
+                            x=base_x,
+                            y=alt.Y("speed_kts:Q", title="Groundspeed (kts)", scale=alt.Scale(zero=True)),
+                            tooltip=[
+                                alt.Tooltip("cum_dist_nm:Q", title="Distance (nm)", format=".1f"),
+                                alt.Tooltip("speed_kts:Q", title="Groundspeed (kts)", format=".0f"),
+                                alt.Tooltip("vs_fpm:Q", title="Vertical Speed (fpm)", format=".0f"),
+                                alt.Tooltip("flight_level:Q", title="FL", format=".0f"),
+                                alt.Tooltip("anomaly_type:N", title="Anomaly"),
+                            ],
+                        )
+                        limit_rule = alt.Chart(pd.DataFrame([{"limit": 680.0}])).mark_rule(
+                            color="#ff0055", strokeDash=[6, 4], strokeWidth=2
+                        ).encode(y="limit:Q")
+                        limit_text = alt.Chart(pd.DataFrame([{"limit": 700.0, "x": 10.0, "label": "Certified Subsonic Envelope Limit (680 kts)"}])).mark_text(
+                            align="left", color="#ff0055", fontSize=11, fontWeight="bold"
+                        ).encode(x="x:Q", y="limit:Q", text="label:N")
+
+                        speed_chart = alt.layer(speed_line, limit_rule, limit_text).properties(
+                            title="⚡ Kinematic Groundspeed Along Route (Mach / Teleportation Spikes)",
+                            width="container",
+                            height=200,
+                        ).interactive()
+
+                        st.altair_chart(speed_chart, use_container_width=True)
+                    else:
+                        st.info("No waypoint telemetry profile available for this flight.")
 
                 if sel_rep.events:
                     st.markdown("##### 📍 Chronological Telemetry Anomaly Trigger Timeline")

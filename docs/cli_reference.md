@@ -649,12 +649,13 @@ NOT hold the gate (boarding closes strictly 20 minutes before departure).
 ## 32. GNSS Jamming & Spoofing Anomaly Detection
 
 ### `flightml gnss-scan`
-Scan European network flights for Global Navigation Satellite System (GNSS / GPS) jamming and spoofing anomalies:
-- **Kinematic Teleportation Jumps**: Instantaneous groundspeeds exceeding subsonic certified airframe capabilities (>750 kts, >Mach 1.0).
-- **Vertical Spikes & Altitude Glitches**: Extreme vertical speed spikes ($|V_z| > 7,000$ ft/min) or drops to FL0 / negative altitudes.
-- **Erratic Track Oscillations**: False circle spoofing loops or track reversals ($|\Delta \theta| > 75^\circ$).
-- **Telemetry Dropouts**: Long radar/ADS-B reporting gaps (>400s) in controlled airspace indicative of wideband RF jamming denial.
+Scan European network flights for Global Navigation Satellite System (GNSS / GPS) jamming and spoofing anomalies based on physical airframe envelope and aerodynamic capability breaches:
+- **Kinematic Teleportation Jumps**: Instantaneous groundspeeds exceeding certified subsonic airframe capabilities (>750 kts, >Mach 1.0, or sudden acceleration surges >300 kts in <60s).
+- **Vertical Spikes & Altitude Glitches**: Extreme vertical speed spikes ($|V_z| > 6,000$ ft/min), sudden stepped altitude jumps, or drops to FL0 / negative altitudes during cruise.
+- **Erratic Track Oscillations**: False circle spoofing loops or track reversals ($|\Delta \theta| > 65^\circ$) in short intervals outside holding stacks.
+- **Terminal Approach Jumps**: Groundspeed violations (>320 kts below FL100) or erratic spatial teleportation near airports during approach.
 - **Geopolitical Hotspot Intersections**: Correlation with known electronic warfare zones (Baltic Sea / Kaliningrad, Eastern Mediterranean / Levant, Black Sea / Crimea, Middle East / Persian Gulf, Red Sea).
+*(Note: Telemetry dropouts are explicitly excluded as an indicator due to non-uniform waypoint reporting intervals in historical DDR2 archives).*
 
 ```bash
 # High-speed network scan with default threshold (score >= 35)

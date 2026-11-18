@@ -2,17 +2,20 @@
 GNSS Jamming and Spoofing Network Anomaly Detection Engine (Sprint 6).
 
 Detects commercial flights exhibiting signatures of Global Navigation Satellite System (GNSS / GPS)
-jamming and spoofing:
+jamming and spoofing across European and geopolitical electronic warfare airspace corridors:
 1. Impossible Kinematic Teleportation Jumps: Groundspeed exceeding certified subsonic airframe capabilities
-   (> 750 kts, > Mach 1.0, or instantaneous position jumps > 15 nm in < 30 seconds).
-2. Unphysical Vertical Rate Spikes: Extreme vertical speeds (|V_z| > 7,000 ft/min) or sudden altitude glitches
-   (e.g., dropping to FL0 / negative while in cruise, or sudden geometric/barometric altitude jumps).
-3. Erratic Track Oscillations & Circular Spoofing: Severe angular jitter (|Δθ| > 75° track reversals in short
-   intervals) or false circular track loops ("circle spoofing" around simulated airports/waypoints).
-4. Telemetry Dropout & Position Data Loss: Prolonged loss of ADS-B / radar position reporting (> 400 s)
-   in high-density controlled airspace (indicative of wideband RF jamming denial).
+   (> 750 kts, > Mach 1.0, or instantaneous acceleration surges > 300 kts in < 60s).
+2. Unphysical Vertical Rate Spikes: Extreme vertical speeds (|V_z| > 6,000 ft/min) or sudden altitude glitches
+   (e.g., dropping to FL0 / negative while in cruise, or sudden stepped altitude level jumps).
+3. Erratic Track Oscillations & Circular Spoofing: Severe angular jitter (|Δθ| > 65° track reversals in short
+   intervals outside holding stacks) or false circular track loops ("circle spoofing").
+4. Jumping Positions & Speed Breaches on Terminal Approach: High-speed violations (> 320 kts below FL100) or
+   spatial position teleportation near airports during final approach alignment.
 5. Known Geopolitical Electronic Warfare Hotspots: Baltic Sea / Kaliningrad, Eastern Mediterranean / Levant,
    Black Sea / Crimea, Middle East / Iraq / Persian Gulf, and Red Sea corridors.
+
+Note: Telemetry dropouts are explicitly excluded as an anomaly indicator because Eurocontrol DDR2
+archives reflect route waypoints and FIR boundary traversals rather than uniform 1Hz periodic ADS-B broadcasts.
 """
 
 from __future__ import annotations
@@ -106,11 +109,37 @@ class GNSSAnomalyEvent:
     latitude: float
     longitude: float
     flight_level: float
-    anomaly_type: str  # 'TELEPORTATION_SPEED', 'VERTICAL_RATE_SPIKE', 'ERRATIC_TRACK_JITTER', 'TELEMETRY_DROPOUT', 'ALTITUDE_GLITCH'
-    metric_value: float  # Numerical measurement (kts, fpm, deg, sec)
+    anomaly_type: str  # 'SPEED_TELEPORTATION', 'VERTICAL_RATE_SPIKE', 'ERRATIC_TRACK_JITTER', 'APPROACH_POSITION_JUMP', 'ALTITUDE_GLITCH'
+    metric_value: float  # Numerical measurement (kts, fpm, deg)
     metric_unit: str
     severity_score: float  # 0 to 100
     description: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class GNSSAnomalySegment:
+    seq_start: int
+    seq_end: int
+    start_time_utc: str
+    end_time_utc: str
+    flight_level_start: float
+    flight_level_end: float
+    distance_nm: float
+    duration_s: float
+    anomaly_type: str  # 'SPEED_TELEPORTATION', 'VERTICAL_RATE_SPIKE', 'ERRATIC_TRACK_JITTER', 'APPROACH_POSITION_JUMP', 'ALTITUDE_GLITCH'
+    metric_value: float
+    metric_unit: str
+    severity_score: float  # 0 to 100
+    description: str
+    start_lat: float = 0.0
+    start_lon: float = 0.0
+    end_lat: float = 0.0
+    end_lon: float = 0.0
+    cum_dist_start_nm: float = 0.0
+    cum_dist_end_nm: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -125,15 +154,17 @@ class FlightGNSSReport:
     ac_operator: str
     ac_type: str
     ac_reg: str
-    gnss_status: str  # 'CONFIRMED_SPOOFING', 'SUSPECTED_SPOOFING', 'PROBABLE_JAMMING', 'NOMINAL'
+    gnss_status: str  # 'CONFIRMED_SPOOFING', 'SUSPECTED_SPOOFING', 'APPROACH_JUMP', 'NOMINAL'
     anomaly_score: float  # 0 to 100 composite score
     max_groundspeed_kts: float
     max_vertical_speed_fpm: float
-    max_telemetry_gap_s: float
+    max_telemetry_gap_s: float  # Maintained for telemetry inspection
     max_track_jitter_deg: float
     total_anomaly_events: int
     hotspots_traversed: list[str]
     events: list[GNSSAnomalyEvent] = field(default_factory=list)
+    anomalous_segments: list[GNSSAnomalySegment] = field(default_factory=list)
+    annotated_profile: list[dict[str, Any]] = field(default_factory=list)
     summary_verdict: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -147,7 +178,7 @@ class NetworkGNSSScanReport:
     flagged_flights_count: int
     spoofing_confirmed_count: int
     spoofing_suspected_count: int
-    jamming_probable_count: int
+    jamming_probable_count: int  # Approach anomaly count
     top_hotspots: dict[str, int]
     top_affected_operators: dict[str, int]
     flagged_flights: list[FlightGNSSReport] = field(default_factory=list)
@@ -162,7 +193,7 @@ def analyze_flight_gnss_interference(
     ectrl_id: int,
 ) -> FlightGNSSReport | None:
     """
-    Perform deep kinematic and geometric anomaly evaluation on a single flight's actual radar trajectory
+    Perform deep kinematic and aerodynamic envelope anomaly evaluation on a single flight's actual radar trajectory
     to diagnose GNSS jamming or spoofing signatures.
     """
     flight = dataset.get_flight(ectrl_id)
@@ -179,12 +210,15 @@ def analyze_flight_gnss_interference(
     hotspots = identify_intersecting_hotspots(coords)
 
     events: list[GNSSAnomalyEvent] = []
+    anomalous_segments: list[GNSSAnomalySegment] = []
+    annotated_profile: list[dict[str, Any]] = []
+
     max_speed_kts = 0.0
     max_vs_fpm = 0.0
     max_gap_s = 0.0
     max_jitter_deg = 0.0
 
-    # Calculate segment kinematics
+    # Pre-calculate forward azimuths (bearings)
     bearings: list[float] = []
     for i in range(len(actual_df) - 1):
         r1 = actual_df.iloc[i]
@@ -194,7 +228,33 @@ def analyze_flight_gnss_interference(
         b = initial_bearing_deg(lat1, lon1, lat2, lon2)
         bearings.append(b)
 
-    for i in range(len(actual_df) - 1):
+    # Initialize first point of annotated profile
+    r0 = actual_df.iloc[0]
+    lat0, lon0 = float(r0["latitude"]), float(r0["longitude"])
+    fl0 = float(r0["flight_level"])
+    annotated_profile.append({
+        "seq_num": int(r0["seq_num"]),
+        "time_over": str(r0["time_over"]),
+        "latitude": round(lat0, 5),
+        "longitude": round(lon0, 5),
+        "flight_level": round(fl0, 1),
+        "cum_dist_nm": 0.0,
+        "speed_kts": 0.0,
+        "vs_fpm": 0.0,
+        "track_angle": round(bearings[0], 1) if bearings else 0.0,
+        "is_anomaly": False,
+        "anomaly_type": None,
+        "severity_score": 0.0,
+        "description": "",
+    })
+
+    cum_dist_nm = 0.0
+    prev_speed_kts: float | None = None
+    has_approach_jump = False
+    has_glitch = False
+    n_pts = len(actual_df)
+
+    for i in range(n_pts - 1):
         r1 = actual_df.iloc[i]
         r2 = actual_df.iloc[i + 1]
         lat1, lon1 = float(r1["latitude"]), float(r1["longitude"])
@@ -205,141 +265,188 @@ def analyze_flight_gnss_interference(
         t2 = pd.to_datetime(r2["time_over"])
         dt_s = max(1.0, (t2 - t1).total_seconds())
 
-        # Account for antimeridian longitude jump
+        if dt_s > max_gap_s:
+            max_gap_s = dt_s
+
+        # Accounting for antimeridian traversal
         d_lon = abs(lon2 - lon1)
         if d_lon > 180.0:
             d_lon = 360.0 - d_lon
-        
-        # Approximate distance accounting for antimeridian
-        seg_dist_nm = haversine_nm(lat1, lon1, lat2, lon1 + (lon2 - lon1 if abs(lon2 - lon1) <= 180 else (lon2 - lon1 - math.copysign(360, lon2 - lon1))))
-        
-        # 1. Kinematic Groundspeed Jump
+
+        seg_dist_nm = haversine_nm(
+            lat1, lon1, lat2,
+            lon1 + (lon2 - lon1 if abs(lon2 - lon1) <= 180 else (lon2 - lon1 - math.copysign(360, lon2 - lon1)))
+        )
+
+        cum_start = cum_dist_nm
+        cum_end = cum_dist_nm + seg_dist_nm
+        cum_dist_nm = cum_end
+
+        # 1. Kinematic Groundspeed
         speed_kts = (seg_dist_nm / (dt_s / 3600.0))
         if speed_kts > max_speed_kts:
             max_speed_kts = speed_kts
 
-        if speed_kts > 750.0 and seg_dist_nm > 5.0:
-            sev = min(100.0, 50.0 + (speed_kts - 750.0) / 25.0)
-            events.append(
-                GNSSAnomalyEvent(
-                    seq_num=int(r2["seq_num"]),
-                    time_utc=str(r2["time_over"]),
-                    latitude=round(lat2, 4),
-                    longitude=round(lon2, 4),
-                    flight_level=round(fl2, 0),
-                    anomaly_type="TELEPORTATION_SPEED",
-                    metric_value=round(speed_kts, 1),
-                    metric_unit="kts",
-                    severity_score=round(sev, 1),
-                    description=f"Unphysical groundspeed jump ({speed_kts:,.0f} kts, Δd={seg_dist_nm:.1f} nm in {dt_s:.0f}s) exceeding certified aircraft envelope.",
-                )
-            )
-
-        # 2. Unphysical Vertical Speed Spike
+        # 2. Vertical Speed
         vs_fpm = (abs(fl2 - fl1) * 100.0) / (dt_s / 60.0)
         if vs_fpm > max_vs_fpm:
             max_vs_fpm = vs_fpm
 
-        if vs_fpm > 7500.0 and abs(fl2 - fl1) >= 30.0:
-            sev = min(100.0, 40.0 + (vs_fpm - 7500.0) / 150.0)
-            events.append(
-                GNSSAnomalyEvent(
-                    seq_num=int(r2["seq_num"]),
-                    time_utc=str(r2["time_over"]),
-                    latitude=round(lat2, 4),
-                    longitude=round(lon2, 4),
-                    flight_level=round(fl2, 0),
-                    anomaly_type="VERTICAL_RATE_SPIKE",
-                    metric_value=round(vs_fpm, 0),
-                    metric_unit="fpm",
-                    severity_score=round(sev, 1),
-                    description=f"Extreme vertical velocity spike ({vs_fpm:,.0f} ft/min, ΔFL={abs(fl2-fl1):.0f} in {dt_s:.0f}s) inconsistent with structural limits.",
-                )
-            )
-
-        # 3. Sudden Altitude Glitch (e.g. dropping to 0 or negative during cruise)
-        if fl1 >= 250.0 and fl2 <= 10.0 and dt_s < 180.0:
-            events.append(
-                GNSSAnomalyEvent(
-                    seq_num=int(r2["seq_num"]),
-                    time_utc=str(r2["time_over"]),
-                    latitude=round(lat2, 4),
-                    longitude=round(lon2, 4),
-                    flight_level=round(fl2, 0),
-                    anomaly_type="ALTITUDE_GLITCH",
-                    metric_value=round(fl2, 0),
-                    metric_unit="FL",
-                    severity_score=85.0,
-                    description=f"Sudden altitude telemetry glitch dropping from FL{fl1:.0f} to FL{fl2:.0f} in {dt_s:.0f}s during cruise.",
-                )
-            )
-
-        # 4. Telemetry Dropout & Position Data Loss (Jamming)
-        if dt_s > max_gap_s:
-            max_gap_s = dt_s
-
-        if dt_s >= 480.0 and fl1 >= 100.0:
-            sev = min(100.0, 30.0 + (dt_s - 480.0) / 30.0)
-            events.append(
-                GNSSAnomalyEvent(
-                    seq_num=int(r2["seq_num"]),
-                    time_utc=str(r2["time_over"]),
-                    latitude=round(lat2, 4),
-                    longitude=round(lon2, 4),
-                    flight_level=round(fl2, 0),
-                    anomaly_type="TELEMETRY_DROPOUT",
-                    metric_value=round(dt_s / 60.0, 1),
-                    metric_unit="min",
-                    severity_score=round(sev, 1),
-                    description=f"Extended position telemetry dropout ({dt_s/60.0:.1f} min gap across {seg_dist_nm:.1f} nm) indicative of GNSS signal denial.",
-                )
-            )
-
-        # 5. Track Jitter & Erratic Angular Oscillations
-        if i < len(bearings) - 1 and dt_s < 180.0 and seg_dist_nm >= 1.0:
-            b1 = bearings[i]
-            b2 = bearings[i + 1]
-            angle_diff = abs((b2 - b1 + 180.0) % 360.0 - 180.0)
-            if angle_diff > max_jitter_deg:
+        # 3. Track Angle Jitter
+        b_curr = bearings[i]
+        angle_diff = 0.0
+        if i < len(bearings) - 1:
+            b_next = bearings[i + 1]
+            angle_diff = abs((b_next - b_curr + 180.0) % 360.0 - 180.0)
+            if angle_diff > max_jitter_deg and seg_dist_nm >= 0.5:
                 max_jitter_deg = angle_diff
 
-            if angle_diff >= 85.0 and seg_dist_nm < 30.0:
-                events.append(
-                    GNSSAnomalyEvent(
-                        seq_num=int(r2["seq_num"]),
-                        time_utc=str(r2["time_over"]),
-                        latitude=round(lat2, 4),
-                        longitude=round(lon2, 4),
-                        flight_level=round(fl2, 0),
-                        anomaly_type="ERRATIC_TRACK_JITTER",
-                        metric_value=round(angle_diff, 1),
-                        metric_unit="deg",
-                        severity_score=65.0,
-                        description=f"Sharp erratic course reversal ({angle_diff:.0f}° track angle change) within {dt_s:.0f}s indicative of spoofed pseudo-range error.",
-                    )
+        # Terminal approach condition: low flight level and proximity to departure/arrival ends
+        is_terminal_phase = (fl1 <= 120.0 or fl2 <= 120.0) and (i <= 4 or i >= n_pts - 6)
+
+        segment_anomalies: list[tuple[str, float, str, float, str]] = []
+
+        # Indicator A: Speed jumps beyond aircraft capability
+        if (speed_kts > 750.0 and seg_dist_nm > 4.0) or (speed_kts > 900.0 and seg_dist_nm > 1.5):
+            sev = min(100.0, 50.0 + (speed_kts - 750.0) / 20.0)
+            desc = f"Unphysical groundspeed jump ({speed_kts:,.0f} kts, Δd={seg_dist_nm:.1f} nm in {dt_s:.0f}s) exceeding certified airframe Mach envelope."
+            segment_anomalies.append(("SPEED_TELEPORTATION", speed_kts, "kts", sev, desc))
+        elif prev_speed_kts is not None and (speed_kts - prev_speed_kts > 320.0) and dt_s < 75.0 and seg_dist_nm > 2.0:
+            sev = 75.0
+            desc = f"Kinematic acceleration jump: Speed surged from {prev_speed_kts:,.0f} kts to {speed_kts:,.0f} kts (ΔV={speed_kts - prev_speed_kts:,.0f} kts in {dt_s:.0f}s)."
+            segment_anomalies.append(("SPEED_TELEPORTATION", speed_kts, "kts", sev, desc))
+
+        # Indicator B: Altitude gains / losses outside possible profile
+        if vs_fpm > 6000.0 and abs(fl2 - fl1) >= 20.0 and dt_s < 120.0:
+            sev = min(100.0, 45.0 + (vs_fpm - 6000.0) / 120.0)
+            desc = f"Unphysical vertical velocity breach ({vs_fpm:,.0f} ft/min, ΔFL={abs(fl2-fl1):.0f} in {dt_s:.0f}s) exceeding aerodynamic/structural limits."
+            segment_anomalies.append(("VERTICAL_RATE_SPIKE", vs_fpm, "fpm", sev, desc))
+
+        # Sudden Altitude Glitch (dropping to 0 or stepped teleportation)
+        if fl1 >= 200.0 and fl2 <= 10.0 and dt_s < 180.0:
+            has_glitch = True
+            desc = f"Sudden altitude telemetry glitch dropping from FL{fl1:.0f} to FL{fl2:.0f} in {dt_s:.0f}s during cruise."
+            segment_anomalies.append(("ALTITUDE_GLITCH", fl2, "FL", 90.0, desc))
+        elif abs(fl2 - fl1) >= 40.0 and dt_s <= 35.0:
+            has_glitch = True
+            desc = f"Stepped altitude teleportation: Instant jump of ΔFL={abs(fl2-fl1):.0f} in {dt_s:.0f}s."
+            segment_anomalies.append(("ALTITUDE_GLITCH", abs(fl2 - fl1), "FL", 85.0, desc))
+
+        # Indicator C: Erratic track jitter & circular spoofing
+        if angle_diff >= 65.0 and seg_dist_nm < 25.0 and dt_s < 150.0 and not is_terminal_phase:
+            sev = min(95.0, 45.0 + (angle_diff - 65.0) * 1.5)
+            desc = f"Erratic course reversal / track jitter ({angle_diff:.0f}° track angle flip in {dt_s:.0f}s) indicative of spoofed pseudo-range error."
+            segment_anomalies.append(("ERRATIC_TRACK_JITTER", angle_diff, "deg", sev, desc))
+
+        # Indicator D: Jumping positions on approach / terminal phase
+        if is_terminal_phase:
+            if speed_kts > 320.0 and (fl1 < 100.0 or fl2 < 100.0) and seg_dist_nm > 2.0:
+                has_approach_jump = True
+                desc = f"Terminal approach speed breach: Groundspeed {speed_kts:,.0f} kts below FL100 violates terminal envelope (ICAO 250 kts limit)."
+                segment_anomalies.append(("APPROACH_POSITION_JUMP", speed_kts, "kts", 75.0, desc))
+            elif seg_dist_nm > 8.0 and dt_s < 30.0:
+                has_approach_jump = True
+                desc = f"Spatial position jump on approach: {seg_dist_nm:.1f} nm teleportation in {dt_s:.0f}s near airport."
+                segment_anomalies.append(("APPROACH_POSITION_JUMP", seg_dist_nm, "nm", 80.0, desc))
+            elif angle_diff >= 65.0 and (fl1 < 80.0 or fl2 < 80.0) and dt_s < 90.0:
+                has_approach_jump = True
+                desc = f"Erratic track jitter on final approach ({angle_diff:.0f}° track flip below FL80)."
+                segment_anomalies.append(("APPROACH_POSITION_JUMP", angle_diff, "deg", 70.0, desc))
+
+        # Record segment anomalies and waypoint profile
+        pt_is_anom = False
+        pt_anom_type = None
+        pt_sev = 0.0
+        pt_desc = ""
+
+        for a_type, m_val, m_unit, sev, desc in segment_anomalies:
+            pt_is_anom = True
+            pt_anom_type = a_type
+            pt_sev = max(pt_sev, sev)
+            pt_desc = desc
+
+            events.append(
+                GNSSAnomalyEvent(
+                    seq_num=int(r2["seq_num"]),
+                    time_utc=str(r2["time_over"]),
+                    latitude=round(lat2, 4),
+                    longitude=round(lon2, 4),
+                    flight_level=round(fl2, 0),
+                    anomaly_type=a_type,
+                    metric_value=round(m_val, 1),
+                    metric_unit=m_unit,
+                    severity_score=round(sev, 1),
+                    description=desc,
                 )
+            )
+
+            anomalous_segments.append(
+                GNSSAnomalySegment(
+                    seq_start=int(r1["seq_num"]),
+                    seq_end=int(r2["seq_num"]),
+                    start_time_utc=str(r1["time_over"]),
+                    end_time_utc=str(r2["time_over"]),
+                    flight_level_start=round(fl1, 1),
+                    flight_level_end=round(fl2, 1),
+                    distance_nm=round(seg_dist_nm, 2),
+                    duration_s=round(dt_s, 1),
+                    anomaly_type=a_type,
+                    metric_value=round(m_val, 1),
+                    metric_unit=m_unit,
+                    severity_score=round(sev, 1),
+                    description=desc,
+                    start_lat=round(lat1, 5),
+                    start_lon=round(lon1, 5),
+                    end_lat=round(lat2, 5),
+                    end_lon=round(lon2, 5),
+                    cum_dist_start_nm=round(cum_start, 2),
+                    cum_dist_end_nm=round(cum_end, 2),
+                )
+            )
+
+        annotated_profile.append({
+            "seq_num": int(r2["seq_num"]),
+            "time_over": str(r2["time_over"]),
+            "latitude": round(lat2, 5),
+            "longitude": round(lon2, 5),
+            "flight_level": round(fl2, 1),
+            "cum_dist_nm": round(cum_end, 1),
+            "speed_kts": round(speed_kts, 1),
+            "vs_fpm": round(vs_fpm, 0),
+            "track_angle": round(b_curr, 1),
+            "is_anomaly": pt_is_anom,
+            "anomaly_type": pt_anom_type,
+            "severity_score": round(pt_sev, 1),
+            "description": pt_desc,
+        })
+
+        prev_speed_kts = speed_kts
 
     # Multi-Factor Composite Anomaly Scoring (0 to 100)
+    # Strictly driven by physical aerodynamic and kinematic envelope breaches
     score = 0.0
     if max_speed_kts > 1200.0:
         score += 45.0
     elif max_speed_kts > 750.0:
-        score += 30.0
-
-    if max_vs_fpm > 12000.0:
         score += 35.0
-    elif max_vs_fpm > 7500.0:
+    elif max_speed_kts > 680.0:
         score += 20.0
 
-    if max_gap_s > 900.0:
+    if max_vs_fpm > 10000.0:
+        score += 40.0
+    elif max_vs_fpm > 6000.0:
         score += 25.0
-    elif max_gap_s > 480.0:
-        score += 15.0
 
-    if max_jitter_deg > 110.0:
+    if has_glitch:
+        score += 30.0
+
+    if max_jitter_deg > 100.0:
+        score += 30.0
+    elif max_jitter_deg > 65.0:
+        score += 20.0
+
+    if has_approach_jump:
         score += 25.0
-    elif max_jitter_deg > 80.0:
-        score += 15.0
 
     if hotspots:
         score += min(15.0, len(hotspots) * 8.0)
@@ -347,15 +454,15 @@ def analyze_flight_gnss_interference(
     score = min(100.0, score)
 
     # Classification Status
-    if score >= 75.0 and (max_speed_kts > 900.0 or max_vs_fpm > 10000.0):
+    if score >= 65.0 and (max_speed_kts > 750.0 or max_vs_fpm > 7500.0 or has_glitch):
         status = "CONFIRMED_SPOOFING"
         verdict = f"High-confidence GNSS Spoofing: Trajectory displays physically impossible speed/altitude teleportation ({max_speed_kts:,.0f} kts, {max_vs_fpm:,.0f} fpm)."
-    elif score >= 55.0 and (max_speed_kts > 750.0 or max_jitter_deg > 85.0):
+    elif score >= 45.0 and (max_speed_kts > 680.0 or max_jitter_deg >= 65.0 or max_vs_fpm > 6000.0):
         status = "SUSPECTED_SPOOFING"
         verdict = f"Suspected GNSS Spoofing: Severe track oscillations ({max_jitter_deg:.0f}° jitter) or off-nominal kinematic telemetry."
-    elif score >= 35.0 and max_gap_s >= 480.0:
-        status = "PROBABLE_JAMMING"
-        verdict = f"Probable GNSS Jamming: Extended position reporting dropout ({max_gap_s/60.0:.1f}m gap) and dead reckoning drift."
+    elif score >= 35.0 and has_approach_jump:
+        status = "SUSPECTED_SPOOFING"
+        verdict = "Terminal Approach Anomaly: Jumping positions or excessive speed on approach below FL100."
     else:
         status = "NOMINAL"
         verdict = "Nominal trajectory within normal avionics and airframe envelope tolerances."
@@ -377,6 +484,8 @@ def analyze_flight_gnss_interference(
         total_anomaly_events=len(events),
         hotspots_traversed=hotspots,
         events=events,
+        anomalous_segments=anomalous_segments,
+        annotated_profile=annotated_profile,
         summary_verdict=verdict,
     )
 
@@ -389,9 +498,9 @@ def scan_network_gnss_interference(
 ) -> NetworkGNSSScanReport:
     """
     Scan the network archive using vectorized DuckDB window functions to flag flights exhibiting
-    signatures of GNSS jamming or spoofing, ranking them by composite anomaly score.
+    signatures of GNSS spoofing, speed teleportation, or unphysical vertical spikes.
+    Note: Position reporting gaps are excluded from candidate filtering.
     """
-    # 1. Blazing-fast DuckDB Vectorized Pre-Screening
     sql = f"""
     WITH lagged AS (
         SELECT 
@@ -446,7 +555,7 @@ def scan_network_gnss_interference(
         m.avg_lat,
         m.avg_lon
     FROM metrics m
-    WHERE m.max_speed_kts > 720.0 OR m.max_vs_fpm > 6500.0 OR m.max_gap_s > 450.0
+    WHERE m.max_speed_kts > 680.0 OR m.max_vs_fpm > 5500.0
     ORDER BY m.max_speed_kts DESC
     LIMIT 250
     """
@@ -479,7 +588,7 @@ def scan_network_gnss_interference(
                 confirmed_count += 1
             elif rep.gnss_status == "SUSPECTED_SPOOFING":
                 suspected_count += 1
-            elif rep.gnss_status == "PROBABLE_JAMMING":
+            else:
                 jamming_count += 1
 
             for h in rep.hotspots_traversed:
