@@ -94,6 +94,13 @@ from flightml.eval.flight_notes import (
     NOTE_CATEGORIES,
     get_notes_manager,
 )
+from flightml.eval.gnss_jamming_spoofing import (
+    GNSS_HOTSPOTS,
+    FlightGNSSReport,
+    NetworkGNSSScanReport,
+    analyze_flight_gnss_interference,
+    scan_network_gnss_interference,
+)
 from flightml.eval.jet_fuel_prices import get_all_weekly_fuel_prices_df
 from flightml.viz.map_builder import (
     create_contrail_horizontal_map,
@@ -103,6 +110,7 @@ from flightml.viz.map_builder import (
     create_conflict_map,
     create_world_navaids_map,
     create_fra_boundary_map,
+    create_gnss_interference_network_map,
 )
 from flightml.viz.html_exporter import (
     generate_static_html_report,
@@ -1680,11 +1688,12 @@ with tab_cat_system:
         "cross-decade historical traffic growth, and network-wide hub weather correlation."
     )
     render_page_export_bar("system_summary", "cat_system")
-    sys_sub_kpi, sys_sub1, sys_sub_fra, sys_sub2 = st.tabs(
+    sys_sub_kpi, sys_sub1, sys_sub_fra, sys_sub_gnss, sys_sub2 = st.tabs(
         [
             "📊 Multi-Level KPI Suite (Flight / Fleet / Airport / Network)",
             "🌐 Network Status & Airspace Saturation",
             "🗺️ Free Route Airspace (FRA) & FIR Boundary Inefficiency",
+            "🛰️ GNSS Jamming & Spoofing Network Anomaly Detector",
             "📈 Macro Evolution & AIRAC Diff",
         ]
     )
@@ -3120,6 +3129,191 @@ with tab_cat_system:
                 )
 
         # ----------------- TAB 2: Trajectory Explorer -----------------
+
+    with sys_sub_gnss:
+        st.header("🛰️ Network GNSS Jamming & Spoofing Anomaly Detector")
+        st.caption(
+            "Detects commercial flights exhibiting signatures of Global Navigation Satellite System (GNSS / GPS) "
+            "jamming and spoofing: impossible kinematic teleportation jumps (> 750 kts), unphysical vertical rate spikes (> 7,500 ft/min), "
+            "sudden altitude glitches, erratic track jitter / circular spoofing, and extended telemetry dropouts (> 480s) "
+            "across European and geopolitical electronic warfare airspace corridors."
+        )
+
+        col_g1, col_g2, col_g3, col_g4 = st.columns([1.2, 1.4, 1.8, 1.6])
+        with col_g1:
+            gnss_sample_limit = st.selectbox(
+                "Telemetry Search Scope:",
+                options=[1000, 2500, 5000, 10000],
+                index=1,
+                key=f"gnss_sample_limit_{selected_period}",
+                help="Maximum number of historical flights to scan across the archive via vectorized DuckDB engine."
+            )
+        with col_g2:
+            gnss_status_filter = st.selectbox(
+                "Anomaly Severity Filter:",
+                options=["All Flagged", "Confirmed Spoofing", "Suspected Spoofing", "Probable Jamming"],
+                index=0,
+                key=f"gnss_status_filter_{selected_period}",
+                help="Filter by anomaly classification severity."
+            )
+        with col_g3:
+            hotspot_options = ["All Airspace"] + [f"{zone['name']} ({k})" for k, zone in GNSS_HOTSPOTS.items()]
+            sel_hotspot_label = st.selectbox(
+                "Electronic Warfare Hotspot Zone:",
+                options=hotspot_options,
+                index=0,
+                key=f"gnss_hotspot_filter_{selected_period}",
+                help="Filter flights traversing high-intensity GPS interference areas (Baltic, East Med, Black Sea, Middle East, Red Sea)."
+            )
+        with col_g4:
+            min_score_val = st.slider(
+                "Min Anomaly Score:",
+                min_value=30.0,
+                max_value=90.0,
+                value=35.0,
+                step=5.0,
+                key=f"gnss_min_score_{selected_period}",
+                help="Lower thresholds surface mild position dropouts; higher thresholds isolate extreme kinematic teleportations."
+            )
+
+        hotspot_key_arg = None
+        if sel_hotspot_label != "All Airspace":
+            for k in GNSS_HOTSPOTS:
+                if f"({k})" in sel_hotspot_label:
+                    hotspot_key_arg = k
+                    break
+
+        with st.spinner("Executing vectorized DuckDB scan for GNSS jamming/spoofing anomalies across European airspace..."):
+            scan_rep = scan_network_gnss_interference(
+                ds,
+                sample_limit=int(gnss_sample_limit),
+                min_score=float(min_score_val),
+                hotspot_filter=hotspot_key_arg,
+            )
+
+        # Filter by severity if requested
+        filtered_flagged = scan_rep.flagged_flights
+        if gnss_status_filter == "Confirmed Spoofing":
+            filtered_flagged = [f for f in filtered_flagged if f.gnss_status == "CONFIRMED_SPOOFING"]
+        elif gnss_status_filter == "Suspected Spoofing":
+            filtered_flagged = [f for f in filtered_flagged if f.gnss_status == "SUSPECTED_SPOOFING"]
+        elif gnss_status_filter == "Probable Jamming":
+            filtered_flagged = [f for f in filtered_flagged if f.gnss_status == "PROBABLE_JAMMING"]
+
+        # Metric Row 1: Executive Network Interference KPIs
+        gk1, gk2, gk3, gk4 = st.columns(4)
+        gk1.metric(
+            "Flagged Flights",
+            f"{len(filtered_flagged):,}",
+            f"Of {scan_rep.total_flights_scanned:,} scanned"
+        )
+        gk2.metric(
+            "Confirmed Spoofing",
+            f"{scan_rep.spoofing_confirmed_count}",
+            "Impossible speed / vertical teleportation",
+            delta_color="inverse" if scan_rep.spoofing_confirmed_count > 0 else "normal",
+        )
+        gk3.metric(
+            "Suspected Spoofing",
+            f"{scan_rep.spoofing_suspected_count}",
+            "Severe track jitter / circular ghost loops",
+        )
+        gk4.metric(
+            "Probable Jamming",
+            f"{scan_rep.jamming_probable_count}",
+            "Extended position telemetry dropouts (>480s)",
+        )
+
+        st.markdown("---")
+
+        # Layout: Left = Interactive Map, Right = League Table & Inspector
+        map_col, list_col = st.columns([1.5, 1.1])
+
+        with list_col:
+            st.subheader("📋 Flagged Flights League Table")
+            if not filtered_flagged:
+                st.info("✅ No flights matched the current anomaly score and hotspot filter criteria.")
+                selected_flt_id = None
+            else:
+                table_rows = []
+                for rep in filtered_flagged:
+                    table_rows.append({
+                        "Flight ID": rep.ectrl_id,
+                        "Status": rep.gnss_status,
+                        "Score": f"{rep.anomaly_score:.0f}",
+                        "Route": f"{rep.adep} ➔ {rep.ades}",
+                        "Operator": f"{rep.ac_operator} ({rep.ac_type})",
+                        "Max Speed": f"{rep.max_groundspeed_kts:,.0f} kts",
+                        "Max VS": f"{rep.max_vertical_speed_fpm:,.0f} fpm",
+                        "Max Gap": f"{rep.max_telemetry_gap_s/60.0:.1f}m",
+                        "Hotspots": ", ".join(rep.hotspots_traversed) if rep.hotspots_traversed else "Open",
+                    })
+                st.dataframe(pd.DataFrame(table_rows), use_container_width=True, height=360)
+
+                flight_choices = [f"{r.ectrl_id} - {r.ac_operator} ({r.adep} ➔ {r.ades}) | {r.gnss_status} [{r.anomaly_score:.0f}]" for r in filtered_flagged]
+                selected_choice = st.selectbox(
+                    "🎯 Select Flight to Highlight & Inspect on Map:",
+                    options=flight_choices,
+                    index=0,
+                    key=f"sel_gnss_flt_{selected_period}",
+                )
+                selected_flt_id = int(selected_choice.split(" - ")[0])
+
+        with map_col:
+            st.subheader("🗺️ European GNSS Interference & Anomaly Incident Map")
+            gnss_map = create_gnss_interference_network_map(
+                dataset=ds,
+                scan_report=scan_rep,
+                selected_ectrl_id=selected_flt_id,
+                max_flights_rendered=40,
+            )
+            st_folium(
+                gnss_map,
+                width=1200,
+                height=560,
+                returned_objects=[],
+                key=f"gnss_folium_map_{selected_period}_{selected_flt_id}_{len(filtered_flagged)}",
+            )
+
+        # Deep-Dive Inspector Panel for the Selected Flight
+        if selected_flt_id:
+            sel_rep = next((r for r in filtered_flagged if r.ectrl_id == selected_flt_id), None)
+            if sel_rep:
+                st.markdown("---")
+                st.subheader(f"🔍 Flight #{selected_flt_id} Deep-Dive Anomaly Investigation")
+                
+                status_color = "red" if sel_rep.gnss_status == "CONFIRMED_SPOOFING" else "orange" if sel_rep.gnss_status == "SUSPECTED_SPOOFING" else "blue"
+                st.markdown(
+                    f":{status_color}[**Classification Verdict:**] {sel_rep.summary_verdict} &nbsp;|&nbsp; "
+                    f"**Route:** `{sel_rep.adep}` ➔ `{sel_rep.ades}` &nbsp;|&nbsp; "
+                    f"**Operator:** `{sel_rep.ac_operator}` (`{sel_rep.ac_type}`, Reg: `{sel_rep.ac_reg}`) &nbsp;|&nbsp; "
+                    f"**Anomaly Score:** **{sel_rep.anomaly_score:.1f} / 100**"
+                )
+
+                d1, d2, d3, d4 = st.columns(4)
+                d1.metric("Max Kinematic Speed", f"{sel_rep.max_groundspeed_kts:,.0f} kts", "Exceeds airframe Mach envelope" if sel_rep.max_groundspeed_kts > 750 else "Nominal speed")
+                d2.metric("Max Vertical Rate", f"{sel_rep.max_vertical_speed_fpm:,.0f} fpm", "Structural vertical limit breach" if sel_rep.max_vertical_speed_fpm > 7500 else "Nominal rate")
+                d3.metric("Max Position Gap", f"{sel_rep.max_telemetry_gap_s/60.0:.1f} min", "Telemetry loss in controlled airspace" if sel_rep.max_telemetry_gap_s >= 480 else "Normal radar sampling")
+                d4.metric("Track Angle Jitter", f"{sel_rep.max_track_jitter_deg:.0f}°", "Severe zigzag bearing oscillation" if sel_rep.max_track_jitter_deg >= 85 else "Smooth turns")
+
+                if sel_rep.events:
+                    st.markdown("##### 📍 Chronological Telemetry Anomaly Trigger Timeline")
+                    ev_rows = []
+                    for ev in sel_rep.events:
+                        ev_rows.append({
+                            "Seq #": ev.seq_num,
+                            "Time (UTC)": ev.time_utc,
+                            "Latitude": ev.latitude,
+                            "Longitude": ev.longitude,
+                            "Flight Level": f"FL{ev.flight_level:.0f}",
+                            "Anomaly Trigger Type": ev.anomaly_type,
+                            "Observed Value": f"{ev.metric_value:,.1f} {ev.metric_unit}",
+                            "Severity": f"{ev.severity_score:.0f} / 100",
+                            "Operational Diagnosis": ev.description,
+                        })
+                    st.dataframe(pd.DataFrame(ev_rows), use_container_width=True)
+                else:
+                    st.caption("No individual threshold-breaching telemetry events recorded.")
 
     with sys_sub2:
         st.header("Macro Evolution, FRA Structural Shift, Weather Correlation & AIRAC Diffing")

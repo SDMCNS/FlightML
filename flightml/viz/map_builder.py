@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import math
 from pathlib import Path
 from typing import Any
@@ -1429,6 +1430,274 @@ def create_fra_boundary_map(
     </div>
     """
     m.get_root().html.add_child(folium.Element(legend_html))
+
+    if output_html_path:
+        out_p = Path(output_html_path)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        m.save(str(out_p))
+
+    return m
+
+
+def create_gnss_interference_network_map(
+    dataset: Any,
+    scan_report: Any,
+    selected_ectrl_id: int | None = None,
+    max_flights_rendered: int = 40,
+    output_html_path: Path | str | None = None,
+) -> folium.Map:
+    """
+    Generate an interactive Leaflet/Folium network map visualizing:
+    - Known Geopolitical Electronic Warfare & GNSS Interference Hotspots (Baltic, East Med, Black Sea, Middle East, Red Sea).
+    - Trajectories of flights exhibiting confirmed spoofing, suspected spoofing, and signal jamming.
+    - Exact geographic anomaly pins where impossible teleportation jumps, vertical spikes, and dropouts occurred.
+    - High-contrast highlight of an individually inspected flight.
+    """
+    from flightml.eval.gnss_jamming_spoofing import GNSS_HOTSPOTS
+
+    m = folium.Map(
+        location=[46.5, 24.0],
+        zoom_start=4,
+        tiles=None,
+    )
+
+    # 1. Humanitarian OpenStreetMap Basemap (Unblocked & referer-free)
+    folium.TileLayer(
+        tiles="https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+        attr="&copy; OpenStreetMap contributors, Humanitarian OpenStreetMap Team",
+        name="Humanitarian (Unblocked)",
+        subdomains="abc",
+        show=True,
+        control=True,
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png",
+        attr="&copy; OpenStreetMap France & OpenStreetMap contributors",
+        name="OSM France (Unblocked)",
+        subdomains="abc",
+        show=False,
+        control=True,
+    ).add_to(m)
+
+    # 2. Electronic Warfare & GNSS Hotspot Polygons Layer
+    hotspots_layer = folium.FeatureGroup(name="⚠️ GNSS Conflict Hotspots", show=True).add_to(m)
+    for h_key, zone in GNSS_HOTSPOTS.items():
+        bounds = [
+            [zone["min_lat"], zone["min_lon"]],
+            [zone["max_lat"], zone["max_lon"]],
+        ]
+        color = zone.get("color", "#e74c3c")
+        name = zone.get("name", h_key)
+        desc = zone.get("description", "")
+
+        poly_html = f"""
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 12px; min-width: 250px;">
+            <div style="font-size: 13.5px; font-weight: bold; color: {color}; margin-bottom: 4px;">
+                ⚠️ {html.escape(name)}
+            </div>
+            <div style="color: #444; line-height: 1.4; margin-bottom: 6px;">
+                {html.escape(desc)}
+            </div>
+            <div style="font-size: 11px; color: #7f8c8d;">
+                <b>Coordinates:</b> Lat {zone['min_lat']}°–{zone['max_lat']}°N | Lon {zone['min_lon']}°–{zone['max_lon']}°E
+            </div>
+        </div>
+        """
+        folium.Rectangle(
+            bounds=bounds,
+            color=color,
+            weight=2,
+            dash_array="6, 6",
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.12,
+            tooltip=f"⚠️ {name}",
+            popup=folium.Popup(poly_html, max_width=320),
+        ).add_to(hotspots_layer)
+
+    # 3. Trajectory Layers by Anomaly Severity
+    fg_confirmed = folium.FeatureGroup(name="🔴 Confirmed Spoofing (Speed/Altitude Teleport)", show=True).add_to(m)
+    fg_suspected = folium.FeatureGroup(name="🟠 Suspected Spoofing (Track Jitter & Loops)", show=True).add_to(m)
+    fg_jamming = folium.FeatureGroup(name="🟣 Probable Jamming (Position Dropouts)", show=True).add_to(m)
+    fg_events = folium.FeatureGroup(name="📍 Anomaly Incident Trigger Pins", show=True).add_to(m)
+    fg_highlight = folium.FeatureGroup(name="🎯 Inspected Flight Focus", show=True).add_to(m)
+
+    flagged_flights = getattr(scan_report, "flagged_flights", []) or []
+    rendered_count = 0
+
+    for rep in flagged_flights:
+        eid = rep.ectrl_id
+        is_selected = (selected_ectrl_id is not None and int(selected_ectrl_id) == eid)
+
+        # Skip if beyond display budget unless it is the selected flight
+        if rendered_count >= max_flights_rendered and not is_selected:
+            continue
+
+        trajs = dataset.get_trajectory(eid)
+        act_df = trajs.get("actual", pd.DataFrame())
+        if act_df.empty or len(act_df) < 2:
+            continue
+
+        rendered_count += 1
+        pts = [
+            (float(r["latitude"]), float(r["longitude"]))
+            for _, r in act_df.iterrows()
+            if _is_finite_coord(r.get("latitude")) and _is_finite_coord(r.get("longitude"))
+        ]
+        if len(pts) < 2:
+            continue
+
+        # Color & Target Layer
+        if rep.gnss_status == "CONFIRMED_SPOOFING":
+            track_color = "#e74c3c"
+            target_fg = fg_confirmed
+            weight = 3.0
+            dash = None
+        elif rep.gnss_status == "SUSPECTED_SPOOFING":
+            track_color = "#f39c12"
+            target_fg = fg_suspected
+            weight = 2.4
+            dash = None
+        else:
+            track_color = "#8e44ad"
+            target_fg = fg_jamming
+            weight = 2.2
+            dash = "5, 5"
+
+        popup_html = f"""
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 12px; min-width: 250px;">
+            <div style="font-size: 14px; font-weight: bold; color: {track_color}; margin-bottom: 4px;">
+                Flight #{eid} &nbsp;[{rep.ac_operator} | {rep.ac_type}]
+            </div>
+            <div style="color: #2c3e50; font-weight: 600; margin-bottom: 4px;">
+                <code>{rep.adep}</code> ➔ <code>{rep.ades}</code> &nbsp;|&nbsp; Reg: <code>{rep.ac_reg}</code>
+            </div>
+            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 6px 8px; margin-bottom: 6px;">
+                <b>GNSS Status:</b> <span style="color: {track_color}; font-weight: bold;">{rep.gnss_status}</span><br/>
+                <b>Anomaly Score:</b> <b>{rep.anomaly_score:.1f} / 100</b><br/>
+                <b>Max Speed:</b> <span style="color: #c0392b;">{rep.max_groundspeed_kts:,.0f} kts</span><br/>
+                <b>Max Vert Rate:</b> <span style="color: #c0392b;">{rep.max_vertical_speed_fpm:,.0f} fpm</span><br/>
+                <b>Telemetry Gap:</b> {rep.max_telemetry_gap_s/60.0:.1f} min<br/>
+                <b>Track Jitter:</b> {rep.max_track_jitter_deg:.0f}°
+            </div>
+            <div style="font-size: 11px; color: #555;">
+                <b>Hotspots:</b> {', '.join(rep.hotspots_traversed) if rep.hotspots_traversed else 'Open Airspace'}
+            </div>
+        </div>
+        """
+
+        # Draw trajectory polyline
+        folium.PolyLine(
+            locations=pts,
+            color=track_color,
+            weight=weight,
+            dash_array=dash,
+            opacity=0.82,
+            tooltip=f"#{eid} ({rep.adep}➔{rep.ades}) | {rep.gnss_status} ({rep.anomaly_score:.0f}/100)",
+            popup=folium.Popup(popup_html, max_width=320),
+        ).add_to(target_fg)
+
+        # Departure and Arrival Markers
+        folium.CircleMarker(
+            location=pts[0],
+            radius=4,
+            color="#27ae60",
+            fill=True,
+            fill_color="#27ae60",
+            fill_opacity=0.9,
+            tooltip=f"ADEP: {rep.adep} (#{eid})",
+        ).add_to(target_fg)
+        folium.CircleMarker(
+            location=pts[-1],
+            radius=4,
+            color="#c0392b",
+            fill=True,
+            fill_color="#c0392b",
+            fill_opacity=0.9,
+            tooltip=f"ADES: {rep.ades} (#{eid})",
+        ).add_to(target_fg)
+
+        # Highlight Selected Flight if active
+        if is_selected:
+            folium.PolyLine(
+                locations=pts,
+                color="#00f0ff",
+                weight=5.0,
+                opacity=0.95,
+                tooltip=f"🎯 FOCUS: Flight #{eid} ({rep.adep}➔{rep.ades})",
+                popup=folium.Popup(popup_html, max_width=320),
+            ).add_to(fg_highlight)
+
+        # Plot individual Anomaly Trigger Pins (top events)
+        for ev in rep.events[:4]:
+            if _is_finite_coord(ev.latitude) and _is_finite_coord(ev.longitude):
+                if ev.anomaly_type == "TELEPORTATION_SPEED":
+                    p_col = "#e74c3c"
+                    p_lbl = f"⚡ Teleport: {ev.metric_value:,.0f} kts"
+                elif ev.anomaly_type == "VERTICAL_RATE_SPIKE":
+                    p_col = "#d35400"
+                    p_lbl = f"↕️ Vert Spike: {ev.metric_value:,.0f} fpm"
+                elif ev.anomaly_type == "TELEMETRY_DROPOUT":
+                    p_col = "#8e44ad"
+                    p_lbl = f"📡 Signal Loss: {ev.metric_value:.1f} min"
+                else:
+                    p_col = "#f39c12"
+                    p_lbl = f"🔀 Track Jitter: {ev.metric_value:.0f}°"
+
+                ev_popup = f"""
+                <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 11.5px; min-width: 220px;">
+                    <div style="font-weight: bold; color: {p_col}; font-size: 12.5px; margin-bottom: 2px;">
+                        {html.escape(p_lbl)}
+                    </div>
+                    <div><b>Flight:</b> #{eid} ({rep.ac_operator}) | FL{ev.flight_level:.0f}</div>
+                    <div><b>Time:</b> {ev.time_utc}</div>
+                    <div style="margin-top: 4px; color: #444; line-height: 1.3;">{html.escape(ev.description)}</div>
+                </div>
+                """
+                folium.CircleMarker(
+                    location=[ev.latitude, ev.longitude],
+                    radius=5,
+                    color=p_col,
+                    fill=True,
+                    fill_color=p_col,
+                    fill_opacity=0.85,
+                    weight=1.5,
+                    tooltip=f"#{eid}: {p_lbl}",
+                    popup=folium.Popup(ev_popup, max_width=280),
+                ).add_to(fg_events)
+
+    # 4. Floating Legend & Statistics Overlay
+    tot_flagged = getattr(scan_report, "flagged_flights_count", len(flagged_flights))
+    conf_c = getattr(scan_report, "spoofing_confirmed_count", 0)
+    susp_c = getattr(scan_report, "spoofing_suspected_count", 0)
+    jam_c = getattr(scan_report, "jamming_probable_count", 0)
+
+    legend_html = f"""
+    <div style="position: fixed; bottom: 20px; left: 15px; max-width: 440px;
+                background-color: white; border: 2px solid #bdc3c7; border-radius: 8px;
+                z-index: 9999; font-size: 12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                padding: 10px 14px; box-shadow: 2px 2px 8px rgba(0,0,0,0.22);">
+        <div style="font-size: 13.5px; font-weight: bold; color: #2c3e50; margin-bottom: 4px;">
+            🛰️ GNSS Jamming &amp; Spoofing Network Anomaly Overview
+        </div>
+        <div style="color: #444; margin-bottom: 6px; font-size: 11.5px;">
+            <b>Flagged Flights:</b> <span style="color: #c0392b; font-weight: bold;">{tot_flagged:,}</span> |
+            <b>Confirmed Spoofing:</b> <span style="color: #e74c3c; font-weight: bold;">{conf_c}</span> |
+            <b>Suspected:</b> <span style="color: #f39c12; font-weight: bold;">{susp_c}</span> |
+            <b>Jamming:</b> <span style="color: #8e44ad; font-weight: bold;">{jam_c}</span>
+        </div>
+        <div style="font-size: 11px; line-height: 1.45; color: #555;">
+            <span style="color: #e74c3c; font-weight: bold;">&#9644;&#9644; Red:</span> Confirmed Spoofing (&gt;750 kts teleport, vertical jumps &gt;7,500 fpm)<br/>
+            <span style="color: #f39c12; font-weight: bold;">&#9644;&#9644; Amber:</span> Suspected Spoofing (Erratic track jitter, circular ghost patterns)<br/>
+            <span style="color: #8e44ad; font-weight: bold;">&#9644;&#9644; Purple:</span> Probable Jamming (&gt;480s telemetry dropouts in controlled airspace)<br/>
+            <span style="color: #00bcd4; font-weight: bold;">&#9644;&#9644; Cyan:</span> Currently Selected / Inspected Flight Trajectory<br/>
+            <span style="color: #7f8c8d; font-weight: bold;">&#9633; Shaded Zones:</span> Known EW / GNSS Interference Conflict Hotspots
+        </div>
+    </div>
+    """
+    m.get_root().html.add_child(folium.Element(legend_html))
+    folium.LayerControl(position="topright", collapsed=False).add_to(m)
 
     if output_html_path:
         out_p = Path(output_html_path)

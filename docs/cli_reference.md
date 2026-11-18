@@ -644,3 +644,38 @@ NOT hold the gate (boarding closes strictly 20 minutes before departure).
 └━━━━━━━━━━━━━━━━┴━━━━━━━━━━┴━━━━━━━━━━━━━━━━━━┴━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┴━━━━━━━━━━━━━━━━━━┴━━━━━━━━━━┴━━━━━━┴━━━━━━━━━━━━━━━━━━━━━┴━━━━━━━━┴━━━━━━━━━━━━━━━┘
 ```
 
+---
+
+## 32. GNSS Jamming & Spoofing Anomaly Detection
+
+### `flightml gnss-scan`
+Scan European network flights for Global Navigation Satellite System (GNSS / GPS) jamming and spoofing anomalies:
+- **Kinematic Teleportation Jumps**: Instantaneous groundspeeds exceeding subsonic certified airframe capabilities (>750 kts, >Mach 1.0).
+- **Vertical Spikes & Altitude Glitches**: Extreme vertical speed spikes ($|V_z| > 7,000$ ft/min) or drops to FL0 / negative altitudes.
+- **Erratic Track Oscillations**: False circle spoofing loops or track reversals ($|\Delta \theta| > 75^\circ$).
+- **Telemetry Dropouts**: Long radar/ADS-B reporting gaps (>400s) in controlled airspace indicative of wideband RF jamming denial.
+- **Geopolitical Hotspot Intersections**: Correlation with known electronic warfare zones (Baltic Sea / Kaliningrad, Eastern Mediterranean / Levant, Black Sea / Crimea, Middle East / Persian Gulf, Red Sea).
+
+```bash
+# High-speed network scan with default threshold (score >= 35)
+flightml gnss-scan --period 202510 --limit 500
+
+# Focus on specific electronic warfare conflict zone
+flightml gnss-scan --period 202510 --hotspot EAST_MED_LEVANT --min-score 30.0
+
+# Export raw JSON output for downstream SIEM or forensic ingestion
+flightml gnss-scan --period 202510 --limit 100 --json
+```
+
+### `flightml gnss-inspect`
+Deep-dive chronological anomaly event inspector for a specific flight.
+
+```bash
+# Inspect suspected spoofing flight
+flightml gnss-inspect 292150998 --period 202510
+
+# Export structured anomaly event log as JSON
+flightml gnss-inspect 292150998 --period 202510 --json
+```
+
+

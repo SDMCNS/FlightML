@@ -190,6 +190,10 @@ The FlightML FastMCP server exposes **35 specialized tools** returning structure
 34. **`predict_flight_delay(adep, ades, operator, market_segment, requested_fl, distance_nm, hour, day_of_week)`**: Gradient-boosted ML delay predictor estimating arrival delay minutes and risk level.
 35. **`assess_passenger_itinerary(origin, destination, hub, day_of_week, time_window, scheduled_layover_min, target_date, period, debug)`**: Multi-leg journey risk, transfer hub missed connection probability (MCT buffer vs weather), Heathrow T5 20m gate conformance cutoff, EU261/UK261 compensation rights (€250–€600), and departure wave optimization.
 
+### H. Electronic Warfare & GNSS Interference Anomaly Detection
+36. **`scan_gnss_jamming_and_spoofing(period, limit, min_score, hotspot)`**: Multi-factor kinematic and geometric anomaly scan detecting flights exhibiting impossible supersonic jumps (>750 kts), extreme climb/descent spikes (>7,000 fpm), track jitter oscillations (>75° reversals), and telemetry dropouts in geopolitical electronic warfare hotspots (Baltic, Eastern Mediterranean/Levant, Black Sea, Middle East/Persian Gulf, Red Sea).
+37. **`inspect_flight_gnss_interference(flight_id, period)`**: Single-flight chronological timeline of GNSS anomaly events with kinematic values, composite anomaly score (0-100), and EW hotspot traversals.
+
 ---
 
 ## 4. Resources and Prompts

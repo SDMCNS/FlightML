@@ -1348,6 +1348,64 @@ def create_mcp_server() -> FastMCP:
         )
         return _safe_json({"total_notes": len(notes), "notes": [n.to_dict() for n in notes]})
 
+    # -------------------------------------------------------------------------
+    # TOOL: scan_gnss_jamming_and_spoofing
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def scan_gnss_jamming_and_spoofing(
+        period: str = "",
+        sample_limit: int = 2500,
+        min_score: float = 35.0,
+        hotspot: str = "",
+    ) -> str:
+        """Scan historical European and international flights for GNSS (GPS) jamming and spoofing anomalies.
+
+        Detects kinematic teleportation speed jumps (> 750 kts), unphysical vertical velocity spikes
+        (> 7,500 ft/min), sudden altitude telemetry glitches, erratic zigzag track jitter, and extended
+        position dropouts in controlled airspace.
+
+        Args:
+            period: Eurocontrol period (e.g. '202510', '202402', or empty for active default).
+            sample_limit: Maximum number of candidate flights to pre-screen (default: 2500).
+            min_score: Minimum multi-factor anomaly score threshold 0 to 100 (default: 35.0).
+            hotspot: Optional electronic warfare zone filter (e.g. 'BALTIC_KALININGRAD', 'EAST_MED_LEVANT',
+                     'BLACK_SEA_CRIMEA', 'MIDDLE_EAST_PERSIAN_GULF', 'RED_SEA_BAB_EL_MANDEB').
+        """
+        from flightml.eval.gnss_jamming_spoofing import scan_network_gnss_interference
+
+        ds = _get_dataset(period)
+        rep = scan_network_gnss_interference(
+            ds,
+            sample_limit=sample_limit,
+            min_score=min_score,
+            hotspot_filter=hotspot if hotspot else None,
+        )
+        return _safe_json(rep.to_dict())
+
+    # -------------------------------------------------------------------------
+    # TOOL: inspect_flight_gnss_interference
+    # -------------------------------------------------------------------------
+    @server.tool()
+    def inspect_flight_gnss_interference(
+        flight_id: int | str,
+        period: str = "",
+    ) -> str:
+        """Inspect a specific flight's actual radar trajectory for GNSS jamming or spoofing triggers.
+
+        Returns chronological telemetry anomaly events, kinematic metrics, and operational diagnosis.
+
+        Args:
+            flight_id: Eurocontrol Flight ID (ECTRL ID, e.g. 291263201 or 291262611).
+            period: Optional Eurocontrol period.
+        """
+        from flightml.eval.gnss_jamming_spoofing import analyze_flight_gnss_interference
+
+        ds = _get_dataset(period)
+        rep = analyze_flight_gnss_interference(ds, int(flight_id))
+        if not rep:
+            return _safe_json({"error": f"Flight {flight_id} not found or insufficient radar trajectory points."})
+        return _safe_json(rep.to_dict())
+
     return server
 
 

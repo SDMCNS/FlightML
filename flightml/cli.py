@@ -3543,5 +3543,145 @@ def cli_flight_notes_delete(
         console.print(f"[yellow]No note found for Flight ID {ectrl_id}.[/yellow]")
 
 
+@app.command(name="gnss-scan")
+def cli_gnss_scan(
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol archive period"),
+    limit: int = typer.Option(2500, "--limit", "-l", help="Number of candidate flights to pre-screen"),
+    min_score: float = typer.Option(35.0, "--min-score", "-s", help="Minimum anomaly score (0-100)"),
+    hotspot: str = typer.Option(None, "--hotspot", help="Filter by electronic warfare hotspot key"),
+    output_json: bool = typer.Option(False, "--json", help="Output results in JSON format"),
+) -> None:
+    """Scan network flights for GNSS (GPS) jamming and spoofing anomalies."""
+    from flightml.data.dataset import FlightDataset
+    from flightml.eval.gnss_jamming_spoofing import scan_network_gnss_interference
+
+    ds = FlightDataset(period=period)
+    rep = scan_network_gnss_interference(
+        ds,
+        sample_limit=limit,
+        min_score=min_score,
+        hotspot_filter=hotspot,
+    )
+
+    if output_json:
+        console.print_json(data=rep.to_dict())
+        return
+
+    console.print(
+        Panel.fit(
+            f"[bold cyan]🛰️ GNSS Jamming & Spoofing Network Anomaly Scan[/bold cyan]\n"
+            f"[dim]Period: {period} | Scanned: {rep.total_flights_scanned:,} flights | "
+            f"Flagged: {rep.flagged_flights_count:,}[/dim]\n"
+            f"[red]Confirmed Spoofing: {rep.spoofing_confirmed_count}[/red] | "
+            f"[yellow]Suspected Spoofing: {rep.spoofing_suspected_count}[/yellow] | "
+            f"[magenta]Probable Jamming: {rep.jamming_probable_count}[/magenta]",
+            border_style="cyan",
+        )
+    )
+
+    if not rep.flagged_flights:
+        console.print("[green]✓ No threshold-breaching GNSS anomalies detected under current filters.[/green]")
+        return
+
+    table = Table(
+        title=f"Flagged Flights Exhibiting GNSS Interference ({len(rep.flagged_flights)} total)",
+        border_style="bright_black",
+        header_style="bold cyan",
+    )
+    table.add_column("Flight ID", style="bold white", width=11)
+    table.add_column("Status", width=20)
+    table.add_column("Score", justify="right", width=7)
+    table.add_column("Route", width=12)
+    table.add_column("Operator", width=10)
+    table.add_column("A/C", width=6)
+    table.add_column("Max Speed", justify="right", width=12)
+    table.add_column("Max VS", justify="right", width=12)
+    table.add_column("Max Gap", justify="right", width=9)
+    table.add_column("Hotspots", style="dim", width=24)
+
+    for f in rep.flagged_flights[:25]:
+        st_style = "bold red" if f.gnss_status == "CONFIRMED_SPOOFING" else "bold yellow" if f.gnss_status == "SUSPECTED_SPOOFING" else "bold magenta"
+        table.add_row(
+            str(f.ectrl_id),
+            f"[{st_style}]{f.gnss_status}[/{st_style}]",
+            f"{f.anomaly_score:.0f}",
+            f"{f.adep}➔{f.ades}",
+            f.ac_operator,
+            f.ac_type,
+            f"{f.max_groundspeed_kts:,.0f} kts",
+            f"{f.max_vertical_speed_fpm:,.0f} fpm",
+            f"{f.max_telemetry_gap_s/60.0:.1f}m",
+            ", ".join(f.hotspots_traversed) if f.hotspots_traversed else "Open Airspace",
+        )
+
+    console.print(table)
+
+
+@app.command(name="gnss-inspect")
+def cli_gnss_inspect(
+    ectrl_id: int = typer.Argument(..., help="Eurocontrol Flight ID to inspect"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol archive period"),
+    output_json: bool = typer.Option(False, "--json", help="Output results in JSON format"),
+) -> None:
+    """Inspect a specific flight's actual radar track for GNSS jamming and spoofing trigger events."""
+    from flightml.data.dataset import FlightDataset
+    from flightml.eval.gnss_jamming_spoofing import analyze_flight_gnss_interference
+
+    ds = FlightDataset(period=period)
+    rep = analyze_flight_gnss_interference(ds, ectrl_id)
+    if not rep:
+        console.print(f"[red]Flight #{ectrl_id} not found in period {period}.[/red]")
+        return
+
+    if output_json:
+        console.print_json(data=rep.to_dict())
+        return
+
+    status_color = "red" if rep.gnss_status == "CONFIRMED_SPOOFING" else "yellow" if rep.gnss_status == "SUSPECTED_SPOOFING" else "magenta"
+    console.print(
+        Panel.fit(
+            f"[bold cyan]🔍 GNSS Anomaly Inspection: Flight #{ectrl_id}[/bold cyan]\n"
+            f"[dim]Route: {rep.adep} ➔ {rep.ades} | Operator: {rep.ac_operator} | Airframe: {rep.ac_type} (Reg: {rep.ac_reg})[/dim]\n"
+            f"Classification: [{status_color} bold]{rep.gnss_status}[/{status_color} bold] &nbsp;|&nbsp; "
+            f"Anomaly Score: [bold white]{rep.anomaly_score:.1f} / 100[/bold white]\n"
+            f"[italic]{rep.summary_verdict}[/italic]",
+            border_style=status_color,
+        )
+    )
+
+    t_metrics = Table(title="Kinematic Violation Metrics", border_style="bright_black")
+    t_metrics.add_column("Metric Dimension", style="bold white")
+    t_metrics.add_column("Observed Value", justify="right")
+    t_metrics.add_column("Operational Airframe Envelope", style="dim")
+
+    t_metrics.add_row("Max Kinematic Speed", f"{rep.max_groundspeed_kts:,.0f} kts", "Nominal: 300–620 kts (Breach > 750 kts)")
+    t_metrics.add_row("Max Vertical Velocity", f"{rep.max_vertical_speed_fpm:,.0f} fpm", "Nominal: 1,000–3,500 fpm (Breach > 7,500 fpm)")
+    t_metrics.add_row("Max Telemetry Dropout", f"{rep.max_telemetry_gap_s/60.0:.1f} min", "Nominal: < 2 min in radar airspace (Breach > 8 min)")
+    t_metrics.add_row("Max Track Jitter", f"{rep.max_track_jitter_deg:.0f}°", "Nominal: < 45° standard turns (Breach > 85°)")
+    console.print(t_metrics)
+
+    if rep.events:
+        t_events = Table(title="Chronological Telemetry Anomaly Triggers", border_style="bright_black", header_style="bold cyan")
+        t_events.add_column("Seq #", justify="right", width=6)
+        t_events.add_column("Time UTC", width=20)
+        t_events.add_column("FL", justify="right", width=6)
+        t_events.add_column("Trigger Type", width=22)
+        t_events.add_column("Value", justify="right", width=12)
+        t_events.add_column("Severity", justify="right", width=8)
+        t_events.add_column("Operational Diagnosis", style="dim")
+
+        for ev in rep.events:
+            t_events.add_row(
+                str(ev.seq_num),
+                ev.time_utc,
+                f"FL{ev.flight_level:.0f}",
+                ev.anomaly_type,
+                f"{ev.metric_value:,.1f} {ev.metric_unit}",
+                f"{ev.severity_score:.0f}",
+                ev.description,
+            )
+        console.print(t_events)
+
+
 if __name__ == "__main__":
     app()
