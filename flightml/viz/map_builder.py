@@ -2029,12 +2029,30 @@ def create_ecac_coverage_map(
     - Proposed synthetic gap-filling facilities (purple/magenta)
     - High-density hubs (gold) with FL10 terminal coverage status
     """
+    target_fir = coverage_report.get("target_fir", "ALL")
+    is_single_fir = target_fir not in (None, "ALL")
+    map_center = coverage_report.get("fir_center", [50.0, 10.0])
+    zoom_start = 6 if is_single_fir else 4
+
     m = folium.Map(
-        location=[50.0, 10.0],
-        zoom_start=4,
+        location=map_center,
+        zoom_start=zoom_start,
         tiles="OpenStreetMap",
         control_scale=True,
     )
+
+    # Highlight single FIR boundary polygon if applicable
+    fir_boundary = coverage_report.get("fir_boundary_coords")
+    if is_single_fir and fir_boundary:
+        fir_name = coverage_report.get("fir_name", target_fir)
+        folium.PolyLine(
+            locations=fir_boundary,
+            color="#d97706",
+            weight=3.5,
+            opacity=0.9,
+            dash_array="6, 6",
+            tooltip=f"FIR Boundary: {fir_name}",
+        ).add_to(m)
 
     fl_key = f"fl{selected_fl}"
     fl_data = coverage_report.get("coverage_by_fl", {}).get(fl_key, {})

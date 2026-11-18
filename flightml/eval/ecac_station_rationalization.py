@@ -22,6 +22,7 @@ from dataclasses import dataclass, asdict
 from typing import Any, Literal
 import numpy as np
 import pandas as pd
+from shapely.geometry import Polygon, Point
 
 from flightml.data.dataset import FlightDataset
 import flightml.math as fmath
@@ -38,6 +39,103 @@ ECAC_COUNTRIES = {
     "GE", "DE", "GR", "HU", "IS", "IE", "IT", "LV", "LT", "LU", "MT", "MD", "MC", "ME",
     "NL", "MK", "NO", "PL", "PT", "RO", "SM", "RS", "SK", "SI", "ES", "SE", "CH", "TR", "UA", "GB"
 }
+
+ECAC_FIR_REGISTRY: dict[str, str] = {
+    "ALL": "🌍 All ECAC Airspace (Network-Wide)",
+    "EGTTFIR": "🇬🇧 EGTTFIR - London FIR (UK South & England/Wales)",
+    "EGPXFIR": "🇬🇧 EGPXFIR - Scottish FIR (UK North & Scotland)",
+    "LFFFFIR": "🇫🇷 LFFFFIR - Paris FIR (France North)",
+    "LFBBFIR": "🇫🇷 LFBBFIR - Bordeaux FIR (France Southwest)",
+    "LFMMFIR": "🇫🇷 LFMMFIR - Marseille FIR (France South/Mediterranean)",
+    "LFEEFIR": "🇫🇷 LFEEFIR - Reims FIR (France East)",
+    "LFRRFIR": "🇫🇷 LFRRFIR - Brest FIR (France West / Atlantic)",
+    "EDGGFIR": "🇩🇪 EDGGFIR - Langen FIR (Germany Central/West)",
+    "EDMMFIR": "🇩🇪 EDMMFIR - Munich FIR (Germany South)",
+    "EDWWFIR": "🇩🇪 EDWWFIR - Bremen FIR (Germany North)",
+    "EDUUUIR": "🇩🇪 EDUUUIR - Rhein UIR (Germany Upper Airspace)",
+    "EHAAFIR": "🇳🇱 EHAAFIR - Amsterdam FIR (Netherlands)",
+    "EBBUFIR": "🇧🇪 EBBUFIR - Brussels FIR (Belgium / Luxembourg)",
+    "LSASFIR": "🇨🇭 LSASFIR - Switzerland FIR (Zurich / Geneva)",
+    "LOVVFIR": "🇦🇹 LOVVFIR - Vienna FIR (Austria)",
+    "LECMFIR": "🇪🇸 LECMFIR - Madrid FIR (Spain Central / North)",
+    "LECBFIR": "🇪🇸 LECBFIR - Barcelona FIR (Spain East / Balearics)",
+    "LPPCFIR": "🇵🇹 LPPCFIR - Lisbon FIR (Portugal Continental)",
+    "LIRRFIR": "🇮🇹 LIRRFIR - Rome FIR (Italy Central / South)",
+    "LIMMFIR": "🇮🇹 LIMMFIR - Milan FIR (Italy North)",
+    "LIBBFIR": "🇮🇹 LIBBFIR - Brindisi FIR (Italy Southeast)",
+    "EISNFIR": "🇮🇪 EISNFIR - Shannon FIR (Ireland)",
+    "EKDKFIR": "🇩🇰 EKDKFIR - Copenhagen FIR (Denmark)",
+    "ESAAFIR": "🇸🇪 ESAAFIR - Sweden FIR (Stockholm / Malmo)",
+    "ENORFIR": "🇳🇴 ENORFIR - Norway FIR (Oslo / Stavanger)",
+    "EFINFIR": "🇫🇮 EFINFIR - Finland FIR (Helsinki)",
+    "EPWWFIR": "🇵🇱 EPWWFIR - Warsaw FIR (Poland)",
+    "LKAAFIR": "🇨🇿 LKAAFIR - Prague FIR (Czech Republic)",
+    "LZBBFIR": "🇸🇰 LZBBFIR - Bratislava FIR (Slovakia)",
+    "LHCCFIR": "🇭🇺 LHCCFIR - Budapest FIR (Hungary)",
+    "LJLAFIR": "🇸🇮 LJLAFIR - Ljubljana FIR (Slovenia)",
+    "LDZOFIR": "🇭🇷 LDZOFIR - Zagreb FIR (Croatia)",
+    "LRBBFIR": "🇷🇴 LRBBFIR - Bucharest FIR (Romania)",
+    "LBSRFIR": "🇧🇬 LBSRFIR - Sofia FIR (Bulgaria)",
+    "LGGGFIR": "🇬🇷 LGGGFIR - Athens FIR (Hellas / Greece)",
+    "LCCCFIR": "🇨🇾 LCCCFIR - Nicosia FIR (Cyprus)",
+    "LTBBFIR": "🇹🇷 LTBBFIR - Istanbul FIR (Turkey West)",
+    "LTAAFIR": "🇹🇷 LTAAFIR - Ankara FIR (Turkey Central/East)",
+}
+
+
+def get_fir_geometry(
+    dataset: FlightDataset, fir_id: str
+) -> tuple[Polygon, list[list[float]], tuple[float, float, float, float]] | None:
+    """
+    Retrieve FIR polygon geometry, boundary points, and bounding box from raw_fir.
+    """
+    pts = dataset.cursor.execute(
+        """
+        SELECT Latitude, Longitude
+        FROM raw_fir
+        WHERE "Airspace ID" = ?
+        ORDER BY "Sequence Number" ASC
+        """,
+        [fir_id],
+    ).df()
+
+    if pts.empty or len(pts) < 4:
+        return None
+
+    coords = [(float(r["Longitude"]), float(r["Latitude"])) for _, r in pts.iterrows()]
+    boundary_lat_lon = [[float(r["Latitude"]), float(r["Longitude"])] for _, r in pts.iterrows()]
+    poly = Polygon(coords)
+    if not poly.is_valid:
+        poly = poly.buffer(0)
+    min_lon, min_lat, max_lon, max_lat = poly.bounds
+    return poly, boundary_lat_lon, (min_lat, max_lat, min_lon, max_lon)
+
+
+def list_available_ecac_firs(dataset: FlightDataset) -> list[tuple[str, str]]:
+    """
+    Returns sorted list of (fir_id, display_label) for selectable ECAC FIRs.
+    """
+    df = dataset.cursor.execute(
+        """
+        SELECT "Airspace ID" as fir_id, COUNT(*) as pt_count
+        FROM raw_fir
+        WHERE Latitude BETWEEN ? AND ? AND Longitude BETWEEN ? AND ?
+        GROUP BY "Airspace ID"
+        HAVING pt_count >= 8 AND fir_id LIKE '%FIR'
+        ORDER BY fir_id ASC
+        """,
+        [ECAC_LAT_MIN - 2.0, ECAC_LAT_MAX + 2.0, ECAC_LON_MIN - 2.0, ECAC_LON_MAX + 2.0],
+    ).df()
+
+    firs = [("ALL", ECAC_FIR_REGISTRY.get("ALL", "🌍 All ECAC Airspace (Network-Wide)"))]
+    for _, row in df.iterrows():
+        fid = str(row["fir_id"])
+        if fid in ECAC_FIR_REGISTRY:
+            lbl = ECAC_FIR_REGISTRY[fid]
+        else:
+            lbl = f"📡 {fid}"
+        firs.append((fid, lbl))
+    return firs
 
 
 @dataclass
@@ -79,12 +177,19 @@ def load_ecac_stations(
     dataset: FlightDataset,
     station_type: Literal["RADAR", "DME"] = "RADAR",
     radars_path: str = "data/radars.json",
+    fir_poly: Polygon | None = None,
+    fir_bbox: tuple[float, float, float, float] | None = None,
 ) -> tuple[list[ECACStation], list[dict[str, Any]]]:
     """
     Load all ECAC stations (Radars or DMEs) along with ECAC commercial airports
-    and high-density hubs (>= 500 movements/day).
+    and high-density hubs (>= 500 movements/day). Supports single-FIR scope filtering.
     """
-    # 1. Fetch ECAC airports
+    lat_min = fir_bbox[0] if fir_bbox else ECAC_LAT_MIN
+    lat_max = fir_bbox[1] if fir_bbox else ECAC_LAT_MAX
+    lon_min = fir_bbox[2] if fir_bbox else ECAC_LON_MIN
+    lon_max = fir_bbox[3] if fir_bbox else ECAC_LON_MAX
+
+    # 1. Fetch ECAC airports (filtered to FIR polygon if specified)
     airports_df = dataset.cursor.execute(
         """
         WITH moves AS (
@@ -108,23 +213,36 @@ def load_ecac_stations(
           AND a.type IN ('large_airport', 'medium_airport')
         ORDER BY daily_movements DESC
         """,
-        [ECAC_LAT_MIN, ECAC_LAT_MAX, ECAC_LON_MIN, ECAC_LON_MAX],
+        [lat_min - 0.2, lat_max + 0.2, lon_min - 0.5, lon_max + 0.5],
     ).df()
 
     airports: list[dict[str, Any]] = []
     for _, row in airports_df.iterrows():
+        a_lat = float(row["latitude"])
+        a_lon = float(row["longitude"])
+        if fir_poly and not fir_poly.contains(Point(a_lon, a_lat)):
+            continue
+
         airports.append({
             "ident": str(row["ident"]),
             "name": str(row["name"]),
-            "latitude": float(row["latitude"]),
-            "longitude": float(row["longitude"]),
+            "latitude": a_lat,
+            "longitude": a_lon,
             "elevation_ft": float(row["elevation_ft"]),
             "country": str(row.get("iso_country") or "EU"),
             "daily_movements": float(row["daily_movements"]),
             "is_high_density": float(row["daily_movements"]) >= 500.0,
         })
 
-    # 2. Load Stations
+    # 2. Load Stations with Line-of-Sight Buffer
+    # Buffer station search box: Radar range is 250 NM (~4.2 deg), DME is 160 NM (~2.8 deg)
+    buf_lat = 4.2 if station_type == "RADAR" else 2.8
+    buf_lon = 6.0 if station_type == "RADAR" else 4.2
+    sta_lat_min = max(-80.0, lat_min - buf_lat)
+    sta_lat_max = min(80.0, lat_max + buf_lat)
+    sta_lon_min = max(-175.0, lon_min - buf_lon)
+    sta_lon_max = min(175.0, lon_max + buf_lon)
+
     stations: list[ECACStation] = []
     seen_ids = set()
 
@@ -137,7 +255,7 @@ def load_ecac_stations(
                 geom = feat.get("geometry", {})
                 coords = geom.get("coordinates", [0.0, 0.0])
                 lon, lat = float(coords[0]), float(coords[1])
-                if not (ECAC_LAT_MIN - 1.0 <= lat <= ECAC_LAT_MAX + 1.0 and ECAC_LON_MIN - 1.0 <= lon <= ECAC_LON_MAX + 1.0):
+                if not (sta_lat_min <= lat <= sta_lat_max and sta_lon_min <= lon <= sta_lon_max):
                     continue
 
                 r_id = str(props.get("id") or props.get("name") or f"RAD_{len(stations)+1}").strip()
@@ -183,7 +301,7 @@ def load_ecac_stations(
               AND longitude_deg BETWEEN ? AND ?
             ORDER BY ident ASC
             """,
-            [ECAC_LAT_MIN, ECAC_LAT_MAX, ECAC_LON_MIN, ECAC_LON_MAX],
+            [sta_lat_min, sta_lat_max, sta_lon_min, sta_lon_max],
         ).df()
 
         for _, row in df_dme.iterrows():
@@ -226,10 +344,26 @@ def load_ecac_stations(
     return stations, airports
 
 
-def generate_ecac_grid(step_deg: float = 0.35) -> list[tuple[float, float]]:
+def generate_ecac_grid(
+    step_deg: float = 0.35,
+    fir_poly: Polygon | None = None,
+    fir_bbox: tuple[float, float, float, float] | None = None,
+) -> list[tuple[float, float]]:
     """
-    Generate 2D spatial grid covering ECAC continental airspace (~15-20 NM cells).
+    Generate 2D spatial grid covering ECAC continental airspace or a specific FIR (~10-15 NM cells).
     """
+    if fir_poly and fir_bbox:
+        lat_min, lat_max, lon_min, lon_max = fir_bbox
+        step = 0.20  # High-resolution step inside single FIR (~12 NM cells)
+        lats = np.arange(lat_min, lat_max + 1e-5, step)
+        lons = np.arange(lon_min, lon_max + 1e-5, step * 1.5)
+        cells = []
+        for lat in lats:
+            for lon in lons:
+                if fir_poly.contains(Point(float(lon), float(lat))):
+                    cells.append((round(float(lat), 3), round(float(lon), 3)))
+        return cells
+
     lats = np.arange(ECAC_LAT_MIN, ECAC_LAT_MAX + 1e-5, step_deg)
     lons = np.arange(ECAC_LON_MIN, ECAC_LON_MAX + 1e-5, step_deg * 1.5)
     cells = []
@@ -416,7 +550,7 @@ def compute_static_rationalization_views(
             if gain > best_gain:
                 best_gain = gain
                 best_sta = s
-        if best_gain == 0 or best_s == -1:
+        if best_gain == 0 or best_sta == -1:
             break
         view_3_set.add(best_sta)
         cell_cov_fl50 += cell_mat[50][:, best_sta]
@@ -510,6 +644,7 @@ def get_ecac_rationalization_report(
     dataset: FlightDataset,
     station_type: Literal["RADAR", "DME"] = "RADAR",
     active_view: Literal["VIEW_1", "VIEW_2", "VIEW_3"] = "VIEW_1",
+    target_fir: str = "ALL",
     custom_inactive_ids: tuple[str, ...] | None = None,
     custom_active_ids: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
@@ -517,9 +652,32 @@ def get_ecac_rationalization_report(
     Main evaluation pipeline with disk caching.
     Computes active/deactivated stations, multi-altitude coverage maps (FL50, FL100, FL200, FL300),
     airport ground integrity, and synthetic gap filler placements.
+    Supports either network-wide ECAC evaluation (target_fir='ALL') or any single FIR domain.
     """
-    stations, airports = load_ecac_stations(dataset, station_type=station_type)
-    grid_cells = generate_ecac_grid(step_deg=0.35)
+    fir_poly = None
+    fir_boundary_coords = None
+    fir_bbox = None
+    fir_name = "All ECAC Airspace (Network-Wide)"
+    fir_center = [50.0, 10.0]
+
+    if target_fir and target_fir != "ALL":
+        fir_geom = get_fir_geometry(dataset, target_fir)
+        if fir_geom:
+            fir_poly, fir_boundary_coords, fir_bbox = fir_geom
+            fir_name = ECAC_FIR_REGISTRY.get(target_fir, target_fir)
+            fir_center = [round((fir_bbox[0] + fir_bbox[1]) / 2.0, 3), round((fir_bbox[2] + fir_bbox[3]) / 2.0, 3)]
+
+    stations, airports = load_ecac_stations(
+        dataset,
+        station_type=station_type,
+        fir_poly=fir_poly,
+        fir_bbox=fir_bbox,
+    )
+    grid_cells = generate_ecac_grid(
+        step_deg=0.35,
+        fir_poly=fir_poly,
+        fir_bbox=fir_bbox,
+    )
 
     # 1. Compute or retrieve static baseline views
     static_views = compute_static_rationalization_views(stations, grid_cells, airports)
@@ -667,6 +825,11 @@ def get_ecac_rationalization_report(
     return {
         "station_type": station_type,
         "active_view": active_view,
+        "target_fir": target_fir,
+        "fir_name": fir_name,
+        "fir_boundary_coords": fir_boundary_coords,
+        "fir_center": fir_center,
+        "fir_bounds": list(fir_bbox) if fir_bbox else [ECAC_LAT_MIN, ECAC_LAT_MAX, ECAC_LON_MIN, ECAC_LON_MAX],
         "total_stations_count": len(stations),
         "active_stations_count": active_count,
         "deactivated_stations_count": deactivated_count,

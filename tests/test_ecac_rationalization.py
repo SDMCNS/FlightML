@@ -8,6 +8,8 @@ from flightml.eval.ecac_station_rationalization import (
     compute_static_rationalization_views,
     compute_synthetic_gap_fillers,
     get_ecac_rationalization_report,
+    list_available_ecac_firs,
+    get_fir_geometry,
 )
 from flightml.viz.map_builder import create_ecac_coverage_map
 
@@ -96,3 +98,40 @@ if __name__ == "__main__":
     test_ecac_dme_report_pipeline()
     test_ecac_user_augmentation()
     print("All ECAC rationalization unit tests PASSED successfully!")
+
+
+def test_ecac_single_fir_rationalization():
+    ds = FlightDataset("202510")
+    fir_list = list_available_ecac_firs(ds)
+    assert len(fir_list) >= 10
+    assert fir_list[0][0] == "ALL"
+
+    # Test London FIR (EGTTFIR) Radar rationalization
+    rep_egtt = get_ecac_rationalization_report(
+        ds,
+        station_type="RADAR",
+        active_view="VIEW_1",
+        target_fir="EGTTFIR",
+    )
+    assert rep_egtt["target_fir"] == "EGTTFIR"
+    assert rep_egtt["fir_boundary_coords"] is not None
+    assert len(rep_egtt["fir_boundary_coords"]) > 10
+    assert len(rep_egtt["airports"]) > 0
+    # Every airport returned must have latitude within EGTT bounds [48.8, 55.0]
+    for apt in rep_egtt["airports"]:
+        assert 48.0 <= apt["latitude"] <= 56.0
+
+    # Test map generation for single FIR with boundary
+    folium_map = create_ecac_coverage_map(rep_egtt, selected_fl=200)
+    assert folium_map is not None
+
+    # Test Paris FIR (LFFFFIR) DME rationalization View 2
+    rep_paris = get_ecac_rationalization_report(
+        ds,
+        station_type="DME",
+        active_view="VIEW_2",
+        target_fir="LFFFFIR",
+    )
+    assert rep_paris["target_fir"] == "LFFFFIR"
+    assert rep_paris["active_stations_count"] > 0
+    assert len(rep_paris["airports"]) > 0

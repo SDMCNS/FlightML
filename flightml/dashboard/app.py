@@ -145,7 +145,10 @@ from flightml.eval.airport_ops import get_airport_operations_report, assess_runw
 from flightml.eval.openap_wrap_engine import analyze_flight_wrap_envelope
 from flightml.eval.dme_rnav_coverage import get_dme_rnav_coverage_report
 from flightml.eval.radar_coverage import get_radar_coverage_report
-from flightml.eval.ecac_station_rationalization import get_ecac_rationalization_report
+from flightml.eval.ecac_station_rationalization import (
+    get_ecac_rationalization_report,
+    list_available_ecac_firs,
+)
 from flightml.eval.longitudinal_airspace_modernization import (
     get_vertical_capping_analysis,
     get_fixed_airways_vs_fra_analysis,
@@ -309,6 +312,7 @@ def _cached_ecac_rationalization(
     period: str,
     station_type: str,
     active_view: str,
+    target_fir: str,
     custom_inactive_tuple: tuple[str, ...],
     custom_active_tuple: tuple[str, ...],
 ):
@@ -316,6 +320,7 @@ def _cached_ecac_rationalization(
         get_dataset(period),
         station_type=station_type,
         active_view=active_view,
+        target_fir=target_fir,
         custom_inactive_ids=custom_inactive_tuple if custom_inactive_tuple else None,
         custom_active_ids=custom_active_tuple if custom_active_tuple else None,
     )
@@ -4917,12 +4922,15 @@ with tab_cat_maps:
 
         prefix = station_type.lower()
         view_key = f"{prefix}_ecac_view_{selected_period}"
+        fir_key = f"{prefix}_ecac_fir_{selected_period}"
         fl_key = f"{prefix}_ecac_fl_{selected_period}"
         inact_key = f"{prefix}_ecac_inact_{selected_period}"
         act_key = f"{prefix}_ecac_act_{selected_period}"
 
         if view_key not in st.session_state:
             st.session_state[view_key] = "VIEW_1"
+        if fir_key not in st.session_state:
+            st.session_state[fir_key] = "ALL"
         if fl_key not in st.session_state:
             st.session_state[fl_key] = 200
         if inact_key not in st.session_state:
@@ -4930,8 +4938,28 @@ with tab_cat_maps:
         if act_key not in st.session_state:
             st.session_state[act_key] = []
 
-        # 1. View and Map FL selectors
-        col_v1, col_v2 = st.columns([2, 1])
+        fir_list = list_available_ecac_firs(get_dataset(selected_period))
+        fir_dict = dict(fir_list)
+        fir_ids = [f[0] for f in fir_list]
+        cur_fir_idx = fir_ids.index(st.session_state[fir_key]) if st.session_state[fir_key] in fir_ids else 0
+
+        # 1. FIR Scope, View and Map FL selectors
+        col_v0, col_v1, col_v2 = st.columns([1.5, 1.8, 1.0])
+        with col_v0:
+            chosen_fir = st.selectbox(
+                f"🌍 Airspace Domain / Single FIR ({station_type}):",
+                options=fir_ids,
+                format_func=lambda fid: fir_dict.get(fid, fid),
+                index=cur_fir_idx,
+                key=f"{prefix}_sel_fir_{selected_period}",
+                help="Analyze coverage across all of ECAC network-wide, or isolate and simulate a single FIR and its associated airports."
+            )
+            if chosen_fir != st.session_state[fir_key]:
+                st.session_state[fir_key] = chosen_fir
+                st.session_state[inact_key] = []
+                st.session_state[act_key] = []
+                st.rerun()
+
         with col_v1:
             view_labels = {
                 "VIEW_1": "View 1: Minimum Baseline (≥1 station at FL200+ & ≥1 at FL10 at airports)",
@@ -4939,7 +4967,7 @@ with tab_cat_maps:
                 "VIEW_3": "View 3: Low-Level Infill & Busy Hub Dual (≥1 at FL50+, ≥2 at FL200+, ≥2 at busy hubs ≥500 mv/d at FL10)",
             }
             chosen_view = st.selectbox(
-                f"🎯 Select Static Rationalization View Architecture ({station_type}):",
+                f"🎯 View Architecture ({station_type}):",
                 options=list(view_labels.keys()),
                 format_func=lambda k: view_labels[k],
                 index=list(view_labels.keys()).index(st.session_state[view_key]),
@@ -4956,12 +4984,12 @@ with tab_cat_maps:
             fl_options = [50, 100, 200, 300]
             cur_fl_idx = fl_options.index(st.session_state[fl_key]) if st.session_state[fl_key] in fl_options else 2
             chosen_fl = st.selectbox(
-                f"🗺️ Coverage Map Flight Level ({station_type}):",
+                f"🗺️ Map FL ({station_type}):",
                 options=fl_options,
-                format_func=lambda fl: f"FL{fl} ({fl*100:,} ft MSL)",
+                format_func=lambda fl: f"FL{fl} ({fl*100:,} ft)",
                 index=cur_fl_idx,
                 key=f"{prefix}_sel_fl_{selected_period}",
-                help="View coverage and redundancy levels across ECAC at FL50, FL100, FL200, or FL300."
+                help="View coverage and redundancy levels across the selected domain at FL50, FL100, FL200, or FL300."
             )
             if chosen_fl != st.session_state[fl_key]:
                 st.session_state[fl_key] = chosen_fl
@@ -4969,11 +4997,12 @@ with tab_cat_maps:
 
         # 2. Compute report
         try:
-            with st.spinner(f"Evaluating ECAC {station_type} multi-tier coverage, static rationalization & facility location..."):
+            with st.spinner(f"Evaluating {fir_dict.get(st.session_state[fir_key], st.session_state[fir_key])} {station_type} coverage & rationalization..."):
                 rep = _cached_ecac_rationalization(
                     selected_period,
                     station_type,
                     st.session_state[view_key],
+                    st.session_state[fir_key],
                     tuple(sorted(st.session_state[inact_key])),
                     tuple(sorted(st.session_state[act_key])),
                 )
@@ -5012,7 +5041,7 @@ with tab_cat_maps:
 
         # 4. Map View
         st.markdown("---")
-        st.markdown(f"### 🗺️ ECAC {station_type} Coverage & Redundancy Map (FL{st.session_state[fl_key]})")
+        st.markdown(f"### 🗺️ {rep.get('fir_name', 'ECAC')} {station_type} Coverage & Redundancy Map (FL{st.session_state[fl_key]})")
         col_map_t1, col_map_t2, col_map_t3 = st.columns([1, 1, 2])
         with col_map_t1:
             show_cells = st.checkbox("Show 10×10 NM Cell Grid", value=True, key=f"{prefix}_chk_cells_{selected_period}")
