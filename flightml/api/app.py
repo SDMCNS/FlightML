@@ -223,6 +223,7 @@ def get_top_delay_routes(
 
 @app.get("/api/v1/flights/search")
 def search_flights_endpoint(
+    q: str | None = Query(default=None, description="General search query (callsign, airport, operator, aircraft, ectrl_id)"),
     adep: str | None = Query(default=None, description="Departure airport ICAO (e.g. EGLL)"),
     ades: str | None = Query(default=None, description="Destination airport ICAO (e.g. KORD)"),
     operator: str | None = Query(default=None, description="Airline operator code (e.g. BAW)"),
@@ -235,11 +236,55 @@ def search_flights_endpoint(
     max_dist: float | None = Query(default=None, description="Max distance in nm"),
     min_fl: float | None = Query(default=None, description="Min flight level"),
     max_fl: float | None = Query(default=None, description="Max flight level"),
-    period: str = Query(default="201611", description="Data period ID"),
-    limit: int = Query(default=25, ge=1, le=100),
+    period: str = Query(default="202402", description="Data period ID"),
+    limit: int = Query(default=50, ge=1, le=200),
 ) -> list[dict[str, Any]]:
     """Search and filter flights with human-readable labels across any period."""
     ds = FlightDataset(period=period)
+
+    # If general query string 'q' is passed, parse or apply multi-column match
+    if q and q.strip():
+        query_str = q.strip().upper()
+        # Direct ECTRL ID lookup if integer
+        if query_str.isdigit():
+            single_f = ds.get_flight(int(query_str))
+            if single_f:
+                return [single_f]
+
+        # Multi-attribute query across flights
+        sql = """
+            SELECT 
+                ectrl_id,
+                adep,
+                ades,
+                actual_off_block_time,
+                actual_arrival_time,
+                ac_operator,
+                ac_type,
+                ac_reg,
+                requested_fl,
+                actual_distance_nm,
+                dep_delay_min,
+                arr_delay_min,
+                actual_air_time_min,
+                flight_type,
+                market_segment
+            FROM flights
+            WHERE 
+                adep LIKE ? OR 
+                ades LIKE ? OR 
+                ac_operator LIKE ? OR 
+                ac_type LIKE ? OR 
+                ac_reg LIKE ?
+            ORDER BY actual_off_block_time ASC
+            LIMIT ?;
+        """
+        wild = f"%{query_str}%"
+        df = ds.cursor.execute(sql, [wild, wild, wild, wild, wild, int(limit)]).df()
+        if not df.empty:
+            df["label"] = df.apply(ds.format_flight_label, axis=1)
+        return df.to_dict(orient="records")
+
     df = ds.search_flights(
         adep=adep,
         ades=ades,
@@ -288,20 +333,45 @@ def recurring_series_endpoint(
 
 
 @app.get("/api/v1/flights/{ectrl_id}")
-def get_flight_details(ectrl_id: int) -> dict[str, Any]:
-    ds = get_dataset()
+def get_flight_details(
+    ectrl_id: int,
+    period: str | None = Query(default=None, description="Optional period ID (auto-detects if omitted)"),
+) -> dict[str, Any]:
+    if period:
+        ds = FlightDataset(period=period)
+    else:
+        ds = get_dataset()
+
     flight = ds.get_flight(ectrl_id)
+    if not flight and not period:
+        # Auto-detect across all available periods
+        for p in list_available_periods():
+            if p != ds.period:
+                test_ds = FlightDataset(period=p)
+                test_f = test_ds.get_flight(ectrl_id)
+                if test_f:
+                    ds = test_ds
+                    flight = test_f
+                    break
+
     if not flight:
         raise HTTPException(status_code=404, detail=f"Flight '{ectrl_id}' not found")
 
     trajs = ds.get_trajectory(ectrl_id)
     metrics = analyze_trajectory(trajs["actual"], trajs["planned"])
 
+    actual_waypoints = trajs["actual"].to_dict(orient="records")
+    planned_waypoints = trajs["planned"].to_dict(orient="records")
+
     return {
         "flight": flight,
         "metrics": metrics.to_dict(),
-        "waypoints_actual_count": len(trajs["actual"]),
-        "waypoints_planned_count": len(trajs["planned"]),
+        "waypoints_actual_count": len(actual_waypoints),
+        "waypoints_planned_count": len(planned_waypoints),
+        "actual_waypoints": actual_waypoints,
+        "actual_trajectory": actual_waypoints,
+        "planned_waypoints": planned_waypoints,
+        "planned_trajectory": planned_waypoints,
     }
 
 
@@ -386,9 +456,14 @@ def get_fir_saturation(
 
 
 @app.get("/api/v1/periods")
-def get_periods() -> dict[str, list[str]]:
+def get_periods() -> dict[str, Any]:
     """List all available ingested historical Eurocontrol periods."""
-    return {"available_periods": list_available_periods()}
+    periods = list_available_periods()
+    return {
+        "periods": periods,
+        "available_periods": periods,
+        "total_periods": len(periods),
+    }
 
 
 @app.get("/api/v1/periods/compare")

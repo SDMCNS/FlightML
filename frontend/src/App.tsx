@@ -53,8 +53,12 @@ export const App: React.FC = () => {
         const list = await searchFlights(activePeriod, searchQuery);
         if (!cancelled) {
           setFlights(list);
-          if (list.length > 0 && !selectedFlight) {
-            setSelectedFlight(list[0]);
+          if (list.length > 0) {
+            // Find existing selection in new list, else select first flight
+            const found = selectedFlight && list.find(f => f.ectrl_id === selectedFlight.ectrl_id);
+            setSelectedFlight(found || list[0]);
+          } else {
+            setSelectedFlight(null);
           }
         }
       } finally {
@@ -76,7 +80,7 @@ export const App: React.FC = () => {
         return;
       }
       try {
-        const pts = await fetchFlightTrajectory(activePeriod, selectedFlight.ectrl_id);
+        const pts = await fetchFlightTrajectory(selectedFlight.ectrl_id, activePeriod);
         if (!cancelled) {
           setWaypoints(pts);
         }
@@ -140,6 +144,7 @@ export const App: React.FC = () => {
               selectedFlight={selectedFlight}
               onSelectFlight={setSelectedFlight}
               waypoints={waypoints}
+              period={activePeriod}
               isLoading={isLoading}
             />
           )}
