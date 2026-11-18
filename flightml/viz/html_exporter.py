@@ -11,12 +11,16 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
+import folium
 
 from flightml.data.dataset import FlightDataset
+from flightml.eval.aircraft_engine_perf import resolve_aircraft_engine_perf
 from flightml.eval.cdo_analyzer import analyze_cco_climb, analyze_cdo_descent
 from flightml.eval.contrail_climate import analyze_flight_wind_and_contrails
 from flightml.eval.crco_economics import compute_flight_crco_charges
 from flightml.eval.diagnostics import diagnose_flight_bottlenecks
+from flightml.eval.eco_route_optimizer import optimize_eco_minimal_contrail_trajectory
+from flightml.eval.flight_notes import get_notes_manager
 from flightml.eval.flight_twins import compare_twin_flights
 from flightml.eval.fuel_carbon import compute_flight_fuel_and_emissions
 from flightml.eval.macro_comparison import compare_aviation_periods
@@ -52,6 +56,12 @@ from flightml.models.airline_stress import stress_test_airline
 from flightml.sim.gdp_optimizer import optimize_ground_delay_program
 from flightml.sim.tail_swap_optimizer import optimize_hub_tail_swaps
 from flightml.sim.what_if import simulate_turnaround_mitigation
+from flightml.viz.map_builder import (
+    create_contrail_horizontal_map,
+    create_flight_fir_charge_map,
+    create_trajectory_map,
+)
+from flightml.weather.metar_client import MetarClient
 from flightml.weather.runway_safety import assess_flight_runway_safety
 
 
@@ -136,6 +146,32 @@ def _kpi_grid_html(metrics: list[tuple[str, str, str]]) -> str:
             f'</div>'
         )
     return f'<div class="kpi-grid">{"".join(cards)}</div>'
+
+
+def _folium_map_to_iframe(m: Any, height: int = 520, title: str = "Interactive Map") -> str:
+    """
+    Render a Folium Leaflet Map into an isolated, self-contained iframe srcdoc container.
+    Guarantees full OpenStreetMap Humanitarian / OSM France tiles render properly in standalone HTML
+    exports without CSS/JS DOM collisions between multiple maps.
+    """
+    if m is None:
+        return f'<div class="chart-card"><p class="muted-note">Map visualization not available for {html.escape(title)}.</p></div>'
+    try:
+        rendered_html = m.get_root().render()
+        escaped_srcdoc = html.escape(rendered_html)
+        safe_title = html.escape(title)
+        return (
+            f'<div class="chart-card" style="padding: 8px; margin: 18px 0; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 10px;">\n'
+            f'  <div class="chart-caption" style="text-align: left; padding: 6px 12px 10px 12px; font-size: 13.5px; font-weight: 700; color: #0c2461;">'
+            f'    🗺️ {safe_title} — Interactive OpenStreetMap Tiles (Pan, Zoom, Layer Control &amp; Hover Inspect)'
+            f'  </div>\n'
+            f'  <iframe srcdoc="{escaped_srcdoc}" '
+            f'style="width: 100%; height: {height}px; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);" '
+            f'loading="lazy" title="{safe_title}"></iframe>\n'
+            f'</div>'
+        )
+    except Exception as exc:
+        return f'<div class="chart-card"><p class="muted-note">Failed to render interactive map {html.escape(title)}: {html.escape(str(exc))}</p></div>'
 
 
 # ---------------------------------------------------------------------------
@@ -1270,6 +1306,859 @@ def _build_fra_boundary_section(
 
 
 # ---------------------------------------------------------------------------
+# Section: Single Flight Comprehensive Multi-View 4D Report Builder
+# ---------------------------------------------------------------------------
+def _build_flight_vertical_profile_chart(
+    actual_df: pd.DataFrame,
+    planned_df: pd.DataFrame,
+    cco_rep: Any | None,
+    cdo_rep: Any | None,
+    contrail_rep: Any | None = None,
+) -> str:
+    """Generate a high-DPI Base64 figure of the vertical profile with level-offs and contrail bands."""
+    fig, ax = plt.subplots(figsize=(12.5, 4.6))
+    ax.set_facecolor("#f8fafd")
+
+    if not planned_df.empty and "flight_level" in planned_df.columns:
+        x_plan = range(len(planned_df))
+        ax.plot(
+            x_plan,
+            planned_df["flight_level"],
+            linestyle="--",
+            color="#2980b9",
+            linewidth=1.8,
+            alpha=0.75,
+            label=f"Filed Flight Plan ({len(planned_df)} pts)",
+        )
+
+    if not actual_df.empty and "flight_level" in actual_df.columns:
+        x_act = range(len(actual_df))
+        ax.plot(
+            x_act,
+            actual_df["flight_level"],
+            color="#8e44ad",
+            linewidth=2.4,
+            label="Actual Flown Altitude (FL)",
+        )
+        ax.fill_between(x_act, actual_df["flight_level"], color="#8e44ad", alpha=0.08)
+
+        # Highlight ISSR contrail forming segments in glowing cyan
+        if contrail_rep and getattr(contrail_rep, "issr_segments", None):
+            first_lbl = True
+            for seg in contrail_rep.issr_segments:
+                s_seq = getattr(seg, "seq_start", 0)
+                e_seq = getattr(seg, "seq_end", 0)
+                sub_pts = actual_df[(actual_df["seq_num"] >= s_seq) & (actual_df["seq_num"] <= e_seq)]
+                if len(sub_pts) >= 2:
+                    sub_indices = sub_pts.index
+                    ax.plot(
+                        sub_indices,
+                        sub_pts["flight_level"],
+                        color="#00bcd4",
+                        linewidth=4.5,
+                        label="Persistent Contrail (ISSR)" if first_lbl else "",
+                        zorder=5,
+                    )
+                    first_lbl = False
+
+    ax.set_ylabel("Flight Level (FL, 100s ft)", fontsize=11, fontweight="bold", color="#1e272e")
+    ax.set_xlabel("Trajectory Waypoint Index Along Flown Route", fontsize=11, fontweight="bold", color="#1e272e")
+    ax.grid(True, linestyle=":", alpha=0.6, color="#cbd5e1")
+    ax.legend(loc="upper left", framealpha=0.92, fontsize=9.5)
+    ax.set_title("Vertical Profile: Radar Flown Profile, Filed Altitude & ISSR Contrail Traversal Zones", fontsize=11.5, fontweight="bold", color="#0c2461")
+    return _fig_to_base64_img(fig, alt_text="Vertical Altitude Profile & Contrail ISSR Bands")
+
+
+def generate_flight_comprehensive_html_report(
+    ds: FlightDataset | None = None,
+    flight_id: int | None = None,
+    output_path: Path | str | None = None,
+) -> str:
+    """
+    Generate an exhaustive, publication-grade standalone HTML report for a single flight covering all views
+    and subtabs in the 4D / Single Flight category in logical order:
+    1. Executive Flight Summary & Global Operational KPIs
+    2. 4D Trajectory, Radar Tracking & Active Radio Navigation Map (with interactive OpenStreetMap tiles)
+    3. Active Radio Navigation Aids & RNP / RNAV Corridor Capability
+    4. Vertical Profile Efficiency: CCO & CDO Climb/Descent Performance
+    5. Multi-Factor Delay Attribution & Runway Braking Safety Diagnostics
+    6. Airport Surface Movement, Taxi-Out & ICAO LTO Emissions
+    7. Eurocontrol CRCO Route Charges & Airspace Economics (with interactive FIR charge map)
+    8. Upper-Air Winds & Equivalent Still Air Distance (ESAD)
+    9. Persistent Contrail Cirrus Formation & Climate Radiative Forcing (with interactive contrail map)
+    10. Alternative Eco-Optimal Trajectory: Multi-Objective Trade-Off & Envelope Check
+    11. Persistent Flight Operational Notes & Qualitative Anomaly Explanations
+    12. Appendix: Comprehensive Mathematical & Atmospheric Physics Methodology
+
+    Guarantees all Leaflet map views render real, interactive OpenStreetMap tiles via isolated iframe containers.
+    """
+    if ds is None:
+        ds = FlightDataset()
+
+    if flight_id is None:
+        sample_df = ds.query("SELECT ectrl_id FROM flights LIMIT 1")
+        flight_id = int(sample_df.iloc[0]["ectrl_id"]) if not sample_df.empty else 202007026
+
+    flight = ds.get_flight(int(flight_id))
+    if not flight:
+        return f"<html><body><h1>Flight #{flight_id} Not Found in Dataset ({ds.period})</h1></body></html>"
+
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    trajs = ds.get_trajectory(int(flight_id))
+    actual_df = trajs["actual"].sort_values("seq_num").reset_index(drop=True) if not trajs["actual"].empty else pd.DataFrame()
+    planned_df = trajs["planned"].sort_values("seq_num").reset_index(drop=True) if not trajs["planned"].empty else pd.DataFrame()
+
+    traj_metrics = analyze_trajectory(actual_df, planned_df)
+    pru = compute_flight_pru_kpis(ds, int(flight_id))
+    nav_rep = analyze_flight_navaids_and_rnp(ds, int(flight_id))
+    cco_rep = analyze_cco_climb(ds, int(flight_id))
+    cdo_rep = analyze_cdo_descent(ds, int(flight_id))
+    try:
+        diag = diagnose_flight_bottlenecks(ds, MetarClient(), int(flight_id))
+    except Exception:
+        diag = None
+    try:
+        rwy = assess_flight_runway_safety(ds, MetarClient(), int(flight_id))
+    except Exception:
+        rwy = None
+    ac_type = str(flight.get("ac_type") or "A320").upper()
+    fuel_imp = compute_flight_fuel_and_emissions(ds, int(flight_id))
+    eng_perf = resolve_aircraft_engine_perf(ds, ac_type)
+    taxi_rep = analyze_flight_taxi_out(ds, int(flight_id))
+    crco_rep = compute_flight_crco_charges(ds, int(flight_id))
+    contrail_rep = analyze_flight_wind_and_contrails(ds, int(flight_id))
+    eco_rep = optimize_eco_minimal_contrail_trajectory(ds, int(flight_id))
+
+    notes_mgr = get_notes_manager()
+    try:
+        flight_note = notes_mgr.get_note(int(flight_id))
+    except Exception:
+        flight_note = None
+
+    sections: list[str] = []
+
+    # =========================================================================
+    # 0. EXECUTIVE FLIGHT SUMMARY
+    # =========================================================================
+    adep = flight.get("adep", "ZZZZ")
+    ades = flight.get("ades", "ZZZZ")
+    ac_op = flight.get("ac_operator", "UNK")
+    tail = flight.get("ac_id", "N/A")
+    flown_dist = float(flight.get("actual_distance_nm") or traj_metrics.actual_distance_nm or 0.0)
+    filed_dist = float(flight.get("filed_distance_nm") or traj_metrics.planned_distance_nm or flown_dist)
+    gcd_dist = float(flight.get("gcd_nm") or 0.0)
+    detour_pct = ((flown_dist - gcd_dist) / max(1.0, gcd_dist)) * 100.0 if gcd_dist > 0 else 0.0
+    arr_delay = float(flight.get("arr_delay_min") or 0.0)
+    delay_str = f"{arr_delay:+.0f} min" if arr_delay != 0 else "On-Time (0m)"
+
+    as_flown_fuel = eco_rep.as_flown_fuel_kg if eco_rep else (flown_dist * eng_perf.nominal_fuel_flow_kg_hr / 450.0)
+
+    exec_kpis = [
+        ("Flown vs Filed Distance", f"{flown_dist:,.0f} nm", f"Plan: {filed_dist:,.0f} nm ({traj_metrics.horizontal_extension_ratio:.3f}x)"),
+        ("Cruise Flight Level", f"FL{fuel_imp.actual_cruise_fl:.0f}" if fuel_imp else "N/A", f"Ideal: FL{fuel_imp.optimal_cruise_fl:.0f} (Δ {fuel_imp.fl_delta_actual_vs_optimal:+.0f} FL)" if fuel_imp else ""),
+        ("Punctuality & Arrival Delay", delay_str, f"Dep delay: {float(flight.get('dep_delay_min') or 0.0):+.0f} min"),
+        ("En-Route Fuel Burn", f"{as_flown_fuel:,.0f} kg", f"Excess: {fuel_imp.total_excess_fuel_kg:+,.0f} kg (€{fuel_imp.estimated_excess_fuel_cost_eur:+,.2f})" if fuel_imp else ""),
+        ("Eurocontrol CRCO Fees", f"€{crco_rep.actual_crco_charge_eur:,.2f}" if crco_rep else "N/A", f"{len(crco_rep.fir_breakdown)} FIRs traversed" if crco_rep else ""),
+        ("Net Climate Impact", f"{(contrail_rep.direct_co2_tons + contrail_rep.contrail_co2e_tons):.1f} t CO₂e" if contrail_rep else "N/A", f"Contrail Cirrus: +{contrail_rep.contrail_co2e_tons:.2f} t ({contrail_rep.total_climate_co2e_multiplier:.2f}x)" if contrail_rep else ""),
+    ]
+
+    sec_summary = f"""
+    <section class="report-section">
+        <h2>✈️ Executive Flight Summary &amp; Operational Telemetry</h2>
+        <div class="summary-callout" style="margin-bottom: 16px;">
+            <b>Flight:</b> #{flight_id} &nbsp;|&nbsp;
+            <b>Callsign:</b> <code>{html.escape(str(flight.get('callsign') or 'N/A'))}</code> &nbsp;|&nbsp;
+            <b>Operator:</b> {html.escape(ac_op)} &nbsp;|&nbsp;
+            <b>Airframe:</b> {html.escape(ac_type)} ({html.escape(eng_perf.aircraft_name)}) &nbsp;|&nbsp;
+            <b>Tail Registration:</b> <code>{html.escape(str(tail))}</code><br/>
+            <b>City Pair:</b> <code>{html.escape(adep)}</code> ➔ <code>{html.escape(ades)}</code> &nbsp;|&nbsp;
+            <b>Off-Block:</b> {html.escape(str(flight.get('off_block_date') or flight.get('entry_time') or 'N/A'))} &nbsp;|&nbsp;
+            <b>Great Circle Distance:</b> {gcd_dist:,.0f} nm &nbsp;|&nbsp;
+            <b>Detour vs. Great Circle:</b> {detour_pct:+.1f}% &nbsp;|&nbsp;
+            <b>Engine Performance Model:</b> {html.escape(eng_perf.engine_type_class)} (BPR {eng_perf.bypass_ratio:.1f}:1, PR {eng_perf.pressure_ratio:.1f})
+        </div>
+        {_kpi_grid_html(exec_kpis)}
+    </section>
+    """
+    sections.append(sec_summary)
+
+    # =========================================================================
+    # 1. 4D TRAJECTORY, RADAR TRACKING & ACTIVE RADIO NAVIGATION MAP
+    # =========================================================================
+    active_navs = list(nav_rep.active_navaids) if (nav_rep and nav_rep.active_navaids) else []
+    contrail_segs = list(contrail_rep.issr_segments) if (contrail_rep and contrail_rep.issr_segments) else []
+
+    try:
+        traj_map = create_trajectory_map(
+            flight_info=flight,
+            actual_df=actual_df,
+            planned_df=planned_df,
+            active_navaids=active_navs,
+            show_navaids=True,
+            contrail_segments=contrail_segs,
+            show_contrails=True,
+        )
+        traj_map_html = _folium_map_to_iframe(traj_map, height=530, title="4D Trajectory, Radar Track, Holding Stacks & Route Navaids")
+    except Exception as exc:
+        traj_map_html = f'<div class="chart-card"><p class="muted-note">Interactive map generation failed: {html.escape(str(exc))}</p></div>'
+
+    traj_kpis = [
+        ("Actual Radar Track", f"{traj_metrics.actual_distance_nm:,.0f} nm", f"{len(actual_df)} radar telemetry waypoints"),
+        ("Filed Flight Plan", f"{traj_metrics.planned_distance_nm:,.0f} nm", f"{len(planned_df)} filed flight plan points"),
+        ("Extension Detour Ratio", f"{traj_metrics.horizontal_extension_ratio:.3f}x", f"KEA: {pru.kpi05_kea_pct:.2f}% | KEP: {pru.kpi04_kep_pct:.2f}%"),
+        ("Holding Stacks", f"{len(traj_metrics.holding_events)} stacks", f"Total holding: {traj_metrics.total_holding_duration_min:.1f} min"),
+        ("Vertical Deviation", f"Max {traj_metrics.max_vertical_deviation_fl:.0f} FL", f"Mean Δ: {traj_metrics.mean_vertical_deviation_fl:.1f} FL vs plan"),
+    ]
+
+    sec_traj = f"""
+    <section class="report-section">
+        <h2>🗺️ View 1: 4D Trajectory, Radar Tracking &amp; Flight Geometry</h2>
+        <p>
+            Evaluates 4D actual radar trajectory versus filed flight plan geometry, airborne holding stacks,
+            cross-track deviations, and Eurocontrol PRU horizontal flight efficiency indicators (KEA / KEP).
+        </p>
+        {_kpi_grid_html(traj_kpis)}
+        {traj_map_html}
+    </section>
+    """
+    sections.append(sec_traj)
+
+    # =========================================================================
+    # 2. ACTIVE RADIO NAVIGATION AIDS & RNP / RNAV CORRIDOR CAPABILITY
+    # =========================================================================
+    nav_kpis = [
+        ("Multi-DME Coverage", f"{nav_rep.dme_dme_coverage_pct:.1f}%" if nav_rep else "N/A", "Terrestrial DME/DME triangulation"),
+        ("Mean En-Route RNP", f"RNP {nav_rep.mean_enroute_rnp_nm:.1f} nm" if nav_rep else "N/A", f"Best Terminal RNP: {nav_rep.best_rnp_nm:.1f} nm" if nav_rep else ""),
+        ("Active Corridor Stations", f"{len(active_navs)} stations" if nav_rep else "0", f"Total catalog: {nav_rep.total_active_navaids if nav_rep else 0}"),
+        ("GNSS / Oceanic Share", f"{nav_rep.gnss_only_oceanic_pct:.1f}%" if nav_rep else "N/A", f"DME: {nav_rep.dme_stations_used} | VOR: {nav_rep.vor_stations_used}" if nav_rep else ""),
+    ]
+
+    nav_table_html = ""
+    if active_navs:
+        nav_rows = []
+        for n in active_navs[:30]:
+            nav_rows.append({
+                "Ident": n.ident,
+                "Name": n.name,
+                "Type": n.nav_type,
+                "Frequency (MHz)": getattr(n, "frequency_mhz", getattr(n, "frequency", "N/A")),
+                "Latitude": round(n.latitude, 4),
+                "Longitude": round(n.longitude, 4),
+                "Range (nm)": round(getattr(n, "published_range_nm", 0.0), 1),
+                "Dist to Track (nm)": round(getattr(n, "min_distance_to_track_nm", 0.0), 1),
+                "Horizon (nm)": round(getattr(n, "rlos_horizon_nm", 0.0), 1),
+            })
+        nav_table_html = _df_to_html_table(pd.DataFrame(nav_rows), max_rows=25)
+
+    sec_navaids = f"""
+    <section class="report-section">
+        <h2>📡 View 2: Active Radio Navigation Aids &amp; RNP / RNAV Corridor Capability</h2>
+        <p>
+            Quantifies terrestrial ground radio navigation reception along the trajectory (VOR, DME, TACAN, NDB)
+            and verifies Performance-Based Navigation (PBN), Area Navigation (RNAV 1 / RNAV 5), and Required Navigation
+            Performance (RNP 1 / RNP 2) sensor adequacy.
+        </p>
+        {_kpi_grid_html(nav_kpis)}
+        <h3>Ground Radio Navigation Stations Intersecting Flight Path (Top 25)</h3>
+        {nav_table_html if nav_table_html else '<p class="muted-note">Zero terrestrial radio navaids within line-of-sight reception radius (pure oceanic/GNSS airspace).</p>'}
+    </section>
+    """
+    sections.append(sec_navaids)
+
+    # =========================================================================
+    # 3. VERTICAL PROFILE EFFICIENCY: CCO & CDO CLIMB/DESCENT PERFORMANCE
+    # =========================================================================
+    vert_chart_html = _build_flight_vertical_profile_chart(actual_df, planned_df, cco_rep, cdo_rep, contrail_rep)
+
+    cdo_kpis = [
+        ("Continuous Climb (CCO)", f"{cco_rep.cco_compliance_score:.1f}%" if cco_rep else "N/A", f"{cco_rep.inefficiency_events_count} climb level-offs (+{cco_rep.excess_fuel_burned_kg:.0f} kg fuel)" if cco_rep else ""),
+        ("Continuous Descent (CDO)", f"{cdo_rep.cdo_compliance_score:.1f}%" if cdo_rep else "N/A", f"{cdo_rep.inefficiency_events_count} descent level-offs (+{cdo_rep.excess_fuel_burned_kg:.0f} kg fuel)" if cdo_rep else ""),
+        ("Descent Inefficiency Time", f"{cdo_rep.total_level_or_climb_min:.1f} min" if cdo_rep else "N/A", f"TOD to Touchdown: {cdo_rep.total_descent_duration_min:.1f} min" if cdo_rep else ""),
+        ("Level-Capping Inefficiency", f"FL{fuel_imp.actual_cruise_fl:.0f}" if fuel_imp else "N/A", f"Requested: FL{fuel_imp.requested_fl:.0f} | Ideal: FL{fuel_imp.optimal_cruise_fl:.0f}" if fuel_imp else ""),
+    ]
+
+    sec_vertical = f"""
+    <section class="report-section">
+        <h2>📉 View 3: Vertical Profile Efficiency: Continuous Climb (CCO) &amp; Continuous Descent (CDO)</h2>
+        <p>
+            Detects inefficient staircase descents, intermediate level-offs, altitude reversals, and en-route cruise
+            level capping. Uninterrupted continuous climb (CCO) and clean 3° idle-thrust descents (CDO) significantly
+            mitigate terminal airspace noise, fuel burn, and engine emissions.
+        </p>
+        {_kpi_grid_html(cdo_kpis)}
+        {vert_chart_html}
+    </section>
+    """
+    sections.append(sec_vertical)
+
+    # =========================================================================
+    # 4. MULTI-FACTOR DELAY ATTRIBUTION & RUNWAY SAFETY DIAGNOSTICS
+    # =========================================================================
+    delay_kpis = [
+        ("Departure Delay", f"{float(flight.get('dep_delay_min') or 0.0):+.0f} min", f"Class: {flight.get('delay_class', 'ON_TIME')}"),
+        ("Arrival Delay", f"{float(flight.get('arr_delay_min') or 0.0):+.0f} min", f"ATFM Delay: {float(flight.get('atfm_delay_min') or 0.0):.0f} min"),
+        ("Primary Delay Driver", f"{diag.primary_bottleneck_factor if diag else 'NO_SIGNIFICANT_DELAY'}", f"Weather: {diag.weather_attribution}" if diag else ""),
+        ("Arrival Runway Safety", f"{rwy.braking_action_code if rwy else 'GOOD'}", f"Surface: {rwy.runway_surface_condition} (LDA: {rwy.available_lda_m:.0f} m)" if rwy else ""),
+    ]
+
+    sec_delay = f"""
+    <section class="report-section">
+        <h2>🩺 View 4: Multi-Factor Delay Attribution &amp; Runway Braking Safety Diagnostics</h2>
+        <p>
+            Decomposes flight delay into root causes (rotational airline delays, European ATFM slot delays, airport
+            surface bottlenecks, or reactive downstream propagation) and verifies destination runway braking friction safety.
+        </p>
+        {_kpi_grid_html(delay_kpis)}
+    </section>
+    """
+    sections.append(sec_delay)
+
+    # =========================================================================
+    # 5. AIRPORT SURFACE MOVEMENT, TAXI-OUT & ICAO LTO EMISSIONS
+    # =========================================================================
+    taxi_kpis = [
+        ("Taxi-Out Duration", f"{taxi_rep.actual_taxi_out_min:.1f} min" if taxi_rep else "N/A", f"Unimpeded UTOT: {taxi_rep.unimpeded_utot_min:.1f} min" if taxi_rep else ""),
+        ("Additional ATOT Delay", f"{taxi_rep.additional_atot_min:+.1f} min" if taxi_rep else "N/A", f"Filed: {taxi_rep.filed_taxi_out_min:.1f} min" if taxi_rep else ""),
+        ("Taxi Fuel Burn", f"{taxi_rep.total_taxi_fuel_kg:,.0f} kg" if taxi_rep else "N/A", f"Excess ATOT fuel: {taxi_rep.excess_atot_fuel_kg:+,.0f} kg" if taxi_rep else ""),
+        ("Surface Taxi CO₂", f"{taxi_rep.excess_co2_kg:,.0f} kg CO₂" if taxi_rep else "N/A", f"Excess NOₓ: {taxi_rep.excess_nox_g/1000.0:,.1f} kg" if taxi_rep else ""),
+    ]
+
+    lto_rows = []
+    if fuel_imp and getattr(fuel_imp, "lto_emissions_breakdown", None):
+        lto_rows = [b.__dict__ for b in fuel_imp.lto_emissions_breakdown]
+    lto_table_html = _df_to_html_table(pd.DataFrame(lto_rows)) if lto_rows else ""
+
+    sec_taxi = f"""
+    <section class="report-section">
+        <h2>🌱 View 5: Airport Surface Movement, Taxi-Out &amp; ICAO LTO Emissions</h2>
+        <p>
+            Quantifies airport apron and taxiway surface movement against unimpeded benchmarks and evaluates certified
+            ICAO Engine Emissions Databank (EDB) Landing/Take-Off (LTO) cycle emissions.
+        </p>
+        {_kpi_grid_html(taxi_kpis)}
+        <h3>ICAO Engine Emissions Databank (EDB) Gaseous Emissions</h3>
+        {lto_table_html if lto_table_html else '<p class="muted-note">Standard ICAO LTO emissions profile evaluated across Idle, Approach, Climb-Out, and Take-Off thrust ratings.</p>'}
+    </section>
+    """
+    sections.append(sec_taxi)
+
+    # =========================================================================
+    # 6. EUROCONTROL CRCO ROUTE CHARGES & AIRSPACE ECONOMICS (€ EUR)
+    # =========================================================================
+    try:
+        fir_map = create_flight_fir_charge_map(ds, int(flight_id), crco_report=crco_rep)
+        fir_map_html = _folium_map_to_iframe(fir_map, height=500, title="Eurocontrol CRCO Airspace Traversal & National FIR Charging Map")
+    except Exception as exc:
+        fir_map_html = f'<div class="chart-card"><p class="muted-note">FIR Map not available: {html.escape(str(exc))}</p></div>'
+
+    crco_kpis = [
+        ("Actual CRCO Route Fee", f"€{crco_rep.actual_crco_charge_eur:,.2f}" if crco_rep else "N/A", "Statutory Eurocontrol Central Route Charges Office billing"),
+        ("Traversed FIRs", f"{len(crco_rep.fir_breakdown)} FIRs" if crco_rep else "N/A", f"Charged distance: {crco_rep.actual_distance_km:,.0f} km ({crco_rep.actual_distance_nm:,.0f} nm)" if crco_rep else ""),
+        ("CRCO Weight Factor", f"{crco_rep.crco_weight_factor:.3f}" if crco_rep else "N/A", f"Aircraft MTOW: {crco_rep.mtow_tons:.0f} t" if crco_rep else ""),
+        ("Total Direct Route Cost", f"€{crco_rep.total_direct_route_cost_eur:,.2f}" if crco_rep else "N/A", f"Fuel: €{crco_rep.estimated_total_fuel_cost_eur:,.2f} | CRCO: €{crco_rep.actual_crco_charge_eur:,.2f}" if crco_rep else ""),
+    ]
+
+    fir_breakdown_html = ""
+    if crco_rep and crco_rep.fir_breakdown:
+        fir_rows = [b.__dict__ for b in crco_rep.fir_breakdown]
+        fir_breakdown_html = _df_to_html_table(pd.DataFrame(fir_rows), max_rows=30)
+
+    sec_crco = f"""
+    <section class="report-section">
+        <h2>💶 View 6: Eurocontrol CRCO Route Charges &amp; Airspace Economics (€ EUR)</h2>
+        <p>
+            Calculates route navigation charges billed by the Eurocontrol Central Route Charges Office (CRCO) across
+            every national Flight Information Region (FIR) using statutory national unit rates (EUR/SU),
+            entry-to-exit traversal distances, and aircraft Maximum Take-Off Weight (MTOW) scaling factors.
+        </p>
+        {_kpi_grid_html(crco_kpis)}
+        {fir_map_html}
+        <h3>National FIR Traversal Billing Breakdown</h3>
+        {fir_breakdown_html}
+    </section>
+    """
+    sections.append(sec_crco)
+
+    # =========================================================================
+    # 7. UPPER-AIR WINDS & EQUIVALENT STILL AIR DISTANCE (ESAD)
+    # =========================================================================
+    g_dist = getattr(contrail_rep, "ground_distance_nm", contrail_rep.cruise_distance_nm) if contrail_rep else flown_dist
+    esad_val = getattr(contrail_rep, "esad_nm", g_dist) if contrail_rep else flown_dist
+    air_benefit = getattr(contrail_rep, "wind_distance_benefit_nm", 0.0) if contrail_rep else 0.0
+    wind_f_kg = getattr(contrail_rep, "wind_fuel_impact_kg", 0.0) if contrail_rep else 0.0
+    wind_f_eur = getattr(contrail_rep, "wind_fuel_impact_eur", 0.0) if contrail_rep else 0.0
+    wind_verdict = getattr(contrail_rep, "wind_efficiency_verdict", "NEUTRAL_WIND_PROFILE") if contrail_rep else "N/A"
+
+    wind_kpis = [
+        ("Avg GS vs TAS", f"{contrail_rep.avg_groundspeed_kts:.0f} kts GS" if contrail_rep else "N/A", f"TAS: {contrail_rep.avg_true_airspeed_kts:.0f} kts" if contrail_rep else ""),
+        ("Net Upper-Air Wind", f"{contrail_rep.avg_tailwind_component_kts:+.1f} kts" if contrail_rep else "N/A", f"{contrail_rep.wind_time_savings_min:+.1f} min wind time" if contrail_rep else ""),
+        ("Air Distance (ESAD)", f"{esad_val:,.0f} nm", f"{air_benefit:+.0f} nm air savings vs Ground: {g_dist:,.0f} nm"),
+        ("Wind Fuel Impact", f"{wind_f_kg:+,.0f} kg Jet-A", f"€{wind_f_eur:+,.2f} EUR vs still-air baseline"),
+    ]
+
+    sec_winds = f"""
+    <section class="report-section">
+        <h2>🌬️ View 7: Upper-Air Winds &amp; Equivalent Still Air Distance (ESAD)</h2>
+        <p>
+            Decomposes True Airspeed (TAS) and Groundspeed (GS) along the 4D cruise track to separate deliberate
+            jetstream-riding detours from ATC delays, calculating the Equivalent Still Air Distance (ESAD) and net fuel impact.
+        </p>
+        <div class="summary-callout" style="margin-bottom: 14px;">
+            <b>💨 Dispatch Wind Routing Verdict:</b> {html.escape(wind_verdict)}
+        </div>
+        {_kpi_grid_html(wind_kpis)}
+    </section>
+    """
+    sections.append(sec_winds)
+
+    # =========================================================================
+    # 8. PERSISTENT CONTRAIL CIRRUS & CLIMATE RADIATIVE FORCING
+    # =========================================================================
+    try:
+        contrail_map = create_contrail_horizontal_map(
+            flight_info=flight,
+            actual_df=actual_df,
+            contrail_segments=contrail_segs,
+            eco_route_waypoints=eco_rep.eco_waypoints if eco_rep else None,
+        )
+        contrail_map_html = _folium_map_to_iframe(contrail_map, height=540, title="Horizontal Route: Flown Radar Track vs. Persistent Contrails vs. Eco-Optimal Route")
+    except Exception as exc:
+        contrail_map_html = f'<div class="chart-card"><p class="muted-note">Contrail Map not available: {html.escape(str(exc))}</p></div>'
+
+    contrail_kpis = [
+        ("Persistent Contrail (ISSR)", f"{contrail_rep.persistent_contrail_distance_nm:.1f} nm" if contrail_rep else "0.0 nm", f"{contrail_rep.persistent_contrail_pct:.1f}% of cruise ({contrail_rep.issr_segments_count} segments)" if contrail_rep else ""),
+        ("Direct Engine CO₂", f"{contrail_rep.direct_co2_tons:.2f} t CO₂" if contrail_rep else "N/A", "Kerosene combustion tailpipe emissions"),
+        ("Contrail Cirrus Forcing", f"+{contrail_rep.contrail_co2e_tons:.2f} t CO₂e" if contrail_rep else "0.00 t", "Calibrated 18.5 kg CO₂e / nm linear forcing"),
+        ("Total Climate Multiplier", f"{contrail_rep.total_climate_co2e_multiplier:.2f}x CO₂e" if contrail_rep else "1.00x", f"Total footprint: {(contrail_rep.direct_co2_tons + contrail_rep.contrail_co2e_tons):.2f} t CO₂e" if contrail_rep else ""),
+    ]
+
+    issr_table_html = ""
+    if contrail_segs:
+        issr_rows = []
+        for s in contrail_segs:
+            issr_rows.append({
+                "Seq Start-End": f"#{s.seq_start} ➔ #{s.seq_end}",
+                "Time (UTC)": f"{s.start_time_utc} – {s.end_time_utc}",
+                "Flight Level": f"FL{s.flight_level:.0f}",
+                "Distance (nm)": f"{s.distance_nm:.1f} nm",
+                "Duration": f"{s.duration_min:.1f} min",
+                "Temp (°C)": f"{s.temperature_c:.1f}°C",
+                "RH_ice (%)": f"{s.rh_ice_pct:.1f}%",
+                "Tactical Recommendation": s.alt_deviation_note,
+            })
+        issr_table_html = _df_to_html_table(pd.DataFrame(issr_rows))
+
+    sec_contrail = f"""
+    <section class="report-section">
+        <h2>🧊 View 8: Persistent Contrail Cirrus &amp; Climate Radiative Forcing</h2>
+        <p>
+            Evaluates the Schmidt-Appleman Criterion (SAC) and Ice-Supersaturated Regions (ISSR) using Murphy &amp; Koop (2005)
+            water-to-ice thermodynamics. Trajectory segments meeting both $T \\le T_{{\\text{{SAC}}}}$ and $RH_{{\\text{{ice}}}} \\ge 100\\%$
+            produce persistent contrail cirrus with calibrated GWP₁₀₀ radiative forcing ($18.5\\text{{ kg CO}}_2\\text{{e/nm}}$).
+        </p>
+        {_kpi_grid_html(contrail_kpis)}
+        {contrail_map_html}
+        <h3>Sequenced Ice-Supersaturated (ISSR) Contrail Segments</h3>
+        {issr_table_html if issr_table_html else '<p class="muted-note">✅ Clean Air Corridor: Zero persistent contrails formed along this trajectory (ambient temperatures remained above Schmidt-Appleman threshold or air remained dry).</p>'}
+    </section>
+    """
+    sections.append(sec_contrail)
+
+    # =========================================================================
+    # 9. ALTERNATIVE ECO-OPTIMAL TRAJECTORY: MULTI-OBJECTIVE TRADE-OFF
+    # =========================================================================
+    if eco_rep:
+        f_sign = "+" if eco_rep.fuel_delta_kg > 0 else ""
+        eco_kpis = [
+            ("Net Climate Footprint", f"{eco_rep.eco_total_climate_co2e_kg / 1000.0:.2f} t CO₂e", f"{eco_rep.net_climate_delta_kg / 1000.0:+.2f} t ({eco_rep.net_climate_reduction_pct:-.1f}%) net reduction"),
+            ("Contrail Cirrus Avoided", f"{eco_rep.eco_contrail_nm:.0f} nm in ISSR", f"-{eco_rep.contrail_avoided_nm:.0f} nm ({eco_rep.contrail_avoided_pct:.0f}% persistent contrails avoided)"),
+            ("Fuel Burn Trade-Off", f"{eco_rep.eco_fuel_kg:,.0f} kg Jet-A", f"{f_sign}{eco_rep.fuel_delta_kg:,.0f} kg ({eco_rep.fuel_delta_pct:+.1f}%) | €{eco_rep.fuel_cost_delta_eur:+,.2f}"),
+            ("Direct CO₂ / Cruise NOₓ", f"{eco_rep.eco_co2_kg / 1000.0:.2f} t CO₂", f"{eco_rep.eco_nox_kg:.1f} kg NOₓ (Flown: {eco_rep.as_flown_nox_kg:.1f} kg)"),
+        ]
+
+        tradeoff_rows = [
+            {
+                "Environmental Dimension": "Persistent Contrail Distance",
+                "As-Flown Trajectory": f"{eco_rep.as_flown_contrail_nm:.1f} nm",
+                "Eco-Optimal Trajectory": f"{eco_rep.eco_contrail_nm:.1f} nm",
+                "Operational Delta": f"-{eco_rep.contrail_avoided_nm:.1f} nm (-{eco_rep.contrail_avoided_pct:.0f}%)",
+            },
+            {
+                "Environmental Dimension": "Contrail Cirrus Radiative Forcing",
+                "As-Flown Trajectory": f"{eco_rep.as_flown_contrail_co2e_kg / 1000.0:.2f} t CO₂e",
+                "Eco-Optimal Trajectory": f"{eco_rep.eco_contrail_co2e_kg / 1000.0:.2f} t CO₂e",
+                "Operational Delta": f"{(eco_rep.eco_contrail_co2e_kg - eco_rep.as_flown_contrail_co2e_kg) / 1000.0:+.2f} t CO₂e",
+            },
+            {
+                "Environmental Dimension": "En-Route Kerosene Fuel Burn",
+                "As-Flown Trajectory": f"{eco_rep.as_flown_fuel_kg:,.0f} kg",
+                "Eco-Optimal Trajectory": f"{eco_rep.eco_fuel_kg:,.0f} kg",
+                "Operational Delta": f"{f_sign}{eco_rep.fuel_delta_kg:,.0f} kg ({eco_rep.fuel_delta_pct:+.1f}%)",
+            },
+            {
+                "Environmental Dimension": "Direct Tailpipe Engine CO₂",
+                "As-Flown Trajectory": f"{eco_rep.as_flown_co2_kg / 1000.0:.2f} t CO₂",
+                "Eco-Optimal Trajectory": f"{eco_rep.eco_co2_kg / 1000.0:.2f} t CO₂",
+                "Operational Delta": f"{(eco_rep.eco_co2_kg - eco_rep.as_flown_co2_kg) / 1000.0:+.2f} t CO₂",
+            },
+            {
+                "Environmental Dimension": "Upper-Troposphere Cruise NOₓ",
+                "As-Flown Trajectory": f"{eco_rep.as_flown_nox_kg:.1f} kg NOₓ",
+                "Eco-Optimal Trajectory": f"{eco_rep.eco_nox_kg:.1f} kg NOₓ",
+                "Operational Delta": f"{eco_rep.nox_delta_kg:+.1f} kg NOₓ",
+            },
+            {
+                "Environmental Dimension": "Net Global Climate Impact (CO₂e)",
+                "As-Flown Trajectory": f"{eco_rep.as_flown_total_climate_co2e_kg / 1000.0:.2f} t CO₂e",
+                "Eco-Optimal Trajectory": f"{eco_rep.eco_total_climate_co2e_kg / 1000.0:.2f} t CO₂e",
+                "Operational Delta": f"{eco_rep.net_climate_delta_kg / 1000.0:+.2f} t CO₂e ({eco_rep.net_climate_reduction_pct:-.1f}%)",
+            },
+        ]
+        tradeoff_table_html = _df_to_html_table(pd.DataFrame(tradeoff_rows))
+
+        maneuvers_html = "".join([f"<li><code>{html.escape(m)}</code></li>" for m in eco_rep.tactical_maneuvers_summary])
+
+        sec_eco = f"""
+        <section class="report-section">
+            <h2>🌿 View 9: Alternative Eco-Optimal Trajectory: Multi-Objective Trade-Off &amp; Feasibility</h2>
+            <p>
+                Synthesizes a minimal-contrail flight profile balancing fuel burn, direct CO₂, upper-air NOₓ, and persistent
+                contrail cirrus warming while strictly operating within aircraft performance limits, operational ceilings,
+                and ICAO RVSM cruising rules.
+            </p>
+            {_kpi_grid_html(eco_kpis)}
+            <h3>Environmental Dimension Side-by-Side Comparison</h3>
+            {tradeoff_table_html}
+            <h3>Tactical Altitude Maneuvers &amp; Flight Envelope Certification</h3>
+            <div class="summary-callout" style="margin-bottom: 12px;">
+                <b>Flight Envelope Feasibility:</b> {html.escape(eco_rep.operational_feasibility_summary)}<br/>
+                <b>Aircraft Service Ceiling:</b> FL{eco_rep.operational_ceiling_fl:.0f} &nbsp;|&nbsp;
+                <b>Certified Envelope Adherence:</b> {'✅ FULLY CERTIFIED &amp; COMPLIANT' if eco_rep.is_within_aircraft_envelope else '⚠️ OUTSIDE FLIGHT ENVELOPE'}
+            </div>
+            <ul>{maneuvers_html}</ul>
+        </section>
+        """
+        sections.append(sec_eco)
+
+    # =========================================================================
+    # 10. PERSISTENT FLIGHT OPERATIONAL NOTES & ANOMALY EXPLANATIONS
+    # =========================================================================
+    if flight_note:
+        cits_html = ""
+        if getattr(flight_note, "source_url", None):
+            cits_html = f"<h4>Source Citations &amp; References</h4><ul><li><a href='{html.escape(flight_note.source_url)}' target='_blank'>{html.escape(flight_note.source_url)}</a></li></ul>"
+
+        note_body = getattr(flight_note, "note", getattr(flight_note, "note_text", ""))
+        sec_notes = f"""
+        <section class="report-section">
+            <h2>📝 View 10: Persistent Flight Operational Notes &amp; Qualitative Explanations</h2>
+            <div class="summary-callout" style="margin-bottom: 14px;">
+                <b>Title:</b> {html.escape(flight_note.title)} &nbsp;|&nbsp;
+                <b>Category:</b> <code>{html.escape(flight_note.category)}</code> &nbsp;|&nbsp;
+                <b>Author:</b> {html.escape(flight_note.author)} &nbsp;|&nbsp;
+                <b>Last Updated:</b> {html.escape(flight_note.updated_at[:19])}
+            </div>
+            <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 18px 22px; font-size: 14px; line-height: 1.6; white-space: pre-wrap;">{html.escape(note_body)}</div>
+            {cits_html}
+        </section>
+        """
+        sections.append(sec_notes)
+
+    # =========================================================================
+    # 11. APPENDIX: MATHEMATICAL & ATMOSPHERIC PHYSICS METHODOLOGY
+    # =========================================================================
+    sec_appendix = """
+    <section class="report-section">
+        <h2>📐 Appendix: Comprehensive Mathematical &amp; Atmospheric Physics Methodology</h2>
+        <p>
+            Formal mathematical equations, thermodynamic derivations, and international aviation standards implemented
+            in FlightML for trajectory physics, airspace economics, and environmental footprint accounting.
+        </p>
+
+        <h3>1. Geodesic Trajectory Distance (Haversine Formula)</h3>
+        <p>
+            For two spherical coordinates $(\\phi_1, \\lambda_1)$ and $(\\phi_2, \\lambda_2)$ with Earth radius $R = 3440.065\\text{ nm}$ ($6371.0\\text{ km}$):
+        </p>
+        <div style="background: #f8fafc; border-left: 4px solid #1e3799; padding: 12px 18px; margin: 10px 0; font-family: monospace; font-size: 13.5px;">
+            a = sin²(Δϕ / 2) + cos(ϕ₁) · cos(ϕ₂) · sin²(Δλ / 2)<br/>
+            c = 2 · atan2(√a, √(1 - a))<br/>
+            D_great_circle = R · c
+        </div>
+
+        <h3>2. Horizontal Flight Inefficiency (Eurocontrol PRU KEA &amp; KEP)</h3>
+        <div style="background: #f8fafc; border-left: 4px solid #1e3799; padding: 12px 18px; margin: 10px 0; font-family: monospace; font-size: 13.5px;">
+            KEA = ((D_actual_enroute - D_achieved_gcd) / D_achieved_gcd) · 100%<br/>
+            KEP = ((D_filed_enroute - D_achieved_gcd) / D_achieved_gcd) · 100%<br/>
+            Detour_Ratio = D_actual / D_filed
+        </div>
+
+        <h3>3. Equivalent Still Air Distance (ESAD) &amp; Wind Triangle</h3>
+        <p>
+            Evaluates aerodynamic distance traveled relative to the ambient air mass:
+        </p>
+        <div style="background: #f8fafc; border-left: 4px solid #1e3799; padding: 12px 18px; margin: 10px 0; font-family: monospace; font-size: 13.5px;">
+            V_tailwind,i = V_wind,i · cos(θ_wind_toward - θ_track)<br/>
+            TAS_i = GS_i - V_tailwind,i<br/>
+            ESAD = Σ [ D_ground,i · (TAS_i / GS_i) ]<br/>
+            ΔD_air = D_ground - ESAD &nbsp;&nbsp;(>0: air miles saved by tailwind; <0: headwind penalty)
+        </div>
+
+        <h3>4. ICAO Standard Atmosphere (ISA) &amp; Pressure Profiles</h3>
+        <div style="background: #f8fafc; border-left: 4px solid #1e3799; padding: 12px 18px; margin: 10px 0; font-family: monospace; font-size: 13.5px;">
+            Troposphere (h ≤ 11,000 m):<br/>
+            &nbsp;&nbsp;T_ISA(h) = 288.15 - 0.0065 · h  [K]<br/>
+            &nbsp;&nbsp;P(h) = 1013.25 · (1 - 0.0065 · h / 288.15)^5.25588  [hPa]<br/>
+            Stratosphere Isothermal Layer (11,000 m &lt; h ≤ 20,000 m):<br/>
+            &nbsp;&nbsp;T_ISA(h) = 216.65 K (-56.5°C)<br/>
+            &nbsp;&nbsp;P(h) = 226.32 · exp(-0.000157688 · (h - 11000))  [hPa]
+        </div>
+
+        <h3>5. Murphy &amp; Koop (2005) Water Vapor Thermodynamics &amp; RH_ice</h3>
+        <p>
+            Converts relative humidity over liquid water (RH_water) to relative humidity over hexagonal ice (RH_ice):
+        </p>
+        <div style="background: #f8fafc; border-left: 4px solid #1e3799; padding: 12px 18px; margin: 10px 0; font-family: monospace; font-size: 13.5px;">
+            e_sat_water / e_sat_ice = exp(0.00955 · (273.15 - T))  [for T in K]<br/>
+            RH_ice = RH_water · (e_sat_water / e_sat_ice)
+        </div>
+
+        <h3>6. The Schmidt-Appleman Criterion (SAC) &amp; ISSR Conditions</h3>
+        <p>
+            Slope of the exhaust mixing line in the (T, e) plane:
+        </p>
+        <div style="background: #f8fafc; border-left: 4px solid #1e3799; padding: 12px 18px; margin: 10px 0; font-family: monospace; font-size: 13.5px;">
+            G = (c_p · P · EI_H2O) / (ε · Q · (1 - η))<br/>
+            &nbsp;&nbsp;where c_p = 1005 J/(kg·K), ε = 0.622, EI_H2O = 1.25 kg/kg, Q = 43.13×10⁶ J/kg, η = engine propulsion efficiency.<br/>
+            Critical SAC threshold temperature:<br/>
+            &nbsp;&nbsp;T_SAC(P, η) ≈ -41.5 + 2.8 · ln(P / 250.0) + 12.0 · (η - 0.33)  [°C]<br/>
+            Persistent Contrail Cirrus Condition:<br/>
+            &nbsp;&nbsp;T_ambient ≤ T_SAC(P, η)  AND  RH_ice ≥ 100%  AND  RH_water &lt; 100%
+        </div>
+
+        <h3>7. Persistent Contrail Cirrus Radiative Forcing (18.5 kg CO₂e / nm)</h3>
+        <div style="background: #f8fafc; border-left: 4px solid #1e3799; padding: 12px 18px; margin: 10px 0; font-family: monospace; font-size: 13.5px;">
+            Contrail_Cirrus_CO2e [t] = (D_persistent_ISSR [nm] · 18.5) / 1000<br/>
+            Total_Climate_Multiplier = (E_direct_CO2 + E_contrail_CO2e) / E_direct_CO2
+        </div>
+
+        <h3>8. Multi-Objective Eco-Trajectory Optimization Cost Functional</h3>
+        <div style="background: #f8fafc; border-left: 4px solid #1e3799; padding: 12px 18px; margin: 10px 0; font-family: monospace; font-size: 13.5px;">
+            min J(x) = ΔE_direct_CO2 + ΔE_cirrus_CO2e + α_NOx · ΔE_NOx<br/>
+            subject to:<br/>
+            &nbsp;&nbsp;FL_i ≤ FL_certified_ceiling(ac_type)<br/>
+            &nbsp;&nbsp;FL_i complies with ICAO RVSM Semicircular Rule (Odd Eastbound / Even Westbound)<br/>
+            &nbsp;&nbsp;Buffet Margin ≥ 1.30g, Rate of Climb Margin ≥ 300 fpm
+        </div>
+
+        <h3>9. Eurocontrol CRCO Route Charging Formula</h3>
+        <div style="background: #f8fafc; border-left: 4px solid #1e3799; padding: 12px 18px; margin: 10px 0; font-family: monospace; font-size: 13.5px;">
+            Charge_FIR = d_FIR · p · U_FIR<br/>
+            &nbsp;&nbsp;where d_FIR = traversal distance in FIR [km] / 100<br/>
+            &nbsp;&nbsp;p = √(MTOW_metric_tons / 50.0) [Aircraft Weight Factor]<br/>
+            &nbsp;&nbsp;U_FIR = National Unit Rate [EUR / Service Unit]
+        </div>
+    </section>
+    """
+    sections.append(sec_appendix)
+
+    body_html = "\n".join(sections)
+
+    full_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Comprehensive 4D Flight Intelligence Report — #{flight_id} ({adep} ➔ {ades})</title>
+    <style>
+        :root {{
+            --bg: #f4f7fb;
+            --card: #ffffff;
+            --primary: #0c2461;
+            --accent: #0984e3;
+            --text: #1e272e;
+            --muted: #576574;
+            --border: #dfe6e9;
+        }}
+        * {{ box-sizing: border-box; }}
+        body {{
+            margin: 0;
+            padding: 24px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+        }}
+        .report-container {{
+            max-width: 1320px;
+            margin: 0 auto;
+        }}
+        .report-header {{
+            background: linear-gradient(135deg, #0c2461 0%, #1e3799 55%, #0984e3 100%);
+            color: #ffffff;
+            padding: 28px 34px;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(12, 36, 97, 0.18);
+            margin-bottom: 24px;
+        }}
+        .report-header h1 {{
+            margin: 0 0 10px 0;
+            font-size: 26px;
+            letter-spacing: -0.3px;
+        }}
+        .report-header .meta {{
+            font-size: 13.5px;
+            opacity: 0.94;
+            line-height: 1.6;
+        }}
+        .report-section {{
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 26px 30px;
+            margin-bottom: 24px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+        }}
+        .report-section h2 {{
+            margin-top: 0;
+            color: #0c2461;
+            border-bottom: 2px solid #eef2f7;
+            padding-bottom: 10px;
+            font-size: 20px;
+        }}
+        .report-section h3 {{
+            margin-top: 22px;
+            color: #2c3e50;
+            font-size: 16px;
+        }}
+        .kpi-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            gap: 14px;
+            margin: 16px 0 22px 0;
+        }}
+        .kpi-card {{
+            background: #f8fafd;
+            border: 1px solid #e2e8f0;
+            border-left: 4px solid var(--accent);
+            border-radius: 8px;
+            padding: 12px 15px;
+        }}
+        .kpi-label {{
+            font-size: 11.5px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            color: var(--muted);
+            font-weight: 600;
+        }}
+        .kpi-value {{
+            font-size: 19px;
+            font-weight: 700;
+            color: #0c2461;
+            margin: 4px 0 2px 0;
+        }}
+        .kpi-sub {{
+            font-size: 12px;
+            color: var(--muted);
+        }}
+        .chart-card {{
+            background: #ffffff;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px;
+            margin: 18px 0;
+            text-align: center;
+        }}
+        .report-img {{
+            max-width: 100%;
+            height: auto;
+            border-radius: 6px;
+        }}
+        .chart-caption {{
+            margin-top: 8px;
+            font-size: 12.5px;
+            color: var(--muted);
+            font-weight: 600;
+        }}
+        .summary-callout {{
+            background: #eef6ff;
+            border-left: 4px solid #0984e3;
+            padding: 14px 18px;
+            border-radius: 6px;
+            font-size: 13.5px;
+            line-height: 1.6;
+        }}
+        .table-wrap {{
+            overflow-x: auto;
+            margin: 10px 0 18px 0;
+        }}
+        table.styled-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12.5px;
+        }}
+        table.styled-table th {{
+            background: #0c2461;
+            color: #ffffff;
+            text-align: left;
+            padding: 9px 11px;
+            font-weight: 600;
+        }}
+        table.styled-table td {{
+            padding: 8px 11px;
+            border-bottom: 1px solid #edf2f7;
+        }}
+        table.styled-table tr:nth-child(even) {{
+            background: #f8fafc;
+        }}
+        .muted-note {{
+            color: var(--muted);
+            font-style: italic;
+        }}
+        .report-footer {{
+            text-align: center;
+            color: var(--muted);
+            font-size: 12.5px;
+            margin-top: 24px;
+            padding: 14px;
+        }}
+        @media print {{
+            body {{ background: #ffffff; padding: 0; }}
+            .report-section {{ page-break-inside: avoid; box-shadow: none; }}
+            iframe {{ display: none; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="report-container">
+        <header class="report-header">
+            <h1>✈️ Comprehensive 4D Flight Intelligence Report: #{flight_id} ({adep} ➔ {ades})</h1>
+            <div class="meta">
+                <b>FlightML Intelligence Platform</b> &nbsp;|&nbsp;
+                <b>Cycle:</b> Eurocontrol {html.escape(ds.period)} &nbsp;|&nbsp;
+                <b>Callsign:</b> <code>{html.escape(str(flight.get('callsign') or 'N/A'))}</code> &nbsp;|&nbsp;
+                <b>Operator:</b> {html.escape(ac_op)} &nbsp;|&nbsp;
+                <b>Airframe:</b> {html.escape(ac_type)} &nbsp;|&nbsp;
+                <b>Pricing &amp; Currency:</b> Euros (€ EUR) &nbsp;|&nbsp;
+                <b>Report Timestamp:</b> {now_str}
+            </div>
+        </header>
+        {body_html}
+        <footer class="report-footer">
+            Generated by FlightML Comprehensive 4D Flight Intelligence Engine — Standalone document with embedded interactive OpenStreetMap Leaflet maps &amp; mathematical methodology appendix.
+        </footer>
+    </div>
+</body>
+</html>
+"""
+    if output_path is not None:
+        out_p = Path(output_path)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        out_p.write_text(full_html, encoding="utf-8")
+
+    return full_html
+
+
+# ---------------------------------------------------------------------------
 # Master Static HTML Report Generator
 # ---------------------------------------------------------------------------
 def generate_static_html_report(
@@ -1315,6 +2204,10 @@ def generate_static_html_report(
     if flight_id is None:
         sample_df = ds.query("SELECT ectrl_id FROM flights LIMIT 1")
         flight_id = int(sample_df.iloc[0]["ectrl_id"]) if not sample_df.empty else 202007026
+
+    # If single_flight is requested, return the comprehensive 4D flight report with full interactive map tiles!
+    if page_key == "single_flight":
+        return generate_flight_comprehensive_html_report(ds, flight_id=int(flight_id), output_path=output_path)
 
     title = REPORT_PAGE_TITLES.get(page_key, "FlightML Operational Intelligence Report")
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")

@@ -344,12 +344,17 @@ def render_page_export_bar(page_key: str, widget_suffix: str) -> None:
     state_key = f"html_export_blob_{selected_period}_{page_key}_{widget_suffix}"
     c_exp1, c_exp2 = st.columns([1.8, 2.2])
     with c_exp1:
+        btn_text = (
+            "📥 Prepare Comprehensive 4D Flight Report (Interactive Maps & Math Appendix)"
+            if page_key == "single_flight"
+            else "📥 Prepare Static HTML Report (with Images)"
+        )
         if st.button(
-            f"📥 Prepare Static HTML Report (with Images)",
+            btn_text,
             key=f"btn_prep_html_{selected_period}_{page_key}_{widget_suffix}",
-            help=f"Render '{title_lbl}' with embedded high-DPI Base64 PNG charts & maps into a self-contained .html file.",
+            help=f"Render '{title_lbl}' with embedded high-DPI Base64 PNG charts, interactive Leaflet OpenStreetMap tiles, and complete mathematical appendix into a self-contained .html file.",
         ):
-            with st.spinner(f"Rendering static HTML report & Base64 PNG figures for {title_lbl}..."):
+            with st.spinner(f"Rendering report for {title_lbl} (including interactive map tiles & mathematical appendix)..."):
                 st.session_state[state_key] = generate_static_html_report(
                     ds,
                     page_key=page_key,
@@ -384,8 +389,13 @@ def render_page_export_bar(page_key: str, widget_suffix: str) -> None:
     with c_exp2:
         if state_key in st.session_state:
             fname = f"flightml_{page_key}_{selected_period}_{active_flight_id}.html"
+            dl_text = (
+                f"⬇️ Download Comprehensive 4D Flight Report (with Map Tiles & Appendix)"
+                if page_key == "single_flight"
+                else f"⬇️ Download {fname} (Self-Contained HTML + PNGs)"
+            )
             st.download_button(
-                label=f"⬇️ Download {fname} (Self-Contained HTML + PNGs)",
+                label=dl_text,
                 data=st.session_state[state_key],
                 file_name=fname,
                 mime="text/html",

@@ -66,3 +66,50 @@ def test_unknown_page_key_fallback_is_not_empty(dataset: FlightDataset):
     assert "Operational Report Overview" in html
     assert "Free Route Airspace (FRA)" in html
     assert "report-footer" in html
+
+
+def test_comprehensive_flight_html_report_generation():
+    """Verify that generate_flight_comprehensive_html_report produces a complete 4D report with working map tiles and math appendix."""
+    from flightml.viz.html_exporter import generate_flight_comprehensive_html_report
+
+    ds = FlightDataset("202510")
+    flt_df = ds.query("SELECT ectrl_id FROM flights WHERE actual_distance_nm > 500 LIMIT 1")
+    target_id = int(flt_df.iloc[0]["ectrl_id"]) if not flt_df.empty else 292222833
+
+    report_html = generate_flight_comprehensive_html_report(ds, flight_id=target_id)
+    assert len(report_html) > 100000, f"Comprehensive report unexpectedly small: {len(report_html)} bytes"
+
+    # 1. Map Tiles & Leaflet Iframe Container Verification
+    assert "<iframe" in report_html, "Missing isolated iframe map containers"
+    assert "srcdoc=" in report_html, "Missing srcdoc for isolated Leaflet execution"
+    assert "openstreetmap.fr" in report_html, "Missing Humanitarian OpenStreetMap tile layer"
+
+    # 2. Section & View Logical Ordering Verification
+    assert "Executive Flight Summary &amp; Operational Telemetry" in report_html
+    assert "View 1: 4D Trajectory, Radar Tracking &amp; Flight Geometry" in report_html
+    assert "View 2: Active Radio Navigation Aids &amp; RNP / RNAV Corridor Capability" in report_html
+    assert "View 3: Vertical Profile Efficiency: Continuous Climb (CCO) &amp; Continuous Descent (CDO)" in report_html
+    assert "View 4: Multi-Factor Delay Attribution &amp; Runway Braking Safety Diagnostics" in report_html
+    assert "View 5: Airport Surface Movement, Taxi-Out &amp; ICAO LTO Emissions" in report_html
+    assert "View 6: Eurocontrol CRCO Route Charges &amp; Airspace Economics (€ EUR)" in report_html
+    assert "View 7: Upper-Air Winds &amp; Equivalent Still Air Distance (ESAD)" in report_html
+    assert "View 8: Persistent Contrail Cirrus &amp; Climate Radiative Forcing" in report_html
+    assert "View 9: Alternative Eco-Optimal Trajectory: Multi-Objective Trade-Off &amp; Feasibility" in report_html
+    assert "Appendix: Comprehensive Mathematical &amp; Atmospheric Physics Methodology" in report_html
+
+    # 3. Mathematical Appendix Content Verification
+    assert "Haversine Formula" in report_html
+    assert "Equivalent Still Air Distance (ESAD)" in report_html
+    assert "Schmidt-Appleman Criterion" in report_html
+    assert "Murphy &amp; Koop (2005)" in report_html
+    assert "18.5 kg CO₂e / nm" in report_html
+
+
+def test_single_flight_page_key_delegation():
+    """Verify that calling generate_static_html_report with page_key='single_flight' returns the comprehensive report."""
+    ds = FlightDataset("202510")
+    html = generate_static_html_report(ds, page_key="single_flight", flight_id=292222833)
+    assert len(html) > 100000
+    assert "<iframe" in html
+    assert "openstreetmap.fr" in html
+    assert "Appendix: Comprehensive Mathematical &amp; Atmospheric Physics Methodology" in html
