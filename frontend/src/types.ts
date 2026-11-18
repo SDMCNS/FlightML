@@ -92,6 +92,11 @@ export interface ItineraryRisk {
   eu261_eligible: boolean;
   compensation_eur: number;
   recommendation: string;
+  mct_min?: number;
+  connection_type?: string;
+  slack_buffer_min?: number;
+  transfer_note?: string;
+  mct_details?: Record<string, any>;
 }
 
 export interface ContrailSegment {

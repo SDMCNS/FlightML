@@ -347,18 +347,25 @@ export async function assessPassengerItinerary(
     );
     if (res.ok) {
       const data = await res.json();
+      const conn = data.connection || {};
+      const rights = data.passenger_rights || {};
       return {
         origin,
         destination,
         hub,
         date: new Date().toISOString().slice(0, 10),
         layover_min: layoverMin,
-        missed_connection_prob: data.missed_connection_probability ?? 0.12,
-        predicted_delay_min: data.predicted_inbound_delay_min ?? 18,
-        risk_level: data.risk_level ?? 'LOW',
-        eu261_eligible: data.eu261_compensation_eur > 0,
-        compensation_eur: data.eu261_compensation_eur ?? 250,
-        recommendation: data.passenger_recommendation ?? 'Buffer adequate.',
+        missed_connection_prob: conn.misconnect_probability_pct ? conn.misconnect_probability_pct / 100.0 : (data.missed_connection_probability ?? 0.12),
+        predicted_delay_min: data.predicted_inbound_delay_min ?? (data.legs && data.legs[0] ? data.legs[0].mean_arr_delay_min : 18),
+        risk_level: conn.misconnect_risk_level || data.overall_delay_risk_level || 'LOW',
+        eu261_eligible: (rights.statutory_compensation_amount_eur ?? 0) > 0,
+        compensation_eur: rights.statutory_compensation_amount_eur ?? 250,
+        recommendation: conn.terminal_transfer_note || data.actionable_recommendations?.[0] || 'Buffer adequate.',
+        mct_min: conn.minimum_connection_time_min,
+        connection_type: conn.connection_type,
+        slack_buffer_min: conn.slack_buffer_min,
+        transfer_note: conn.terminal_transfer_note,
+        mct_details: conn.mct_details,
       };
     }
   } catch {

@@ -19,6 +19,7 @@ import requests
 
 from flightml.data.dataset import FlightDataset
 from flightml.geo.geodesy import haversine_distance_nm, EARTH_RADIUS_KM
+from flightml.eval.mct_database import get_applicable_mct, resolve_hub_mct, infer_connection_type
 
 
 # -----------------------------------------------------------------------------
@@ -228,6 +229,8 @@ class ConnectionRisk:
     effective_slack_buffer_min: float = 0.0
     boarding_conformance_cutoff_min: int = 20
     weather_compound_guidance: str = ""
+    connection_type: str = "I_to_I"
+    mct_details: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -775,7 +778,18 @@ class PassengerJourneyEngine:
         hub_clean = hub.strip().upper()
         apt_info = self._get_airport_info(hub_clean)
         hub_meta = HUB_MCT_DATABASE.get(hub_clean)
-        resolved_hub_name = hub_meta.get("name") if hub_meta else apt_info.get("name", f"Airport {hub_clean}")
+
+        orig_info = self._get_airport_info(inbound_leg.origin)
+        dest_icao = outbound_leg.destination if outbound_leg else inbound_leg.destination
+        dest_info = self._get_airport_info(dest_icao)
+
+        applicable_mct, conn_type, hub_profile = get_applicable_mct(
+            hub_clean,
+            origin_country=orig_info.get("iso_country"),
+            dest_country=dest_info.get("iso_country"),
+        )
+
+        resolved_hub_name = hub_profile.airport if hub_profile else (hub_meta.get("name") if hub_meta else apt_info.get("name", f"Airport {hub_clean}"))
         if not hub_meta:
             hub_meta = {
                 "name": resolved_hub_name,
@@ -794,7 +808,27 @@ class PassengerJourneyEngine:
         out_term = term_map.get(out_op, "T5")
 
         is_inter_terminal = (in_term != out_term)
-        mct = hub_meta["inter_terminal_mct_min"] if is_inter_terminal else hub_meta["same_terminal_mct_min"]
+        if hub_profile:
+            mct = applicable_mct
+        else:
+            mct = hub_meta["inter_terminal_mct_min"] if is_inter_terminal else hub_meta["same_terminal_mct_min"]
+
+        mct_details: dict[str, Any] = {}
+        if hub_profile:
+            mct_details = {
+                "iata": hub_profile.iata,
+                "icao": hub_profile.icao,
+                "airport": hub_profile.airport,
+                "city": hub_profile.city,
+                "country": hub_profile.country,
+                "connection_type": conn_type,
+                "applicable_mct_min": applicable_mct,
+                "D_to_D": hub_profile.raw_strings["D_to_D"],
+                "D_to_I": hub_profile.raw_strings["D_to_I"],
+                "I_to_D": hub_profile.raw_strings["I_to_D"],
+                "I_to_I": hub_profile.raw_strings["I_to_I"],
+                "notes": hub_profile.notes,
+            }
 
         # ---------------------------------------------------------------------
         # Intermediate Airport Weather Impacts: Arrival Flow vs Departure Taxi
@@ -857,7 +891,15 @@ class PassengerJourneyEngine:
             luggage_prob = 10.0
             luggage_status = "LOW_RISK"
 
-        if is_inter_terminal:
+        if hub_profile:
+            type_label = {
+                "D_to_D": "Domestic ➔ Domestic",
+                "D_to_I": "Domestic ➔ International",
+                "I_to_D": "International ➔ Domestic (Border Control, Customs & TSA Re-screening)",
+                "I_to_I": "International ➔ International (Transit Security)",
+            }.get(conn_type, conn_type)
+            transfer_note = f"✈️ [{type_label} • MCT: {applicable_mct} min] {hub_profile.notes}"
+        elif is_inter_terminal:
             transfer_guidance = hub_meta.get("transfer_guidance", "Inter-terminal shuttle bus transfer required.")
             transfer_note = f"⚠️ Inter-Terminal Transfer Required: {in_op} ({in_term}) ➔ {out_op} ({out_term}). {transfer_guidance}"
         else:
@@ -873,7 +915,7 @@ class PassengerJourneyEngine:
 
         return ConnectionRisk(
             hub=hub_clean,
-            hub_name=hub_meta.get("name", hub_clean),
+            hub_name=hub_profile.airport if hub_profile else hub_meta.get("name", hub_clean),
             scheduled_layover_min=scheduled_layover_min,
             minimum_connection_time_min=mct,
             slack_buffer_min=round(slack_buffer, 1),
@@ -889,6 +931,8 @@ class PassengerJourneyEngine:
             effective_slack_buffer_min=effective_slack,
             boarding_conformance_cutoff_min=20,
             weather_compound_guidance=weather_guidance,
+            connection_type=conn_type,
+            mct_details=mct_details,
         )
 
     def calculate_passenger_rights(

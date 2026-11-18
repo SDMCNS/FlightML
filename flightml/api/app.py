@@ -1303,5 +1303,27 @@ def get_passenger_itinerary_risk_endpoint(
     return res.to_dict()
 
 
+@app.get("/api/v1/passenger/mct/{hub_ident}")
+def get_hub_mct_endpoint(hub_ident: str) -> dict[str, Any]:
+    """Retrieve minimum connection time (MCT) profile for a hub across D_to_D, D_to_I, I_to_D, and I_to_I."""
+    from flightml.eval.mct_database import resolve_hub_mct
+    profile = resolve_hub_mct(hub_ident)
+    if not profile:
+        raise HTTPException(status_code=404, detail=f"Hub MCT profile not found for '{hub_ident}'")
+    return profile.to_dict()
+
+
+@app.get("/api/v1/passenger/mct-database")
+def get_all_mct_database_endpoint() -> dict[str, Any]:
+    """Retrieve complete database of standardized global and European hub Minimum Connection Times."""
+    from flightml.eval.mct_database import RAW_HUB_MCT_DATA, HUB_MCT_INDEX
+    return {
+        "total_hubs": len(RAW_HUB_MCT_DATA),
+        "hubs": RAW_HUB_MCT_DATA,
+        "supported_codes": sorted(list(HUB_MCT_INDEX.keys())),
+    }
+
+
+
 
 

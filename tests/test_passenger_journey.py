@@ -271,3 +271,47 @@ def test_passenger_itinerary_debug_audit():
     assert dbg["passenger_rights_audit"]["statutory_compensation_amount_eur"] == 250.0
 
 
+def test_hub_mct_database_and_connection_types():
+    """Verify global hub MCT profiles and automatic connection type inference (D_to_D, I_to_D, etc.)."""
+    from flightml.eval.mct_database import get_hub_mct_profile, infer_connection_type, get_applicable_mct
+
+    # 1. Profile retrieval
+    jfk_prof = get_hub_mct_profile("KJFK")
+    assert jfk_prof is not None
+    assert jfk_prof.iata == "JFK"
+    assert jfk_prof.d_to_d_min == 45
+    assert jfk_prof.i_to_d_min == 135  # max of 120-135 min
+    assert "AirTrain" in jfk_prof.notes
+
+    lhr_prof = get_hub_mct_profile("LHR")
+    assert lhr_prof is not None
+    assert lhr_prof.icao == "EGLL"
+    assert lhr_prof.d_to_d_min == 60
+    assert lhr_prof.i_to_i_min == 90
+
+    # 2. Connection type inference
+    # BOS (US) -> JFK (US) -> LAX (US) => D_to_D
+    c_type = infer_connection_type("US", "US", "US")
+    assert c_type == "D_to_D"
+
+    # LHR (GB) -> JFK (US) -> LAX (US) => I_to_D
+    c_type = infer_connection_type("GB", "US", "US")
+    assert c_type == "I_to_D"
+
+    # BOS (US) -> JFK (US) -> LHR (GB) => D_to_I
+    c_type = infer_connection_type("US", "US", "GB")
+    assert c_type == "D_to_I"
+
+    # CDG (FR) -> JFK (US) -> MEX (MX) => I_to_I
+    c_type = infer_connection_type("FR", "US", "MX")
+    assert c_type == "I_to_I"
+
+    # 3. Applicable MCT
+    mct_min, matched_type, matched_prof = get_applicable_mct("KJFK", origin_country="GB", dest_country="US")
+    assert matched_type == "I_to_D"
+    assert mct_min == 135
+    assert matched_prof is not None
+    assert "AirTrain" in matched_prof.notes
+
+
+
