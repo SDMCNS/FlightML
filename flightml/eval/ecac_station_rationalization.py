@@ -529,17 +529,183 @@ def _compute_coverage_matrices(
     return cell_matrices, apt_matrices
 
 
-def compute_static_rationalization_views(
+def _compute_dme_navigation_standards_views(
     stations: list[ECACStation],
     grid_cells: list[tuple[float, float]],
     airports: list[dict[str, Any]],
 ) -> dict[str, set[str]]:
     """
-    Computes the 3 static rationalization views using greedy set-cover:
-    - VIEW_1: >= 1 station at FL200+ in each coverable cell AND >= 1 station at FL10 at coverable airports.
-    - VIEW_2: >= 2 stations at FL200+ in each coverable cell AND >= 1 station at FL10 at airports.
-    - VIEW_3: Infill >= 1 station at FL50+ in each cell AND >= 2 stations at busy airports (>= 500 moves/day) at FL10.
+    Computes minimum equipment sets for Navigation Performance Standards (ICAO Doc 9613 / FAA AC 90-100A):
+    - RNAV_5: En-Route B-RNAV (±5 NM). Min DMEs to provide valid 30°-150° pair at FL200+, >=1 at airports FL10.
+    - RNAV_2: En-Route Continental (±2 NM). Valid pair within <=130 NM, busy hubs dual FL10.
+    - RNAV_1: Terminal P-RNAV SIDs/STARs (±1 NM). N-1 redundancy (>=3 DMEs with valid pair <=60 NM), dual FL10 at airports.
+    - RNP_1: Reversionary Multi-DME/IRU (±1 NM). High-integrity >=3-4 DMEs <=40 NM, dual FL10 at airports.
     """
+    n_cells = len(grid_cells)
+    n_sta = len(stations)
+    sta_ids = [s.id for s in stations]
+
+    c_lats = np.array([c[0] for c in grid_cells])
+    c_lons = np.array([c[1] for c in grid_cells])
+    s_lats = np.array([s.latitude for s in stations])
+    s_lons = np.array([s.longitude for s in stations])
+
+    dlat_c = (c_lats[:, None] - s_lats[None, :]) * 60.0
+    mid_lat_c = np.radians((c_lats[:, None] + s_lats[None, :]) / 2.0)
+    dlon_c = (c_lons[:, None] - s_lons[None, :]) * 60.0 * np.cos(mid_lat_c)
+    dist_cell = np.sqrt(dlat_c**2 + dlon_c**2)
+    bearings_cell = (np.degrees(np.arctan2(dlon_c, dlat_c)) + 360.0) % 360.0
+
+    cell_mat, apt_mat = _compute_coverage_matrices(stations, grid_cells, airports, flight_levels=(10, 50, 100, 200))
+
+    coverable_a10 = apt_mat[10].sum(axis=1) > 0
+    coverable_busy_a10 = apt_mat[10].sum(axis=1) >= 2
+    busy_apt_indices = [i for i, a in enumerate(airports) if a["is_high_density"]]
+
+    # 1. RNAV 5: En-route Upper Airspace (±5 NM)
+    # Priority 1: Cover all coverable airports at FL10 with >= 1 DME
+    rnav5_set: set[int] = set()
+    apt_mask = np.zeros(len(airports), dtype=bool)
+    while (~apt_mask & coverable_a10).any():
+        unc = ~apt_mask & coverable_a10
+        gains = np.array([(apt_mat[10][:, s] & unc).sum() if s not in rnav5_set else -1 for s in range(n_sta)])
+        best_s = int(np.argmax(gains))
+        if gains[best_s] <= 0:
+            break
+        rnav5_set.add(best_s)
+        apt_mask |= apt_mat[10][:, best_s]
+
+    vis_200 = cell_mat[200]
+    # Target cells that can form a valid 30°-150° pair at FL200
+    rnav5_target = np.zeros(n_cells, dtype=bool)
+    for i in range(n_cells):
+        v = np.where(vis_200[i])[0]
+        if len(v) >= 2:
+            b = bearings_cell[i, v]
+            diff = np.abs(b[:, None] - b[None, :])
+            diff = np.minimum(diff, 360.0 - diff)
+            if ((diff >= 30.0) & (diff <= 150.0)).any():
+                rnav5_target[i] = True
+
+    # Seed station with highest coverage if set is empty
+    if not rnav5_set and n_sta > 0:
+        rnav5_set.add(int(np.argmax(vis_200.sum(axis=0))))
+
+    cur_paired = np.zeros(n_cells, dtype=bool)
+    if rnav5_set:
+        act = list(rnav5_set)
+        act_vis = vis_200[:, act]
+        act_brg = bearings_cell[:, act]
+        diff = np.abs(act_brg[:, :, None] - act_brg[:, None, :])
+        diff = np.minimum(diff, 360.0 - diff)
+        cur_paired = ((act_vis[:, :, None] & act_vis[:, None, :]) & (diff >= 30.0) & (diff <= 150.0)).any(axis=(1, 2))
+
+    while (~cur_paired & rnav5_target).any():
+        rem_target = ~cur_paired & rnav5_target
+        act = list(rnav5_set)
+        act_vis = vis_200[:, act]
+        act_brg = bearings_cell[:, act]
+        best_s = -1
+        best_gain = 0
+        for s in range(n_sta):
+            if s in rnav5_set:
+                continue
+            s_vis = vis_200[:, s]
+            s_brg = bearings_cell[:, s, None]
+            diff = np.abs(act_brg - s_brg)
+            diff = np.minimum(diff, 360.0 - diff)
+            new_pairs = (act_vis & s_vis[:, None]) & (diff >= 30.0) & (diff <= 150.0)
+            gain = int((new_pairs.any(axis=1) & rem_target).sum())
+            if gain > best_gain:
+                best_gain = gain
+                best_s = s
+        if best_gain == 0 or best_s == -1:
+            unc_counts = vis_200[rem_target, :].sum(axis=0)
+            unc_counts[list(rnav5_set)] = -1
+            best_s = int(np.argmax(unc_counts))
+            if unc_counts[best_s] <= 0:
+                break
+        rnav5_set.add(best_s)
+        act = list(rnav5_set)
+        act_vis = vis_200[:, act]
+        act_brg = bearings_cell[:, act]
+        diff = np.abs(act_brg[:, :, None] - act_brg[:, None, :])
+        diff = np.minimum(diff, 360.0 - diff)
+        cur_paired = ((act_vis[:, :, None] & act_vis[:, None, :]) & (diff >= 30.0) & (diff <= 150.0)).any(axis=(1, 2))
+
+    # 2. RNAV 2: Continental / Transition (±2 NM, range <= 130 NM, dual at busy hubs)
+    rnav2_set: set[int] = set(rnav5_set)
+    for i in busy_apt_indices:
+        if not coverable_busy_a10[i]:
+            continue
+        while apt_mat[10][i, list(rnav2_set)].sum() < 2:
+            cand = [s for s in range(n_sta) if s not in rnav2_set and apt_mat[10][i, s]]
+            if not cand:
+                break
+            rnav2_set.add(cand[0])
+
+    # 3. RNAV 1: Terminal SIDs/STARs (±1 NM, N-1 Redundancy >=3 DMEs <=60 NM)
+    rnav1_set: set[int] = set(rnav2_set)
+    for i in range(len(airports)):
+        if not coverable_busy_a10[i]:
+            continue
+        while apt_mat[10][i, list(rnav1_set)].sum() < 2:
+            cand = [s for s in range(n_sta) if s not in rnav1_set and apt_mat[10][i, s]]
+            if not cand:
+                break
+            rnav1_set.add(cand[0])
+
+    vis_100_term = cell_mat[100] & (dist_cell <= 60.0)
+    term_counts = vis_100_term[:, list(rnav1_set)].sum(axis=1) if rnav1_set else np.zeros(n_cells)
+    term_target = np.minimum(3, vis_100_term.sum(axis=1))
+    while (term_counts < term_target).any():
+        needed = term_counts < term_target
+        gains = np.array([(vis_100_term[:, s] & needed).sum() if s not in rnav1_set else -1 for s in range(n_sta)])
+        best_s = int(np.argmax(gains))
+        if gains[best_s] <= 0:
+            break
+        rnav1_set.add(best_s)
+        term_counts += vis_100_term[:, best_s]
+
+    # 4. RNP 1: Reversionary Terminal Multi-DME/IRU (High integrity >=4 DMEs <=40 NM)
+    rnp1_set: set[int] = set(rnav1_set)
+    vis_100_rnp = cell_mat[100] & (dist_cell <= 40.0)
+    rnp_counts = vis_100_rnp[:, list(rnp1_set)].sum(axis=1) if rnp1_set else np.zeros(n_cells)
+    rnp_target = np.minimum(4, vis_100_rnp.sum(axis=1))
+    while (rnp_counts < rnp_target).any():
+        needed = rnp_counts < rnp_target
+        gains = np.array([(vis_100_rnp[:, s] & needed).sum() if s not in rnp1_set else -1 for s in range(n_sta)])
+        best_s = int(np.argmax(gains))
+        if gains[best_s] <= 0:
+            break
+        rnp1_set.add(best_s)
+        rnp_counts += vis_100_rnp[:, best_s]
+
+    return {
+        "RNAV_5": {sta_ids[idx] for idx in rnav5_set},
+        "RNAV_2": {sta_ids[idx] for idx in rnav2_set},
+        "RNAV_1": {sta_ids[idx] for idx in rnav1_set},
+        "RNP_1": {sta_ids[idx] for idx in rnp1_set},
+        "VIEW_1": {sta_ids[idx] for idx in rnav5_set},
+        "VIEW_2": {sta_ids[idx] for idx in rnav2_set},
+        "VIEW_3": {sta_ids[idx] for idx in rnav1_set},
+    }
+
+
+def compute_static_rationalization_views(
+    stations: list[ECACStation],
+    grid_cells: list[tuple[float, float]],
+    airports: list[dict[str, Any]],
+    station_type: Literal["RADAR", "DME"] = "RADAR",
+) -> dict[str, set[str]]:
+    """
+    Computes static rationalization views using greedy set-cover:
+    - For DME (Navigation): Solves for RNAV_5, RNAV_2, RNAV_1, and RNP_1 performance standards.
+    - For RADAR (Surveillance): Solves for View 1 (Minimum Baseline), View 2 (Dual En-Route), View 3 (Low-Level Infill & Busy Hubs).
+    """
+    if station_type == "DME":
+        return _compute_dme_navigation_standards_views(stations, grid_cells, airports)
+
     cell_mat, apt_mat = _compute_coverage_matrices(stations, grid_cells, airports, flight_levels=(10, 50, 200))
     n_sta = len(stations)
     sta_ids = [s.id for s in stations]
@@ -661,6 +827,9 @@ def compute_static_rationalization_views(
         "VIEW_1": {sta_ids[idx] for idx in view_1_set},
         "VIEW_2": {sta_ids[idx] for idx in view_2_set},
         "VIEW_3": {sta_ids[idx] for idx in view_3_set},
+        "SURV_1": {sta_ids[idx] for idx in view_1_set},
+        "SURV_2": {sta_ids[idx] for idx in view_2_set},
+        "SURV_3": {sta_ids[idx] for idx in view_3_set},
     }
 
 
@@ -818,14 +987,20 @@ def get_ecac_rationalization_report(
         fir_bbox=fir_bbox,
         include_adjacent=True,
     )
+    step_grid = 0.17 if fir_poly else 0.35
     grid_cells = generate_ecac_grid(
-        step_deg=0.35,
+        step_deg=step_grid,
         fir_poly=fir_poly,
         fir_bbox=fir_bbox,
     )
 
     # 1. Compute or retrieve static baseline views
-    static_views = compute_static_rationalization_views(stations, grid_cells, airports)
+    static_views = compute_static_rationalization_views(
+        stations,
+        grid_cells,
+        airports,
+        station_type=station_type,
+    )
     base_active_set = set(static_views.get(active_view, set()))
 
     # 2. Apply user augmentations
@@ -841,6 +1016,17 @@ def get_ecac_rationalization_report(
     sta_id_to_idx = {s.id: i for i, s in enumerate(stations)}
     active_indices = [sta_id_to_idx[sid] for sid in base_active_set if sid in sta_id_to_idx]
 
+    c_lats = np.array([c[0] for c in grid_cells])
+    c_lons = np.array([c[1] for c in grid_cells])
+    s_lats = np.array([s.latitude for s in stations])
+    s_lons = np.array([s.longitude for s in stations])
+
+    dlat_c = (c_lats[:, None] - s_lats[None, :]) * 60.0
+    mid_lat_c = np.radians((c_lats[:, None] + s_lats[None, :]) / 2.0)
+    dlon_c = (c_lons[:, None] - s_lons[None, :]) * 60.0 * np.cos(mid_lat_c)
+    dist_cell = np.sqrt(dlat_c**2 + dlon_c**2)
+    bearings_cell = (np.degrees(np.arctan2(dlon_c, dlat_c)) + 360.0) % 360.0
+
     # Full network potential (for identifying uncoverable cells)
     uncoverable_cells_by_fl: dict[int, list[tuple[float, float]]] = {}
     for fl in (50, 100, 200, 300):
@@ -851,55 +1037,119 @@ def get_ecac_rationalization_report(
     # Active coverage evaluations per FL
     coverage_by_fl: dict[str, Any] = {}
     for fl in (50, 100, 200, 300):
-        if active_indices:
-            counts = cell_matrices[fl][:, active_indices].sum(axis=1)
-        else:
-            counts = np.zeros(len(grid_cells), dtype=int)
-
         max_cov = cell_matrices[fl].sum(axis=1)
-        coverable_total = int((max_cov > 0).sum())
         total_cells = len(grid_cells)
 
-        single_cov = int((counts >= 1).sum())
-        dual_cov = int((counts >= 2).sum())
-        outage = int(((counts == 0) & (max_cov > 0)).sum())
-        uncoverable = int((max_cov == 0).sum())
-
-        single_pct = round((single_cov / max(1, coverable_total)) * 100.0, 1)
-        dual_pct = round((dual_cov / max(1, coverable_total)) * 100.0, 1)
-
-        # Assemble compact cell details
+        # Assemble compact cell details with Navigation / Surveillance performance standards
         cell_details = []
         for i, (lat, lon) in enumerate(grid_cells):
-            cnt = int(counts[i])
             m_pot = int(max_cov[i])
-            if m_pot == 0:
-                st = "UNCOVERABLE"
-            elif cnt >= 2:
-                st = "DUAL_OR_MORE"
-            elif cnt == 1:
-                st = "SINGLE"
-            else:
-                st = "OUTAGE"
+
+            if station_type == "DME":
+                act_s = [s for s in active_indices if cell_matrices[fl][i, s]]
+                cnt = len(act_s)
+                has_valid_pair = False
+                best_geom = 0.0
+                gdop = 999.0
+                d_max_pair = 0.0
+                geom_tip = ""
+
+                if cnt >= 2:
+                    b = bearings_cell[i, act_s]
+                    diffs = np.abs(b[:, None] - b[None, :])
+                    delta = np.minimum(diffs, 360.0 - diffs)
+                    valid = (delta >= 30.0) & (delta <= 150.0)
+                    if valid.any():
+                        has_valid_pair = True
+                        score = np.abs(delta - 90.0) + (1.0 - valid) * 9999.0
+                        idx_pair = np.unravel_index(np.argmin(score), delta.shape)
+                        best_geom = float(delta[idx_pair])
+                        gdop = round(math.sqrt(2) / max(1e-4, math.sin(math.radians(best_geom))), 2)
+                        d_max_pair = float(max(dist_cell[i, act_s[idx_pair[0]]], dist_cell[i, act_s[idx_pair[1]]]))
+                        geom_tip = f"Cut Angle: {best_geom:.1f}° | GDOP: {gdop:.2f} | Slant: {d_max_pair:.0f} NM"
+                    else:
+                        geom_tip = f"Invalid Geometry ({cnt} DMEs visible, all cut angles <30° or >150°)"
+                else:
+                    geom_tip = f"{cnt} DME(s) visible"
+
+                if m_pot == 0:
+                    st = "UNCOVERABLE"
+                elif active_view in ("RNAV_5", "VIEW_1"):
+                    st = "MET" if has_valid_pair else ("AT_RISK" if cnt >= 1 else "CANNOT_BE_MET")
+                elif active_view in ("RNAV_2", "VIEW_2"):
+                    if has_valid_pair and d_max_pair <= 130.0:
+                        st = "MET"
+                    elif has_valid_pair or cnt >= 1:
+                        st = "AT_RISK"
+                    else:
+                        st = "CANNOT_BE_MET"
+                elif active_view in ("RNAV_1", "VIEW_3"):
+                    if cnt >= 3 and has_valid_pair and d_max_pair <= 60.0:
+                        st = "MET"  # N-1 redundant
+                    elif has_valid_pair or cnt >= 1:
+                        st = "AT_RISK"  # Critical DME single point of failure
+                    else:
+                        st = "CANNOT_BE_MET"
+                elif active_view == "RNP_1":
+                    if cnt >= 4 and has_valid_pair and d_max_pair <= 40.0:
+                        st = "MET"  # Autonomous multi-DME integrity
+                    elif has_valid_pair or cnt >= 1:
+                        st = "AT_RISK"  # Reversionary only
+                    else:
+                        st = "CANNOT_BE_MET"
+                else:
+                    st = "MET" if has_valid_pair else ("AT_RISK" if cnt >= 1 else "CANNOT_BE_MET")
+            else:  # RADAR
+                act_s = [s for s in active_indices if cell_matrices[fl][i, s]]
+                cnt = len(act_s)
+                geom_tip = f"{cnt} Radar Head(s) visible"
+                if m_pot == 0:
+                    st = "UNCOVERABLE"
+                elif cnt >= 2:
+                    st = "MET"
+                elif cnt == 1:
+                    st = "MET" if active_view in ("VIEW_1", "SURV_1") else "AT_RISK"
+                else:
+                    st = "CANNOT_BE_MET"
 
             cell_details.append({
                 "lat": lat,
                 "lon": lon,
                 "count": cnt,
                 "status": st,
+                "cell_size_nm": 10.0,
+                "geom_tip": geom_tip,
+                "has_valid_pair": has_valid_pair if station_type == "DME" else (cnt >= 2),
+                "best_geom_deg": best_geom if station_type == "DME" else 0.0,
+                "gdop": gdop if station_type == "DME" and gdop < 900.0 else None,
             })
+
+        met_cov = int(sum(1 for c in cell_details if c["status"] == "MET"))
+        at_risk_cov = int(sum(1 for c in cell_details if c["status"] == "AT_RISK"))
+        outage_cov = int(sum(1 for c in cell_details if c["status"] == "CANNOT_BE_MET"))
+        uncov_cov = int(sum(1 for c in cell_details if c["status"] == "UNCOVERABLE"))
+        coverable_total = met_cov + at_risk_cov + outage_cov
+
+        met_pct = round((met_cov / max(1, coverable_total)) * 100.0, 1)
+        at_risk_pct = round((at_risk_cov / max(1, coverable_total)) * 100.0, 1)
+        outage_pct = round((outage_cov / max(1, coverable_total)) * 100.0, 1)
 
         coverage_by_fl[f"fl{fl}"] = {
             "flight_level": fl,
             "altitude_ft": fl * 100,
             "total_cells": total_cells,
             "coverable_cells": coverable_total,
-            "uncoverable_cells": uncoverable,
-            "single_coverage_cells": single_cov,
-            "single_coverage_pct": single_pct,
-            "dual_coverage_cells": dual_cov,
-            "dual_coverage_pct": dual_pct,
-            "outage_cells": outage,
+            "uncoverable_cells": uncov_cov,
+            "single_coverage_cells": met_cov + at_risk_cov,
+            "single_coverage_pct": round(((met_cov + at_risk_cov) / max(1, coverable_total)) * 100.0, 1),
+            "dual_coverage_cells": met_cov,
+            "dual_coverage_pct": met_pct,
+            "met_cells_count": met_cov,
+            "met_pct": met_pct,
+            "at_risk_cells_count": at_risk_cov,
+            "at_risk_pct": at_risk_pct,
+            "outage_cells": outage_cov,
+            "outage_pct": outage_pct,
             "cells": cell_details,
         }
 

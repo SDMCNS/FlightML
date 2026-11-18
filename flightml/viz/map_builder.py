@@ -2059,38 +2059,37 @@ def create_ecac_coverage_map(
     station_type = coverage_report.get("station_type", "RADAR")
     active_view = coverage_report.get("active_view", "VIEW_1")
 
-    # 1. Coverage Grid Layer
+    # 1. Coverage Grid Layer (10 NM Grid Squares)
     if show_cells and fl_data and "cells" in fl_data:
-        cell_group = folium.FeatureGroup(name=f"Coverage Grid (FL{selected_fl})", show=True).add_to(m)
+        cell_group = folium.FeatureGroup(name=f"10 NM Grid Squares (FL{selected_fl})", show=True).add_to(m)
         for cell in fl_data["cells"]:
             status = cell.get("status", "OUTAGE")
             cnt = cell.get("count", 0)
             lat, lon = cell["lat"], cell["lon"]
+            geom_tip = cell.get("geom_tip", "")
+            d_nm = cell.get("cell_size_nm", 10.0)
+            dlat = (d_nm / 60.0) / 2.0
+            dlon = (d_nm / (60.0 * max(0.1, math.cos(math.radians(lat))))) / 2.0
 
-            if status == "DUAL_OR_MORE":
+            if status in ("MET", "DUAL_OR_MORE"):
                 color = "#10b981"
-                tip = f"Dual+ Coverage: {cnt} {station_type}s visible at FL{selected_fl}"
+                tip = f"🟢 MET: Performance Standard Achieved | {cnt} {station_type}s | {geom_tip}"
                 opac = 0.55
-                rad = 5.0
-            elif status == "SINGLE":
+            elif status in ("AT_RISK", "SINGLE"):
                 color = "#f59e0b"
-                tip = f"Single Coverage: 1 {station_type} visible at FL{selected_fl}"
+                tip = f"🟠 AT RISK / MARGINAL: {cnt} {station_type}s | {geom_tip}"
                 opac = 0.65
-                rad = 5.0
-            elif status == "OUTAGE":
+            elif status in ("CANNOT_BE_MET", "OUTAGE"):
                 color = "#ef4444"
-                tip = f"Coverable Outage: 0 active {station_type}s at FL{selected_fl}"
+                tip = f"🔴 CANNOT BE MET: 0 active {station_type}s at FL{selected_fl}"
                 opac = 0.75
-                rad = 5.0
             else:  # UNCOVERABLE
                 color = "#94a3b8"
-                tip = f"Dataset Gap: Uncoverable with current inventory at FL{selected_fl}"
+                tip = f"⚪ Dataset Gap: Uncoverable with current inventory at FL{selected_fl}"
                 opac = 0.25
-                rad = 3.5
 
-            folium.CircleMarker(
-                location=[lat, lon],
-                radius=rad,
+            folium.Rectangle(
+                bounds=[[lat - dlat, lon - dlon], [lat + dlat, lon + dlon]],
                 color=color,
                 fill=True,
                 fill_color=color,
@@ -2177,26 +2176,31 @@ def create_ecac_coverage_map(
     savings_eur = coverage_report.get("annual_cost_savings_eur", 0.0)
     gap_count = len(coverage_report.get("synthetic_gap_fillers", []))
 
+    met_pct = fl_data.get("met_pct", dual_pct)
+    at_risk_pct = fl_data.get("at_risk_pct", single_pct)
+    outage_pct = fl_data.get("outage_pct", 0.0)
+
     legend_html = f"""
     <div style="position: fixed;
-                bottom: 25px; left: 15px; width: 380px; height: 185px;
+                bottom: 25px; left: 15px; width: 400px; height: 195px;
                 background-color: white; border: 2px solid #94a3b8; border-radius: 8px;
-                z-index: 9999; font-size: 11.5px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                z-index: 9999; font-size: 11px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                 padding: 10px; box-shadow: 2px 2px 8px rgba(0,0,0,0.25);">
-        <b style="font-size: 13px; color: #1e293b;">🇪🇺 ECAC {station_type} Rationalization Map — FL{selected_fl}</b><br>
-        <b>View:</b> {active_view} | <b>Active {station_type}s:</b> {act_sta}/{tot_sta}<br>
-        <b>En-Route Coverage:</b> <span style="color: #10b981; font-weight: bold;">Dual: {dual_pct:.1f}%</span> |
-        <span style="color: #f59e0b; font-weight: bold;">Single: {single_pct:.1f}%</span><br>
-        <b>Annual Savings:</b> <span style="color: #059669; font-weight: bold;">€{savings_eur:,.0f}/yr</span><br>
-        <hr style="margin: 5px 0;">
-        <span style="color: #10b981;">●</span> Dual / High Redundancy (≥2) &nbsp;&nbsp;
-        <span style="color: #f59e0b;">●</span> Single Coverage (1)<br>
-        <span style="color: #ef4444;">●</span> Coverable Outage &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-        <span style="color: #94a3b8;">●</span> Dataset Gap (Uncoverable)<br>
-        <span style="color: #3b82f6;">●</span> Active Station &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-        <span style="color: #64748b;">●</span> Standby (Decommissioned)<br>
-        <span style="color: #9333ea;">★</span> Proposed Infill ({gap_count} locations) &nbsp;&nbsp;
-        <span style="color: #d97706;">✈</span> High-Density Hubs
+        <b style="font-size: 12.5px; color: #1e293b;">🇪🇺 ECAC {station_type} Rationalization Map — FL{selected_fl}</b><br>
+        <b>Standard / View:</b> <span style="color: #2563eb; font-weight: bold;">{active_view}</span> | <b>Active:</b> {act_sta}/{tot_sta}<br>
+        <b>10 NM Performance:</b> <span style="color: #10b981; font-weight: bold;">Met: {met_pct:.1f}%</span> |
+        <span style="color: #f59e0b; font-weight: bold;">At Risk: {at_risk_pct:.1f}%</span> |
+        <span style="color: #ef4444; font-weight: bold;">Outage: {outage_pct:.1f}%</span><br>
+        <b>Annual OPEX Savings:</b> <span style="color: #059669; font-weight: bold;">€{savings_eur:,.0f}/yr</span><br>
+        <hr style="margin: 4px 0;">
+        <span style="color: #10b981; font-size: 14px;">■</span> <b>Green:</b> Performance Met (Valid DME Pair 30°-150°, Range OK)<br>
+        <span style="color: #f59e0b; font-size: 14px;">■</span> <b>Orange:</b> At Risk / Marginal (Single DME / No N-1 Redundancy)<br>
+        <span style="color: #ef4444; font-size: 14px;">■</span> <b>Red:</b> Outage / Cannot be Met &nbsp;&nbsp;
+        <span style="color: #94a3b8; font-size: 14px;">■</span> <b>Gray:</b> Uncoverable Baseline Gap<br>
+        <span style="color: #3b82f6;">●</span> Active Station &nbsp;&nbsp;
+        <span style="color: #64748b;">●</span> Standby Station &nbsp;&nbsp;
+        <span style="color: #1e40af;">●</span> Adjacent FIR Infill &nbsp;&nbsp;
+        <span style="color: #9333ea;">★</span> Proposed Land Infill
     </div>
     """
     m.get_root().html.add_child(folium.Element(legend_html))

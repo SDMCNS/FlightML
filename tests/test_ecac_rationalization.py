@@ -193,3 +193,47 @@ def test_synthetic_gap_fillers_land_constraint():
             f"Proposed DME infill {gap['id']} at ({gap['latitude']}, {gap['longitude']}) is not on land!"
         )
 
+
+def test_navigation_performance_standards_scenarios():
+    """
+    Test DME rationalization across Navigation Performance Standards:
+    RNAV 5, RNAV 2, RNAV 1, RNP 1 with 10 NM grid performance classification (Green/Orange/Red).
+    """
+    ds = FlightDataset("202510")
+
+    # RNAV 5 (En-Route Upper Airspace)
+    rep_rnav5 = get_ecac_rationalization_report(
+        ds,
+        station_type="DME",
+        active_view="RNAV_5",
+        target_fir="EGTTFIR",
+    )
+    assert rep_rnav5["active_view"] == "RNAV_5"
+    fl200_data = rep_rnav5["coverage_by_fl"]["fl200"]
+    assert "met_cells_count" in fl200_data
+    assert "at_risk_cells_count" in fl200_data
+    assert "outage_cells" in fl200_data
+    assert fl200_data["met_pct"] > 80.0  # London FIR has high RNAV 5 compliance
+
+    # Verify 10 NM cell attributes
+    for c in fl200_data["cells"][:20]:
+        assert c["status"] in ("MET", "AT_RISK", "CANNOT_BE_MET", "UNCOVERABLE")
+        assert c["cell_size_nm"] == 10.0
+        assert "geom_tip" in c
+
+    # RNAV 1 (Terminal P-RNAV SIDs/STARs with N-1 Redundancy)
+    rep_rnav1 = get_ecac_rationalization_report(
+        ds,
+        station_type="DME",
+        active_view="RNAV_1",
+        target_fir="EGTTFIR",
+    )
+    assert rep_rnav1["active_view"] == "RNAV_1"
+    # RNAV 1 requires higher station density (N-1 redundancy >=3 DMEs) than RNAV 5
+    assert rep_rnav1["active_stations_count"] >= rep_rnav5["active_stations_count"]
+
+    # Verify Folium map generates with 10 NM rectangles
+    folium_map = create_ecac_coverage_map(rep_rnav5, selected_fl=200)
+    assert folium_map is not None
+
+

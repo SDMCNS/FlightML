@@ -4961,18 +4961,31 @@ with tab_cat_maps:
                 st.rerun()
 
         with col_v1:
-            view_labels = {
-                "VIEW_1": "View 1: Minimum Baseline (≥1 station at FL200+ & ≥1 at FL10 at airports)",
-                "VIEW_2": "View 2: Dual En-Route Redundancy (≥2 stations at FL200+ & ≥1 at airports)",
-                "VIEW_3": "View 3: Low-Level Infill & Busy Hub Dual (≥1 at FL50+, ≥2 at FL200+, ≥2 at busy hubs ≥500 mv/d at FL10)",
-            }
+            if station_type == "DME":
+                view_labels = {
+                    "RNAV_5": "🎯 RNAV 5: En-Route B-RNAV (±5 NM, ≥2 DMEs with 30°-150° geometry, FL200+)",
+                    "RNAV_2": "🎯 RNAV 2: En-Route Continental (±2 NM, valid DME pair ≤130 NM, busy hubs dual)",
+                    "RNAV_1": "🎯 RNAV 1: Terminal P-RNAV SIDs/STARs (±1 NM, N-1 Redundancy ≥3 DMEs, FL10 dual)",
+                    "RNP_1":  "🎯 RNP 1: Reversionary Terminal Multi-DME/IRU (High integrity ≥3-4 DMEs ≤40 NM)",
+                }
+                if st.session_state[view_key] not in view_labels:
+                    st.session_state[view_key] = "RNAV_5"
+            else:
+                view_labels = {
+                    "VIEW_1": "View 1: Minimum Baseline (≥1 station at FL200+ & ≥1 at FL10 at airports)",
+                    "VIEW_2": "View 2: Dual En-Route Redundancy (≥2 stations at FL200+ & ≥1 at airports)",
+                    "VIEW_3": "View 3: Low-Level Infill & Busy Hub Dual (≥1 at FL50+, ≥2 at FL200+, ≥2 at busy hubs ≥500 mv/d at FL10)",
+                }
+                if st.session_state[view_key] not in view_labels:
+                    st.session_state[view_key] = "VIEW_1"
+
             chosen_view = st.selectbox(
-                f"🎯 View Architecture ({station_type}):",
+                f"🎯 Performance Target / Architecture ({station_type}):",
                 options=list(view_labels.keys()),
                 format_func=lambda k: view_labels[k],
                 index=list(view_labels.keys()).index(st.session_state[view_key]),
                 key=f"{prefix}_sel_view_{selected_period}",
-                help="Choose between Minimum Baseline, Dual En-Route Redundancy, or Low-Level Infill & High-Density Hub Terminal Redundancy."
+                help="Choose target Navigation Performance Standard (RNAV 5, RNAV 2, RNAV 1, RNP 1) or Surveillance View Architecture."
             )
             if chosen_view != st.session_state[view_key]:
                 st.session_state[view_key] = chosen_view
@@ -5028,11 +5041,21 @@ with tab_cat_maps:
             f"{rep['annual_power_savings_mwh']:,.0f} MWh/yr",
             f"Grid & Standby Reduction"
         )
-        km4.metric(
-            f"FL{st.session_state[fl_key]} Dual Coverage",
-            f"{fl_data['dual_coverage_pct']:.1f}%",
-            f"Single: {fl_data['single_coverage_pct']:.1f}%"
-        )
+        if station_type == "DME":
+            met_p = fl_data.get("met_pct", fl_data["dual_coverage_pct"])
+            risk_p = fl_data.get("at_risk_pct", fl_data["single_coverage_pct"])
+            out_p = fl_data.get("outage_pct", 0.0)
+            km4.metric(
+                f"FL{st.session_state[fl_key]} Standard Met",
+                f"{met_p:.1f}% (Green)",
+                f"At Risk: {risk_p:.1f}% | Outage: {out_p:.1f}%"
+            )
+        else:
+            km4.metric(
+                f"FL{st.session_state[fl_key]} Dual Coverage",
+                f"{fl_data['dual_coverage_pct']:.1f}%",
+                f"Single: {fl_data['single_coverage_pct']:.1f}%"
+            )
         km5.metric(
             "Hubs Dual Ground",
             f"{rep['high_density_dual_pct']:.1f}%",
@@ -5204,6 +5227,30 @@ All operational expenditure (OPEX) and electrical energy calculations are ground
 | ↳ *Signal Processing, Receiver & UPS* | ~1.4 kW (extractor, processing, UPS float losses) | ~0.75 kW (monitor receiver, duplexer, inverter) |
 | ↳ *Shelter HVAC Climate Control* | ~5.0 kW (environmental cooling for equipment shelter) | ~1.00 kW (cabinet ventilation and cooling) |
 | **Annual Energy Calculation** | $15.41\text{ kW} \times 8,760\text{ h/yr} = \mathbf{135\text{ MWh/year}}$ | $2.85\text{ kW} \times 8,760\text{ h/yr} = \mathbf{25\text{ MWh/year}}$ |
+
+---
+
+#### 📡 Navigation Performance Standards (RNAV / RNP) & 10 NM Grid Criteria
+
+The rationalization engine evaluates DME ground station geometry against official **ICAO Doc 9613** (*PBN Manual*) and **FAA AC 90-100A** standards:
+
+| Navigation Standard | Required Accuracy (TSE 95%) | Siting & Geometry Criteria | Minimum Active Equipment Target |
+| :--- | :--- | :--- | :--- |
+| **RNAV 5** *(B-RNAV)* | $\pm 5.0\text{ NM}$ (En-Route) | $\ge 2$ DMEs with inclusion cut angle $30^\circ \le \Delta\theta \le 150^\circ$, slant range $\le 160\text{ NM}$, $\text{GDOP} \le 2.83$ | En-route upper airspace baseline; $\ge 1$ DME at airports at FL10. |
+| **RNAV 2** | $\pm 2.0\text{ NM}$ (Continental) | $\ge 2$ DMEs with valid pair geometry within $\le 130\text{ NM}$; tighter slant-range threshold | Continental transition; $\ge 2$ DMEs at busy hubs ($\ge 500$ mv/d) at FL10. |
+| **RNAV 1** *(P-RNAV)* | $\pm 1.0\text{ NM}$ (Terminal TMA) | $\mathbf{N-1}$ **Redundancy**: $\ge 3$ DMEs with valid pair geometry within $\le 60\text{ NM}$ (no "Critical DME" single point of failure) | Terminal SIDs/STARs; $\ge 2$ DMEs at all airports at FL10. |
+| **RNP 1** *(Reversionary)* | $\pm 1.0\text{ NM}$ + Alerting | High-integrity multi-DME ($\ge 3\text{--}4$ DMEs with dual independent pairs $\le 40\text{ NM}$) | Multi-sensor FMS reversionary mode when GNSS is lost or jammed. |
+
+**Map Performance Grid Color Scheme (10 NM Squares)**:
+- 🟢 **Green (Performance Met)**: All technical criteria (inclusion angle $30^\circ\text{--}150^\circ$, slant range limit, $N-1$ redundancy for RNAV 1) are fully satisfied by active stations.
+- 🟠 **Orange (At Risk / Marginal)**: Sub-optimal geometry ($25^\circ\text{--}30^\circ$ or $150^\circ\text{--}155^\circ$), single DME visibility only (no pair), distance exceeding range requiring IRU bridging, or lack of $N-1$ redundancy (vulnerable to single "Critical DME" failure).
+- 🔴 **Red (Cannot be Met / Outage)**: Zero active DME visibility or completely invalid geometry where coverage was previously possible.
+- ⚪ **Gray (Uncoverable Baseline Gap)**: Zero baseline potential in current inventory; targeted by Step 1 Adjacent FIR sharing and Step 2 Land-sited infill.
+
+**Core Mathematical Formulas**:
+- **Geometry Dilution of Precision (GDOP)**: $\text{GDOP} = \frac{\sqrt{2}}{\sin(\Delta\theta)}$. At $\Delta\theta = 30^\circ$ or $150^\circ$, $\text{GDOP} = 2.83$. Optimal at $\Delta\theta = 90^\circ$ ($\text{GDOP} = 1.41$).
+- **Radio Line-of-Sight (RLOS)**: $D_{\text{max}} = 1.23 \times (\sqrt{h_{\text{aircraft}}} + \sqrt{h_{\text{station}}})\text{ NM}$.
+- **Elevation Angle Limit**: $\theta_{\text{elevation}} \le 30^\circ \iff d_{\text{ground}} \ge h_{\text{altitude}} \times \sqrt{3}$ (prevents vertical slant-range distortion).
 
 ---
 
