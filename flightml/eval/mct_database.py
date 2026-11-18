@@ -437,6 +437,18 @@ def resolve_hub_mct(ident: str, fallback_to_default: bool = True) -> HubMCTProfi
 
 get_hub_mct_profile = resolve_hub_mct
 
+# Direct dictionary mapping for backward compatibility and dashboard views
+HUB_MCT_DATABASE: dict[str, dict[str, Any]] = {}
+for code_k, prof_v in HUB_MCT_INDEX.items():
+    d = prof_v.to_dict()
+    raw = d.get("raw_strings") or {}
+    d["D_to_D"] = raw.get("D_to_D") or f"{prof_v.d_to_d_min} min"
+    d["D_to_I"] = raw.get("D_to_I") or f"{prof_v.d_to_i_min} min"
+    d["I_to_D"] = raw.get("I_to_D") or f"{prof_v.i_to_d_min} min"
+    d["I_to_I"] = raw.get("I_to_I") or f"{prof_v.i_to_i_min} min"
+    HUB_MCT_DATABASE[code_k] = d
+
+
 
 def _match_country(c1: str, c2_code: str, c2_name: str) -> bool:
     if not c1:
