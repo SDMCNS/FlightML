@@ -92,6 +92,7 @@ from flightml.eval.flight_notes import (
 )
 from flightml.eval.jet_fuel_prices import get_all_weekly_fuel_prices_df
 from flightml.viz.map_builder import (
+    create_contrail_horizontal_map,
     create_trajectory_map,
     create_flight_fir_charge_map,
     create_grid_saturation_map,
@@ -548,15 +549,17 @@ with tab_cat_single:
 
             st.caption(
                 "🗺️ **Interactive 4D Route & Active Navaids Map:** Colored dots show ground radio navigation aids auto-tuned along the entire corridor "
-                "(🔵 **VOR-DME / VORTAC** | 🔷 **DME / TACAN** | 🟢 **VOR** | 🟣 **ILS/LOC** | 🟠 **NDB**) "
-                "with dashed sightlines to the aircraft's closest 4D trajectory pass. Use the toggle above to switch navaid icons on or off."
+                "(🔵 **VOR-DME / VORTAC** | 🔷 **DME / TACAN** | 🟢 **VOR** | 🟣 **ILS/LOC** | 🟠 **NDB**), "
+                "with dashed sightlines to the aircraft's closest 4D trajectory pass and persistent contrail (ISSR) layers. Use the toggle above to switch navaid icons on or off."
             )
+            contrail_rep = analyze_flight_wind_and_contrails(ds, int(active_flight_id))
             m = create_trajectory_map(
                 flight,
                 trajs["actual"],
                 trajs["planned"],
                 active_navaids=filtered_route_navaids,
                 show_navaids=show_route_navaids,
+                contrail_segments=contrail_rep.issr_segments if contrail_rep else None,
             )
             st_folium(
                 m,
@@ -1093,7 +1096,8 @@ with tab_cat_single:
                     )
                     st.dataframe(pd.DataFrame([b.__dict__ for b in crco_rep.fir_breakdown]), use_container_width=True)
 
-            contrail_rep = analyze_flight_wind_and_contrails(ds, int(active_flight_id))
+            if contrail_rep is None:
+                contrail_rep = analyze_flight_wind_and_contrails(ds, int(active_flight_id))
             if contrail_rep:
                 st.divider()
                 st.subheader("🌬️ Upper-Air Winds, Equivalent Still Air Distance (ESAD) & Contrail Climate")
@@ -1145,8 +1149,225 @@ with tab_cat_single:
                     f"{contrail_rep.issr_segments_count} ISSR segments",
                 )
 
-                if contrail_rep.issr_segments:
-                    st.dataframe(pd.DataFrame([s.__dict__ for s in contrail_rep.issr_segments]), use_container_width=True)
+                # Contrail 4D Climate Impact: Horizontal Route Map & Vertical Profile Views
+                st.markdown("---")
+                st.markdown("#### 🗺️ Persistent Contrail Formation: Flown Route Map & Vertical Profile Views")
+                st.caption(
+                    "Identifies 4D Ice Supersaturated Regions (ISSR) where ambient atmospheric temperature satisfies the Schmidt-Appleman Criterion "
+                    "($T \\le T_{\\text{SAC}}$) and relative humidity exceeds ice saturation ($RH_{\\text{ice}} \\ge 100\\%$). "
+                    "Contrail-forming elements are imposed directly on the general horizontal radar route and general vertical flight profile."
+                )
+
+                c_tab1, c_tab2, c_tab3 = st.tabs([
+                    "🗺️ Horizontal Route (Contrail Elements Imposed)",
+                    "📈 Vertical Flight Profile (ISSR Contrail Bands Imposed)",
+                    "📋 Contrail Segments & Tactical Shift Advisories",
+                ])
+
+                with c_tab1:
+                    if contrail_rep.issr_segments:
+                        st.info(
+                            f"🧊 **Persistent Contrail Forming Elements:** {contrail_rep.persistent_contrail_distance_nm:.1f} nm "
+                            f"({contrail_rep.persistent_contrail_pct:.1f}% of cruise) across {contrail_rep.issr_segments_count} ISSR segment(s). "
+                            "Persistent contrails are imposed in **glowing neon cyan (`#00f0ff`)** over the general purple radar trajectory."
+                        )
+                    else:
+                        st.success(
+                            "✅ **Clean Air Corridor:** Zero persistent contrails formed along this trajectory. "
+                            "Ambient temperatures remained warmer than the Schmidt-Appleman threshold ($T > T_{\\text{SAC}}$) or dry ($RH_{\\text{ice}} < 100\\%$)."
+                        )
+
+                    c_map = create_contrail_horizontal_map(
+                        flight_info=flight,
+                        actual_df=trajs["actual"],
+                        contrail_segments=contrail_rep.issr_segments,
+                    )
+                    st_folium(
+                        c_map,
+                        width=1200,
+                        height=540,
+                        returned_objects=[],
+                        key=f"contrail_horiz_map_{selected_period}_{active_flight_id}_{len(contrail_rep.issr_segments)}",
+                    )
+
+                with c_tab2:
+                    if contrail_rep.annotated_profile:
+                        prof_df = pd.DataFrame(contrail_rep.annotated_profile).dropna(subset=["flight_level", "cum_dist_nm"]).copy()
+                        base_x = alt.X("cum_dist_nm:Q", title="Cumulative Flown Distance Along Route (nm)")
+                        base_y = alt.Y("flight_level:Q", title="Flight Level (FL, 100s ft)", scale=alt.Scale(zero=True))
+
+                        # 1. Base vertical profile area & route line
+                        base_fl_area = (
+                            alt.Chart(prof_df)
+                            .mark_area(opacity=0.15, color="#8e44ad")
+                            .encode(x=base_x, y=base_y)
+                        )
+                        base_fl_line = (
+                            alt.Chart(prof_df)
+                            .mark_line(color="#8e44ad", strokeWidth=2.5)
+                            .encode(
+                                x=base_x,
+                                y=base_y,
+                                tooltip=[
+                                    alt.Tooltip("seq_num:Q", title="Waypoint #"),
+                                    alt.Tooltip("time_over:N", title="Time (UTC)"),
+                                    alt.Tooltip("cum_dist_nm:Q", title="Distance (nm)", format=".1f"),
+                                    alt.Tooltip("flight_level:Q", title="Flown FL", format=".0f"),
+                                    alt.Tooltip("temperature_c:Q", title="Temp (°C)", format=".1f"),
+                                    alt.Tooltip("rh_ice_pct:Q", title="RHi (%)", format=".0f"),
+                                    alt.Tooltip("is_issr_contrail:N", title="Persistent Contrail Forming"),
+                                ],
+                            )
+                        )
+
+                        chart_layers = [base_fl_area, base_fl_line]
+
+                        # 2. Imposed ISSR vertical bands and tactical avoidance shift line
+                        if contrail_rep.issr_segments:
+                            issr_rect_data = []
+                            for s in contrail_rep.issr_segments:
+                                s_dict = s.to_dict() if hasattr(s, "to_dict") else (s if isinstance(s, dict) else s.__dict__)
+                                x1 = float(s_dict.get("cum_dist_start_nm", 0.0))
+                                x2 = float(s_dict.get("cum_dist_end_nm", 0.0))
+                                if x2 <= x1:
+                                    x2 = x1 + max(1.0, float(s_dict.get("distance_nm", 1.0)))
+                                fl_val = float(s_dict.get("flight_level", 350.0))
+                                rec_fl = float(s_dict.get("recommended_alt_fl", fl_val))
+                                note = str(s_dict.get("alt_deviation_note", ""))
+                                issr_rect_data.append({
+                                    "x1": x1,
+                                    "x2": x2,
+                                    "y1": max(0.0, fl_val - 15.0),
+                                    "y2": fl_val + 15.0,
+                                    "fl": fl_val,
+                                    "rec_fl": rec_fl,
+                                    "note": note,
+                                    "dist_nm": float(s_dict.get("distance_nm", 0.0)),
+                                    "rhi": float(s_dict.get("rh_ice_pct", 100.0)),
+                                    "temp": float(s_dict.get("temperature_c", -45.0)),
+                                })
+
+                            if issr_rect_data:
+                                issr_df = pd.DataFrame(issr_rect_data)
+                                issr_band = (
+                                    alt.Chart(issr_df)
+                                    .mark_rect(opacity=0.25, color="#00d2d3")
+                                    .encode(
+                                        x="x1:Q",
+                                        x2="x2:Q",
+                                        y="y1:Q",
+                                        y2="y2:Q",
+                                        tooltip=[
+                                            alt.Tooltip("fl:Q", title="ISSR Cruise FL", format=".0f"),
+                                            alt.Tooltip("dist_nm:Q", title="Segment Length (nm)", format=".1f"),
+                                            alt.Tooltip("rhi:Q", title="Ice Relative Humidity (%)", format=".0f"),
+                                            alt.Tooltip("temp:Q", title="Ambient Temp (°C)", format=".1f"),
+                                            alt.Tooltip("rec_fl:Q", title="Recommended Avoidance FL", format=".0f"),
+                                            alt.Tooltip("note:N", title="Tactical Shift Advisory"),
+                                        ],
+                                    )
+                                )
+                                rec_rule = (
+                                    alt.Chart(issr_df)
+                                    .mark_rule(color="#27ae60", strokeWidth=3.0, strokeDash=[6, 4])
+                                    .encode(
+                                        x="x1:Q",
+                                        x2="x2:Q",
+                                        y="rec_fl:Q",
+                                        tooltip=[
+                                            alt.Tooltip("rec_fl:Q", title="Recommended Avoidance FL", format=".0f"),
+                                            alt.Tooltip("note:N", title="Tactical Shift Advisory"),
+                                        ],
+                                    )
+                                )
+                                chart_layers.insert(0, issr_band)
+                                chart_layers.append(rec_rule)
+
+                        # 3. Imposed Contrail-Forming Points (cyan glowing markers)
+                        c_pts = prof_df[prof_df["is_issr_contrail"] == True]
+                        if not c_pts.empty:
+                            c_line = (
+                                alt.Chart(c_pts)
+                                .mark_circle(size=85, opacity=0.95, color="#00f0ff")
+                                .encode(
+                                    x=base_x,
+                                    y=base_y,
+                                    tooltip=[
+                                        alt.Tooltip("time_over:N", title="Time (UTC)"),
+                                        alt.Tooltip("cum_dist_nm:Q", title="Distance (nm)", format=".1f"),
+                                        alt.Tooltip("flight_level:Q", title="Flown FL", format=".0f"),
+                                        alt.Tooltip("temperature_c:Q", title="Temp (°C)", format=".1f"),
+                                        alt.Tooltip("rh_ice_pct:Q", title="RHi (%)", format=".0f"),
+                                        alt.Tooltip("recommended_alt_fl:Q", title="Avoidance FL", format=".0f"),
+                                        alt.Tooltip("alt_deviation_note:N", title="Advisory Note"),
+                                    ],
+                                )
+                            )
+                            chart_layers.append(c_line)
+
+                        combined_vert_chart = (
+                            alt.layer(*chart_layers)
+                            .properties(
+                                height=310,
+                                title="Vertical Flight Profile (FL, Purple) with Persistent Contrail Forming Elements (Cyan) & Recommended Tactical Avoidance (Green Dashed)",
+                            )
+                        )
+                        st.altair_chart(combined_vert_chart, use_container_width=True)
+
+                        # 4. Aligned Secondary Environmental Profile: RHi (%) and Ambient Temp (°C)
+                        rhi_df = prof_df.dropna(subset=["rh_ice_pct"]).copy()
+                        if not rhi_df.empty:
+                            rhi_line = (
+                                alt.Chart(rhi_df)
+                                .mark_line(color="#0984e3", strokeWidth=2.2)
+                                .encode(
+                                    x=base_x,
+                                    y=alt.Y("rh_ice_pct:Q", title="Ice Relative Humidity (RHi %)"),
+                                    tooltip=[
+                                        alt.Tooltip("cum_dist_nm:Q", title="Distance (nm)", format=".1f"),
+                                        alt.Tooltip("flight_level:Q", title="FL", format=".0f"),
+                                        alt.Tooltip("rh_ice_pct:Q", title="RHi (%)", format=".0f"),
+                                        alt.Tooltip("temperature_c:Q", title="Temp (°C)", format=".1f"),
+                                    ],
+                                )
+                            )
+                            thresh_rule = (
+                                alt.Chart(pd.DataFrame([{"thresh": 100.0}]))
+                                .mark_rule(color="#d63031", strokeWidth=1.8, strokeDash=[4, 4])
+                                .encode(y="thresh:Q")
+                            )
+                            st.altair_chart(
+                                (rhi_line + thresh_rule).properties(
+                                    height=135,
+                                    title="Upper-Air Ice Relative Humidity (RHi %) Along Flight Corridor (Values ≥100% Red Dashed Line Trigger Persistent Contrails)",
+                                ),
+                                use_container_width=True,
+                            )
+                    else:
+                        st.info("No 4D vertical profile points available for this flight trajectory.")
+
+                with c_tab3:
+                    if contrail_rep.issr_segments:
+                        st.markdown("##### ⏱️ Sequenced Ice Supersaturated Region (ISSR) Traversals")
+                        st_df = pd.DataFrame([s.to_dict() if hasattr(s, "to_dict") else s.__dict__ for s in contrail_rep.issr_segments])
+                        pref_cols = [
+                            ("seq_start", "Start Wpt"),
+                            ("seq_end", "End Wpt"),
+                            ("start_time_utc", "Start Time (UTC)"),
+                            ("end_time_utc", "End Time (UTC)"),
+                            ("flight_level", "Flown FL"),
+                            ("distance_nm", "Length (nm)"),
+                            ("duration_min", "Duration (min)"),
+                            ("temperature_c", "Temp (°C)"),
+                            ("rh_ice_pct", "RHi (%)"),
+                            ("recommended_alt_fl", "Avoidance FL"),
+                            ("alt_deviation_note", "Tactical Shift Recommendation"),
+                        ]
+                        cols_in = [c for c, _ in pref_cols if c in st_df.columns]
+                        ren_map = {c: d for c, d in pref_cols if c in st_df.columns}
+                        st.dataframe(st_df[cols_in].rename(columns=ren_map), use_container_width=True)
+                    else:
+                        st.info("No persistent contrail segments detected along this flight trajectory.")
 
                 with st.expander("📖 Why Flown Distance Does Not Equal Fuel Efficiency: Air Distance (ESAD) & Jet Stream Mechanics", expanded=False):
                     st.markdown(

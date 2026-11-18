@@ -12,7 +12,7 @@ Evaluates:
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import pandas as pd
@@ -36,6 +36,12 @@ class ContrailSegment:
     rh_ice_pct: float
     recommended_alt_fl: float
     alt_deviation_note: str
+    start_lat: float = 0.0
+    start_lon: float = 0.0
+    end_lat: float = 0.0
+    end_lon: float = 0.0
+    cum_dist_start_nm: float = 0.0
+    cum_dist_end_nm: float = 0.0
 
 
 @dataclass
@@ -66,6 +72,7 @@ class UpperAirImpactReport:
     total_climate_co2e_multiplier: float
     issr_segments_count: int
     issr_segments: list[ContrailSegment]
+    annotated_profile: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -118,75 +125,142 @@ def analyze_flight_wind_and_contrails(
     contrail_dur_min = 0.0
     issr_segments: list[ContrailSegment] = []
 
+    cum_ground_dist_nm = 0.0
+    annotated_profile: list[dict[str, Any]] = []
+
+    # Initialize with the origin waypoint
+    r0 = actual_df.iloc[0]
+    annotated_profile.append(
+        {
+            "seq_num": int(r0["seq_num"]),
+            "time_over": str(r0["time_over"]),
+            "latitude": round(float(r0["latitude"]), 5),
+            "longitude": round(float(r0["longitude"]), 5),
+            "flight_level": round(float(r0["flight_level"]), 1),
+            "cum_dist_nm": 0.0,
+            "temperature_c": None,
+            "t_sac_c": None,
+            "rh_ice_pct": None,
+            "is_issr_contrail": False,
+            "recommended_alt_fl": None,
+            "alt_deviation_note": None,
+            "groundspeed_kts": None,
+            "tailwind_kts": None,
+        }
+    )
+
     for i in range(len(actual_df) - 1):
         r1 = actual_df.iloc[i]
         r2 = actual_df.iloc[i + 1]
-        fl = float((r1["flight_level"] + r2["flight_level"]) / 2.0)
-        if fl < 240.0:
-            continue
-
         lat1, lon1 = float(r1["latitude"]), float(r1["longitude"])
         lat2, lon2 = float(r2["latitude"]), float(r2["longitude"])
         seg_nm = haversine_nm(lat1, lon1, lat2, lon2)
-        if seg_nm <= 0.2:
-            continue
+        cum_start = cum_ground_dist_nm
+        cum_ground_dist_nm += seg_nm
+        cum_end = cum_ground_dist_nm
 
-        t1 = pd.to_datetime(r1["time_over"])
-        t2 = pd.to_datetime(r2["time_over"])
-        seg_min = max(0.5, (t2 - t1).total_seconds() / 60.0)
-        gs_kts = min(650.0, max(280.0, (seg_nm / seg_min) * 60.0))
+        fl = float((r1["flight_level"] + r2["flight_level"]) / 2.0)
 
-        track_deg = initial_bearing_deg(lat1, lon1, lat2, lon2)
-        mid_lat = (lat1 + lat2) / 2.0
-        mid_lon = (lon1 + lon2) / 2.0
+        is_contrail = False
+        ua_temp = None
+        ua_rhi = None
+        t_sac_val = None
+        rec_fl_val = None
+        note_val = None
+        gs_val = None
+        tw_val = None
 
-        ua = client.get_upper_air_state(mid_lat, mid_lon, fl, str(r1["time_over"]))
-        # Meteorological wind direction `ua.wind_dir_deg` is direction wind blows FROM.
-        # Wind vector blows TOWARD `(ua.wind_dir_deg + 180) % 360`.
-        wind_toward_deg = (ua.wind_dir_deg + 180.0) % 360.0
-        rel_angle = math.radians(wind_toward_deg - track_deg)
-        tailwind_kts = ua.wind_speed_kts * math.cos(rel_angle)
-        tas_kts = max(350.0, min(540.0, gs_kts - tailwind_kts))
+        if fl >= 240.0 and seg_nm > 0.2:
+            t1 = pd.to_datetime(r1["time_over"])
+            t2 = pd.to_datetime(r2["time_over"])
+            seg_min = max(0.5, (t2 - t1).total_seconds() / 60.0)
+            gs_kts = min(650.0, max(280.0, (seg_nm / seg_min) * 60.0))
+            gs_val = round(gs_kts, 1)
 
-        seg_esad_nm = seg_nm * (tas_kts / max(100.0, gs_kts))
-        total_esad_nm += seg_esad_nm
+            track_deg = initial_bearing_deg(lat1, lon1, lat2, lon2)
+            mid_lat = (lat1 + lat2) / 2.0
+            mid_lon = (lon1 + lon2) / 2.0
 
-        cruise_dist_nm += seg_nm
-        weighted_gs += gs_kts * seg_nm
-        weighted_tas += tas_kts * seg_nm
-        weighted_tw += tailwind_kts * seg_nm
+            ua = client.get_upper_air_state(mid_lat, mid_lon, fl, str(r1["time_over"]))
+            ua_temp = ua.temperature_c
+            ua_rhi = ua.rh_ice_pct
 
-        # Check Schmidt-Appleman Criterion & Ice Supersaturation (RHi >= 100%)
-        t_sac = schmidt_appleman_threshold_c(ua.pressure_hpa)
-        if ua.temperature_c <= t_sac and ua.rh_ice_pct >= 100.0:
-            contrail_dist_nm += seg_nm
-            contrail_dur_min += seg_min
+            # Meteorological wind direction `ua.wind_dir_deg` is direction wind blows FROM.
+            # Wind vector blows TOWARD `(ua.wind_dir_deg + 180) % 360`.
+            wind_toward_deg = (ua.wind_dir_deg + 180.0) % 360.0
+            rel_angle = math.radians(wind_toward_deg - track_deg)
+            tailwind_kts = ua.wind_speed_kts * math.cos(rel_angle)
+            tw_val = round(tailwind_kts, 1)
+            tas_kts = max(350.0, min(540.0, gs_kts - tailwind_kts))
 
-            # Check +/- 2,000 ft (+/- 20 FL) for drier air outside the thin ISSR layer
-            ua_up = client.get_upper_air_state(mid_lat, mid_lon, min(410.0, fl + 20.0), str(r1["time_over"]))
-            ua_dn = client.get_upper_air_state(mid_lat, mid_lon, max(260.0, fl - 20.0), str(r1["time_over"]))
-            if ua_dn.rh_ice_pct <= ua_up.rh_ice_pct:
-                rec_fl = max(260.0, fl - 20.0)
-                note = f"Descend -2,000 ft to FL{rec_fl:.0f} (RHi drops {ua.rh_ice_pct:.0f}% ➔ {ua_dn.rh_ice_pct:.0f}%)"
-            else:
-                rec_fl = min(410.0, fl + 20.0)
-                note = f"Climb +2,000 ft to FL{rec_fl:.0f} (RHi drops {ua.rh_ice_pct:.0f}% ➔ {ua_up.rh_ice_pct:.0f}%)"
+            seg_esad_nm = seg_nm * (tas_kts / max(100.0, gs_kts))
+            total_esad_nm += seg_esad_nm
 
-            issr_segments.append(
-                ContrailSegment(
-                    seq_start=int(r1["seq_num"]),
-                    seq_end=int(r2["seq_num"]),
-                    start_time_utc=str(r1["time_over"]),
-                    end_time_utc=str(r2["time_over"]),
-                    flight_level=round(fl, 0),
-                    distance_nm=round(seg_nm, 1),
-                    duration_min=round(seg_min, 1),
-                    temperature_c=ua.temperature_c,
-                    rh_ice_pct=ua.rh_ice_pct,
-                    recommended_alt_fl=round(rec_fl, 0),
-                    alt_deviation_note=note,
+            cruise_dist_nm += seg_nm
+            weighted_gs += gs_kts * seg_nm
+            weighted_tas += tas_kts * seg_nm
+            weighted_tw += tailwind_kts * seg_nm
+
+            # Check Schmidt-Appleman Criterion & Ice Supersaturation (RHi >= 100%)
+            t_sac = schmidt_appleman_threshold_c(ua.pressure_hpa)
+            t_sac_val = round(t_sac, 1)
+            if ua.temperature_c <= t_sac and ua.rh_ice_pct >= 100.0:
+                is_contrail = True
+                contrail_dist_nm += seg_nm
+                contrail_dur_min += seg_min
+
+                # Check +/- 2,000 ft (+/- 20 FL) for drier air outside the thin ISSR layer
+                ua_up = client.get_upper_air_state(mid_lat, mid_lon, min(410.0, fl + 20.0), str(r1["time_over"]))
+                ua_dn = client.get_upper_air_state(mid_lat, mid_lon, max(260.0, fl - 20.0), str(r1["time_over"]))
+                if ua_dn.rh_ice_pct <= ua_up.rh_ice_pct:
+                    rec_fl = max(260.0, fl - 20.0)
+                    note = f"Descend -2,000 ft to FL{rec_fl:.0f} (RHi drops {ua.rh_ice_pct:.0f}% ➔ {ua_dn.rh_ice_pct:.0f}%)"
+                else:
+                    rec_fl = min(410.0, fl + 20.0)
+                    note = f"Climb +2,000 ft to FL{rec_fl:.0f} (RHi drops {ua.rh_ice_pct:.0f}% ➔ {ua_up.rh_ice_pct:.0f}%)"
+                rec_fl_val = round(rec_fl, 0)
+                note_val = note
+
+                issr_segments.append(
+                    ContrailSegment(
+                        seq_start=int(r1["seq_num"]),
+                        seq_end=int(r2["seq_num"]),
+                        start_time_utc=str(r1["time_over"]),
+                        end_time_utc=str(r2["time_over"]),
+                        flight_level=round(fl, 0),
+                        distance_nm=round(seg_nm, 1),
+                        duration_min=round(seg_min, 1),
+                        temperature_c=ua.temperature_c,
+                        rh_ice_pct=ua.rh_ice_pct,
+                        recommended_alt_fl=round(rec_fl, 0),
+                        alt_deviation_note=note,
+                        start_lat=round(lat1, 5),
+                        start_lon=round(lon1, 5),
+                        end_lat=round(lat2, 5),
+                        end_lon=round(lon2, 5),
+                        cum_dist_start_nm=round(cum_start, 1),
+                        cum_dist_end_nm=round(cum_end, 1),
+                    )
                 )
-            )
+
+        annotated_profile.append(
+            {
+                "seq_num": int(r2["seq_num"]),
+                "time_over": str(r2["time_over"]),
+                "latitude": round(lat2, 5),
+                "longitude": round(lon2, 5),
+                "flight_level": round(float(r2["flight_level"]), 1),
+                "cum_dist_nm": round(cum_end, 1),
+                "temperature_c": ua_temp,
+                "t_sac_c": t_sac_val,
+                "rh_ice_pct": ua_rhi,
+                "is_issr_contrail": is_contrail,
+                "recommended_alt_fl": rec_fl_val,
+                "alt_deviation_note": note_val,
+                "groundspeed_kts": gs_val,
+                "tailwind_kts": tw_val,
+            }
+        )
 
     if cruise_dist_nm <= 1.0:
         cruise_dist_nm = max(50.0, float(flight.get("actual_distance_nm") or 300.0))
@@ -272,6 +346,7 @@ def analyze_flight_wind_and_contrails(
         direct_co2_tons=round(direct_co2_tons, 2),
         total_climate_co2e_multiplier=round(multiplier, 2),
         issr_segments_count=len(issr_segments),
-        issr_segments=issr_segments[:15],
+        issr_segments=issr_segments,
+        annotated_profile=annotated_profile,
     )
 

@@ -27,6 +27,8 @@ def create_trajectory_map(
     output_html_path: Path | str | None = None,
     active_navaids: list[Any] | None = None,
     show_navaids: bool = True,
+    contrail_segments: list[Any] | None = None,
+    show_contrails: bool = True,
 ) -> folium.Map:
     """
     Generate an interactive Leaflet/Folium map visualizing:
@@ -234,6 +236,64 @@ def create_trajectory_map(
 
         nav_group.add_to(m)
 
+    # Add persistent contrail (ISSR) segments if provided
+    has_contrails = False
+    if contrail_segments and show_contrails:
+        c_group = folium.FeatureGroup(name="🧊 Persistent Contrail Cirrus (ISSR)", show=True)
+        for seg in contrail_segments:
+            s_dict = seg.to_dict() if hasattr(seg, "to_dict") else (seg if isinstance(seg, dict) else seg.__dict__)
+            lat1 = float(s_dict.get("start_lat", 0.0))
+            lon1 = float(s_dict.get("start_lon", 0.0))
+            lat2 = float(s_dict.get("end_lat", 0.0))
+            lon2 = float(s_dict.get("end_lon", 0.0))
+            if not (_is_finite_coord(lat1) and _is_finite_coord(lon1) and _is_finite_coord(lat2) and _is_finite_coord(lon2)):
+                continue
+            if abs(lat1) < 0.1 and abs(lon1) < 0.1:
+                continue
+
+            has_contrails = True
+            fl = float(s_dict.get("flight_level", 0.0))
+            dist = float(s_dict.get("distance_nm", 0.0))
+            dur = float(s_dict.get("duration_min", 0.0))
+            t_c = float(s_dict.get("temperature_c", -45.0))
+            rhi = float(s_dict.get("rh_ice_pct", 105.0))
+            rec_fl = float(s_dict.get("recommended_alt_fl", fl))
+            note = str(s_dict.get("alt_deviation_note", ""))
+
+            # Casing
+            folium.PolyLine(
+                locations=[[lat1, lon1], [lat2, lon2]],
+                color="#0c2461",
+                weight=8,
+                opacity=0.75,
+            ).add_to(c_group)
+
+            # Glowing core
+            folium.PolyLine(
+                locations=[[lat1, lon1], [lat2, lon2]],
+                color="#00f0ff",
+                weight=5,
+                opacity=0.98,
+                tooltip=f"🧊 Persistent Contrail: FL{fl:.0f} | {dist:.1f} nm ({dur:.1f}m) | RHi: {rhi:.0f}%",
+                popup=folium.Popup(
+                    f"""
+                    <div style="font-family: sans-serif; min-width: 210px; font-size: 12.5px;">
+                        <b style="color: #0984e3; font-size: 13.5px;">🧊 Persistent Contrail (ISSR)</b><br>
+                        <hr style="margin: 4px 0;">
+                        <b>Flight Level:</b> FL{fl:.0f}<br>
+                        <b>Distance:</b> {dist:.1f} nm ({dur:.1f} min)<br>
+                        <b>Ambient Temp:</b> {t_c:.1f}°C (Threshold T_SAC)<br>
+                        <b>Ice Relative Humidity:</b> {rhi:.0f}% (Supersaturated)<br>
+                        <b>Recommended Shift:</b> FL{rec_fl:.0f}<br>
+                        <i style="color: #27ae60;">{note}</i>
+                    </div>
+                    """,
+                    max_width=270,
+                ),
+            ).add_to(c_group)
+        if has_contrails:
+            c_group.add_to(m)
+
     # Add layer control to toggle basemaps and navaid overlay
     folium.LayerControl(position="topright", collapsed=True).add_to(m)
 
@@ -248,10 +308,12 @@ def create_trajectory_map(
         if (active_navaids and show_navaids)
         else ""
     )
-    box_height = 138 if (active_navaids and show_navaids) else 115
+    contrail_legend = ' | <span style="color: #00f0ff; font-weight: bold;">━ Contrail (ISSR)</span>' if has_contrails else ""
+    extra_h = 20 if has_contrails else 0
+    box_height = (138 if (active_navaids and show_navaids) else 115) + extra_h
     title_html = f"""
     <div style="position: fixed;
-                bottom: 25px; left: 15px; width: 355px; height: {box_height}px;
+                bottom: 25px; left: 15px; width: 360px; height: {box_height}px;
                 background-color: white; border:2px solid #bdc3c7; border-radius: 8px;
                 z-index: 9999; font-size:12.5px; font-family: sans-serif;
                 padding: 10px; box-shadow: 2px 2px 6px rgba(0,0,0,0.2);">
@@ -259,11 +321,185 @@ def create_trajectory_map(
         <b>Route:</b> {adep} &rarr; {ades}<br>
         <b>Distance:</b> Actual {metrics.actual_distance_nm:.0f} nm (Plan: {metrics.planned_distance_nm:.0f} nm)<br>
         <b>Efficiency Ratio:</b> {metrics.horizontal_extension_ratio:.3f}x | <b>Holdings:</b> {len(metrics.holding_events)}<br>
-        <span style="color: #2980b9;">-- Filed Plan</span> | <span style="color: #8e44ad;">— Actual Track</span> | <span style="color: #e74c3c;">⭕ Holding</span>
+        <span style="color: #2980b9;">-- Filed Plan</span> | <span style="color: #8e44ad;">— Actual Track</span> | <span style="color: #e74c3c;">⭕ Holding</span>{contrail_legend}
         {nav_legend_line}
     </div>
     """
     m.get_root().html.add_child(folium.Element(title_html))
+
+    if output_html_path:
+        out_p = Path(output_html_path)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        m.save(str(out_p))
+
+    return m
+
+
+def create_contrail_horizontal_map(
+    flight_info: dict[str, Any],
+    actual_df: pd.DataFrame,
+    contrail_segments: list[Any] | None = None,
+    output_html_path: Path | str | None = None,
+) -> folium.Map:
+    """
+    Generate an interactive Leaflet/Folium map visualizing the horizontal elements
+    of the flown route with persistent contrail (ISSR) forming segments imposed on top.
+    """
+    ectrl_id = flight_info.get("ectrl_id", 0)
+    adep = flight_info.get("adep", "ADEP")
+    ades = flight_info.get("ades", "ADES")
+    op = flight_info.get("ac_operator", "OP")
+    ac = flight_info.get("ac_type", "AC")
+
+    center_lat, center_lon = 50.0, 10.0
+    if not actual_df.empty and "latitude" in actual_df.columns and "longitude" in actual_df.columns:
+        valid_act = actual_df.dropna(subset=["latitude", "longitude"])
+        if not valid_act.empty:
+            c_lat = float(valid_act["latitude"].mean())
+            c_lon = float(valid_act["longitude"].mean())
+            if _is_finite_coord(c_lat) and _is_finite_coord(c_lon):
+                center_lat, center_lon = c_lat, c_lon
+
+    m = folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=5,
+        tiles=None,
+    )
+
+    folium.TileLayer(
+        tiles="https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+        attr="&copy; OpenStreetMap contributors, Tiles style by Humanitarian OpenStreetMap Team hosted by OpenStreetMap France",
+        name="Humanitarian (Unblocked)",
+        subdomains="abc",
+        show=True,
+        control=True,
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}",
+        attr="USGS The National Map (Public Domain)",
+        name="USGS Topo (Unblocked)",
+        show=False,
+        control=True,
+    ).add_to(m)
+
+    # 1. Base Flown Trajectory
+    if not actual_df.empty and "latitude" in actual_df.columns and "longitude" in actual_df.columns:
+        valid_pts = actual_df.dropna(subset=["latitude", "longitude"])
+        actual_coords = list(zip(valid_pts["latitude"], valid_pts["longitude"]))
+        folium.PolyLine(
+            actual_coords,
+            color="#8e44ad",
+            weight=4,
+            opacity=0.65,
+            tooltip=f"Flown Radar Route: Flight #{ectrl_id} ({adep} ➔ {ades})",
+        ).add_to(m)
+
+        # Mark ADEP
+        first_pt = valid_pts.iloc[0]
+        folium.Marker(
+            [first_pt["latitude"], first_pt["longitude"]],
+            tooltip=f"Departure: {adep}",
+            icon=folium.Icon(color="green", icon="plane-departure", prefix="fa"),
+        ).add_to(m)
+
+        # Mark ADES
+        last_pt = valid_pts.iloc[-1]
+        folium.Marker(
+            [last_pt["latitude"], last_pt["longitude"]],
+            tooltip=f"Destination: {ades}",
+            icon=folium.Icon(color="red", icon="plane-arrival", prefix="fa"),
+        ).add_to(m)
+
+    # 2. Imposed Persistent Contrail (ISSR) Forming Segments
+    c_segs = contrail_segments or []
+    tot_c_dist = 0.0
+    if c_segs:
+        contrail_group = folium.FeatureGroup(name="🧊 Persistent Contrail Cirrus (ISSR)", show=True)
+        for idx, seg in enumerate(c_segs):
+            s_dict = seg.to_dict() if hasattr(seg, "to_dict") else (seg if isinstance(seg, dict) else seg.__dict__)
+            lat1 = float(s_dict.get("start_lat", 0.0))
+            lon1 = float(s_dict.get("start_lon", 0.0))
+            lat2 = float(s_dict.get("end_lat", 0.0))
+            lon2 = float(s_dict.get("end_lon", 0.0))
+            if not (_is_finite_coord(lat1) and _is_finite_coord(lon1) and _is_finite_coord(lat2) and _is_finite_coord(lon2)):
+                continue
+            if abs(lat1) < 0.1 and abs(lon1) < 0.1:
+                continue
+
+            fl = float(s_dict.get("flight_level", 0.0))
+            dist = float(s_dict.get("distance_nm", 0.0))
+            dur = float(s_dict.get("duration_min", 0.0))
+            tot_c_dist += dist
+            t_c = float(s_dict.get("temperature_c", -45.0))
+            rhi = float(s_dict.get("rh_ice_pct", 105.0))
+            rec_fl = float(s_dict.get("recommended_alt_fl", fl))
+            note = str(s_dict.get("alt_deviation_note", ""))
+
+            # Casing line (navy)
+            folium.PolyLine(
+                locations=[[lat1, lon1], [lat2, lon2]],
+                color="#0c2461",
+                weight=8,
+                opacity=0.75,
+            ).add_to(contrail_group)
+
+            # Glowing core line (neon cyan)
+            folium.PolyLine(
+                locations=[[lat1, lon1], [lat2, lon2]],
+                color="#00f0ff",
+                weight=5,
+                opacity=0.98,
+                tooltip=f"🧊 Contrail Forming: FL{fl:.0f} | {dist:.1f} nm ({dur:.1f}m) | RHi: {rhi:.0f}% | Temp: {t_c:.1f}°C",
+                popup=folium.Popup(
+                    f"""
+                    <div style="font-family: sans-serif; min-width: 230px; font-size: 12.5px;">
+                        <b style="color: #0984e3; font-size: 14px;">🧊 Persistent Contrail Cirrus (ISSR)</b><br>
+                        <hr style="margin: 4px 0;">
+                        <b>Flight Level:</b> FL{fl:.0f}<br>
+                        <b>Flown Distance in ISSR:</b> {dist:.1f} nm ({dur:.1f} min)<br>
+                        <b>Ambient Temp:</b> {t_c:.1f}°C (Schmidt-Appleman T_SAC met)<br>
+                        <b>Ice Relative Humidity:</b> {rhi:.0f}% (Supersaturated RHi &ge; 100%)<br>
+                        <hr style="margin: 4px 0;">
+                        <b>Tactical Avoidance:</b> <b style="color: #27ae60;">FL{rec_fl:.0f}</b><br>
+                        <span style="color: #27ae60; font-size: 11.5px;">{note}</span>
+                    </div>
+                    """,
+                    max_width=290,
+                ),
+            ).add_to(contrail_group)
+
+            # Start of segment marker if first in cluster or significant
+            if idx == 0 or idx == len(c_segs) - 1:
+                folium.CircleMarker(
+                    location=[lat1, lon1],
+                    radius=5.5,
+                    color="#00f0ff",
+                    fill=True,
+                    fill_color="#0984e3",
+                    fill_opacity=1.0,
+                    tooltip=f"ISSR Boundary Point: FL{fl:.0f}",
+                ).add_to(contrail_group)
+
+        contrail_group.add_to(m)
+
+    folium.LayerControl(position="topright", collapsed=True).add_to(m)
+
+    c_status = f'<span style="color: #00f0ff; font-weight: bold;">{tot_c_dist:.1f} nm in ISSR ({len(c_segs)} segments)</span>' if c_segs else '<span style="color: #27ae60; font-weight: bold;">Clean Air (0 nm contrail)</span>'
+    info_html = f"""
+    <div style="position: fixed;
+                bottom: 25px; left: 15px; width: 360px; height: 118px;
+                background-color: white; border:2px solid #bdc3c7; border-radius: 8px;
+                z-index: 9999; font-size:12.5px; font-family: sans-serif;
+                padding: 10px; box-shadow: 2px 2px 6px rgba(0,0,0,0.2);">
+        <b style="font-size: 14px; color: #2c3e50;">🌬️ Contrail Climate &amp; Flown Route — #{ectrl_id}</b><br>
+        <b>Route:</b> {adep} &rarr; {ades} ({op} - {ac})<br>
+        <b>Contrail Status:</b> {c_status}<br>
+        <span style="color: #8e44ad;">— General Flown Route</span> | <span style="color: #00f0ff; font-weight: bold;">━ Contrail-Forming Elements</span><br>
+        <span style="font-size: 11px; color: #7f8c8d;">ISSR: Schmidt-Appleman T &le; T_SAC &amp; RHi &ge; 100%</span>
+    </div>
+    """
+    m.get_root().html.add_child(folium.Element(info_html))
 
     if output_html_path:
         out_p = Path(output_html_path)

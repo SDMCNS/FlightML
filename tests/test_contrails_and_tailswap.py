@@ -14,6 +14,7 @@ from flightml.data.dataset import FlightDataset
 from flightml.eval.contrail_climate import analyze_flight_wind_and_contrails
 from flightml.models.gnn_delay import HeterogeneousAirspaceGNN
 from flightml.sim.tail_swap_optimizer import optimize_hub_tail_swaps
+from flightml.viz.map_builder import create_contrail_horizontal_map, create_trajectory_map
 from flightml.weather.upper_air_client import UpperAirClient
 
 
@@ -43,6 +44,24 @@ def test_upper_air_and_contrail_climate():
     assert isinstance(rep.wind_fuel_impact_kg, float)
     assert isinstance(rep.wind_fuel_impact_eur, float)
     assert rep.wind_efficiency_verdict != ""
+    assert isinstance(rep.annotated_profile, list)
+    assert len(rep.annotated_profile) > 0
+    p0 = rep.annotated_profile[0]
+    assert "flight_level" in p0
+    assert "cum_dist_nm" in p0
+    assert "is_issr_contrail" in p0
+
+    # Test Map Visualizations with Contrail Elements
+    fl_info = ds.get_flight(fid) or {}
+    trajs = ds.get_trajectory(fid)
+    act_df = trajs["actual"]
+    plan_df = trajs["planned"]
+
+    c_map = create_contrail_horizontal_map(fl_info, act_df, rep.issr_segments)
+    assert c_map is not None
+
+    traj_map = create_trajectory_map(fl_info, act_df, plan_df, contrail_segments=rep.issr_segments)
+    assert traj_map is not None
 
 
 def test_tail_swap_optimizer_and_hetero_gnn():
