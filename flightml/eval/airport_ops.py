@@ -349,16 +349,24 @@ def get_airport_operations_report(
             })
 
     # Hourly Traffic Distribution (0 - 23 UTC)
-    hourly_counts = [0] * 24
+    hourly_arr = [0] * 24
+    hourly_dep = [0] * 24
     if not arr_df.empty and "actual_arrival_time" in arr_df.columns:
         for ts in pd.to_datetime(arr_df["actual_arrival_time"]).dropna():
-            hourly_counts[ts.hour] += 1
+            hourly_arr[ts.hour] += 1
     if not dep_df.empty and "actual_off_block_time" in dep_df.columns:
         for ts in pd.to_datetime(dep_df["actual_off_block_time"]).dropna():
-            hourly_counts[ts.hour] += 1
+            hourly_dep[ts.hour] += 1
 
     hourly_distribution = [
-        {"hour": h, "movements": hourly_counts[h]} for h in range(24)
+        {
+            "hour": h,
+            "hour_utc": f"{h:02d}:00",
+            "arrivals": hourly_arr[h],
+            "departures": hourly_dep[h],
+            "movements": hourly_arr[h] + hourly_dep[h],
+        }
+        for h in range(24)
     ]
 
     return AirportOperationsReport(

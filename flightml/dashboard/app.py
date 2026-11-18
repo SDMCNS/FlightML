@@ -3731,7 +3731,11 @@ with tab_cat_system:
             if apt_ops_rep.hourly_distribution:
                 st.markdown("### 📈 Diurnal Hourly Movement Distribution (UTC)")
                 hour_df = pd.DataFrame(apt_ops_rep.hourly_distribution)
-                st.bar_chart(hour_df.set_index("hour_utc")[["departures", "arrivals"]])
+                idx_col = "hour_utc" if "hour_utc" in hour_df.columns else "hour"
+                cols_to_plot = [c for c in ["departures", "arrivals", "movements"] if c in hour_df.columns]
+                if not cols_to_plot:
+                    cols_to_plot = [c for c in hour_df.columns if c != idx_col]
+                st.bar_chart(hour_df.set_index(idx_col)[cols_to_plot])
 
     with sys_sub2:
         st.header("Macro Evolution, FRA Structural Shift, Weather Correlation & AIRAC Diffing")
