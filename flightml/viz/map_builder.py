@@ -7,6 +7,7 @@ from typing import Any
 import folium
 import pandas as pd
 
+from flightml.geo.geodesy import circular_mean_longitude, split_polyline_at_antimeridian
 from flightml.geo.trajectory import analyze_trajectory
 
 
@@ -19,6 +20,23 @@ def _is_finite_coord(val: Any) -> bool:
         return math.isfinite(f)
     except (TypeError, ValueError):
         return False
+
+
+def create_safe_polyline(locations: Any, **kwargs: Any) -> folium.PolyLine:
+    """
+    Create a folium.PolyLine that automatically splits trajectory points at the
+    International Date Line (antimeridian) and polar convergence limits to prevent
+    erroneous cross-globe horizontal polyline deformation in Leaflet/Folium.
+    """
+    clean_pts: list[list[float]] = []
+    for p in locations:
+        if isinstance(p, (list, tuple)) and len(p) >= 2 and _is_finite_coord(p[0]) and _is_finite_coord(p[1]):
+            clean_pts.append([float(p[0]), float(p[1])])
+    segments = split_polyline_at_antimeridian(clean_pts)
+    if not segments:
+        return folium.PolyLine(locations=[], **kwargs)
+    loc_param = segments if len(segments) > 1 else segments[0]
+    return folium.PolyLine(locations=loc_param, **kwargs)
 
 
 def create_trajectory_map(
@@ -52,14 +70,14 @@ def create_trajectory_map(
         valid_act = actual_df.dropna(subset=["latitude", "longitude"])
         if not valid_act.empty:
             c_lat = float(valid_act["latitude"].mean())
-            c_lon = float(valid_act["longitude"].mean())
+            c_lon = circular_mean_longitude(valid_act["longitude"].tolist())
             if _is_finite_coord(c_lat) and _is_finite_coord(c_lon):
                 center_lat, center_lon = c_lat, c_lon
     elif not planned_df.empty and "latitude" in planned_df.columns and "longitude" in planned_df.columns:
         valid_plan = planned_df.dropna(subset=["latitude", "longitude"])
         if not valid_plan.empty:
             c_lat = float(valid_plan["latitude"].mean())
-            c_lon = float(valid_plan["longitude"].mean())
+            c_lon = circular_mean_longitude(valid_plan["longitude"].tolist())
             if _is_finite_coord(c_lat) and _is_finite_coord(c_lon):
                 center_lat, center_lon = c_lat, c_lon
 
@@ -115,7 +133,7 @@ def create_trajectory_map(
     # Add planned trajectory line
     if not planned_df.empty:
         planned_coords = list(zip(planned_df["latitude"], planned_df["longitude"]))
-        folium.PolyLine(
+        create_safe_polyline(
             planned_coords,
             color="#2980b9",
             weight=3,
@@ -127,7 +145,7 @@ def create_trajectory_map(
     # Add actual trajectory line
     if not actual_df.empty:
         actual_coords = list(zip(actual_df["latitude"], actual_df["longitude"]))
-        folium.PolyLine(
+        create_safe_polyline(
             actual_coords,
             color="#8e44ad",
             weight=4,
@@ -200,7 +218,7 @@ def create_trajectory_map(
             freq_str = f"{n_freq:.2f} MHz" if n_freq is not None else "UHF Ch"
 
             # Subtle dashed radio reception sightline to closest trajectory point
-            folium.PolyLine(
+            create_safe_polyline(
                 locations=[[n_lat, n_lon], [t_lat, t_lon]],
                 color=n_col,
                 weight=1.5,
@@ -262,7 +280,7 @@ def create_trajectory_map(
             note = str(s_dict.get("alt_deviation_note", ""))
 
             # Casing
-            folium.PolyLine(
+            create_safe_polyline(
                 locations=[[lat1, lon1], [lat2, lon2]],
                 color="#0c2461",
                 weight=8,
@@ -270,7 +288,7 @@ def create_trajectory_map(
             ).add_to(c_group)
 
             # Glowing core
-            folium.PolyLine(
+            create_safe_polyline(
                 locations=[[lat1, lon1], [lat2, lon2]],
                 color="#00f0ff",
                 weight=5,
@@ -358,7 +376,7 @@ def create_contrail_horizontal_map(
         valid_act = actual_df.dropna(subset=["latitude", "longitude"])
         if not valid_act.empty:
             c_lat = float(valid_act["latitude"].mean())
-            c_lon = float(valid_act["longitude"].mean())
+            c_lon = circular_mean_longitude(valid_act["longitude"].tolist())
             if _is_finite_coord(c_lat) and _is_finite_coord(c_lon):
                 center_lat, center_lon = c_lat, c_lon
 
@@ -389,7 +407,7 @@ def create_contrail_horizontal_map(
     if not actual_df.empty and "latitude" in actual_df.columns and "longitude" in actual_df.columns:
         valid_pts = actual_df.dropna(subset=["latitude", "longitude"])
         actual_coords = list(zip(valid_pts["latitude"], valid_pts["longitude"]))
-        folium.PolyLine(
+        create_safe_polyline(
             actual_coords,
             color="#8e44ad",
             weight=4,
@@ -439,7 +457,7 @@ def create_contrail_horizontal_map(
             note = str(s_dict.get("alt_deviation_note", ""))
 
             # Casing line (navy)
-            folium.PolyLine(
+            create_safe_polyline(
                 locations=[[lat1, lon1], [lat2, lon2]],
                 color="#0c2461",
                 weight=8,
@@ -447,7 +465,7 @@ def create_contrail_horizontal_map(
             ).add_to(contrail_group)
 
             # Glowing core line (neon cyan)
-            folium.PolyLine(
+            create_safe_polyline(
                 locations=[[lat1, lon1], [lat2, lon2]],
                 color="#00f0ff",
                 weight=5,
@@ -526,7 +544,7 @@ def create_contrail_horizontal_map(
                     ).add_to(eco_group)
 
         if eco_coords:
-            folium.PolyLine(
+            create_safe_polyline(
                 eco_coords,
                 color="#2ecc71",
                 weight=4.5,
@@ -979,14 +997,14 @@ def create_flight_fir_charge_map(
         valid_act = actual_df.dropna(subset=["latitude", "longitude"])
         if not valid_act.empty:
             c_lat = float(valid_act["latitude"].mean())
-            c_lon = float(valid_act["longitude"].mean())
+            c_lon = circular_mean_longitude(valid_act["longitude"].tolist())
             if _is_finite_coord(c_lat) and _is_finite_coord(c_lon):
                 center_lat, center_lon = c_lat, c_lon
     elif not planned_df.empty and "latitude" in planned_df.columns and "longitude" in planned_df.columns:
         valid_plan = planned_df.dropna(subset=["latitude", "longitude"])
         if not valid_plan.empty:
             c_lat = float(valid_plan["latitude"].mean())
-            c_lon = float(valid_plan["longitude"].mean())
+            c_lon = circular_mean_longitude(valid_plan["longitude"].tolist())
             if _is_finite_coord(c_lat) and _is_finite_coord(c_lon):
                 center_lat, center_lon = c_lat, c_lon
 
@@ -1090,7 +1108,7 @@ def create_flight_fir_charge_map(
     # Add planned trajectory line
     if not planned_df.empty:
         planned_coords = list(zip(planned_df["latitude"], planned_df["longitude"]))
-        folium.PolyLine(
+        create_safe_polyline(
             planned_coords,
             color="#2980b9",
             weight=3,
@@ -1103,7 +1121,7 @@ def create_flight_fir_charge_map(
     if not actual_df.empty:
         actual_coords = list(zip(actual_df["latitude"], actual_df["longitude"]))
         act_dist_val = crco_report.actual_distance_nm if crco_report else 0.0
-        folium.PolyLine(
+        create_safe_polyline(
             actual_coords,
             color="#8e44ad",
             weight=4,
@@ -1214,7 +1232,7 @@ def create_fra_boundary_map(
 
     if all_lats and all_lons:
         c_lat = sum(all_lats) / len(all_lats)
-        c_lon = sum(all_lons) / len(all_lons)
+        c_lon = circular_mean_longitude(all_lons)
         center_lat = float(c_lat) if _is_finite_coord(c_lat) else 48.5
         center_lon = float(c_lon) if _is_finite_coord(c_lon) else 4.0
     else:
@@ -1298,7 +1316,7 @@ def create_fra_boundary_map(
             if len(p) >= 2 and _is_finite_coord(p[0]) and _is_finite_coord(p[1])
         ]
         if len(clean_fra_pts) >= 2:
-            folium.PolyLine(
+            create_safe_polyline(
                 locations=clean_fra_pts,
                 color="#27ae60",
                 weight=2.5,
@@ -1370,7 +1388,7 @@ def create_fra_boundary_map(
                 <b>Excess CO₂:</b> <b>{co2_t:.2f} tonnes</b>
             </div>
             """
-            folium.PolyLine(
+            create_safe_polyline(
                 locations=pts,
                 color=col,
                 weight=3.5,
@@ -1588,7 +1606,7 @@ def create_gnss_interference_network_map(
         """
 
         # Draw trajectory polyline
-        folium.PolyLine(
+        create_safe_polyline(
             locations=pts,
             color=track_color,
             weight=weight,
@@ -1620,7 +1638,7 @@ def create_gnss_interference_network_map(
 
         # Highlight Selected Flight if active
         if is_selected:
-            folium.PolyLine(
+            create_safe_polyline(
                 locations=pts,
                 color="#00f0ff",
                 weight=5.0,

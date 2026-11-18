@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 import pandas as pd
 
-from flightml.geo.geodesy import haversine_distance_nm, initial_bearing_deg
+from flightml.geo.geodesy import haversine_distance_nm, initial_bearing_deg, circular_mean_longitude
 
 
 @dataclass
@@ -132,7 +132,7 @@ def detect_holding_patterns(
                     end_time=t_end,
                     duration_min=duration_min,
                     center_lat=float(sub["latitude"].mean()),
-                    center_lon=float(sub["longitude"].mean()),
+                    center_lon=float(circular_mean_longitude(sub["longitude"].tolist())),
                     flight_level=float(sub["flight_level"].mean()),
                     total_turn_deg=curr_turn,
                 )

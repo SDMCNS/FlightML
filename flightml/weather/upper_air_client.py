@@ -24,6 +24,8 @@ from typing import Any
 import pandas as pd
 import requests
 
+from flightml.geo.geodesy import spherical_midpoint
+
 CACHE_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "weather_cache" / "upper_air_era5.sqlite"
 
 
@@ -123,8 +125,9 @@ class UpperAirClient:
             fl = float((r1.get("flight_level", 0.0) + r2.get("flight_level", 0.0)) / 2.0)
             if fl < 200.0:
                 continue
-            lat = (float(r1.get("latitude", 0.0)) + float(r2.get("latitude", 0.0))) / 2.0
-            lon = (float(r1.get("longitude", 0.0)) + float(r2.get("longitude", 0.0))) / 2.0
+            r1_lat, r1_lon = float(r1.get("latitude", 0.0)), float(r1.get("longitude", 0.0))
+            r2_lat, r2_lon = float(r2.get("latitude", 0.0)), float(r2.get("longitude", 0.0))
+            lat, lon = spherical_midpoint(r1_lat, r1_lon, r2_lat, r2_lon)
             t_val = r1.get("time_over")
             if not t_val or pd.isna(t_val):
                 continue
@@ -276,7 +279,8 @@ class UpperAirClient:
                         if len(parts) == 4 and parts[2] == d_str and parts[3] == str(lvl):
                             try:
                                 c_lat, c_lon = float(parts[0]), float(parts[1])
-                                if abs(c_lat - lat_grid) <= 2.5 and abs(c_lon - lon_grid) <= 3.5:
+                                d_lon = min(abs(c_lon - lon_grid), 360.0 - abs(c_lon - lon_grid))
+                                if abs(c_lat - lat_grid) <= 2.5 and d_lon <= 3.5:
                                     hourly_data = val
                                     break
                             except Exception:

@@ -136,12 +136,12 @@ def scan_airspace_proximity_events(
             JOIN window_pts b
               ON a.time_bin = b.time_bin
              AND a.lat_bin = b.lat_bin
-             AND a.lon_bin = b.lon_bin
+             AND (abs(a.lon_bin - b.lon_bin) <= 1 OR abs(a.lon_bin - b.lon_bin) >= 1799)
              AND a.ectrl_id < b.ectrl_id
             WHERE abs(a.ts_sec - b.ts_sec) <= 90
               AND abs(a.flight_level - b.flight_level) <= ?
               AND abs(a.latitude - b.latitude) <= ?
-              AND abs(a.longitude - b.longitude) <= ?
+              AND least(abs(a.longitude - b.longitude), 360.0 - abs(a.longitude - b.longitude)) <= ?
         )
         SELECT
             cp.*,

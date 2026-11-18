@@ -27,7 +27,7 @@ from flightml.eval.contrail_climate import (
     schmidt_appleman_threshold_c,
 )
 from flightml.eval.jet_fuel_prices import get_weekly_fuel_price
-from flightml.geo.geodesy import haversine_nm, initial_bearing_deg
+from flightml.geo.geodesy import haversine_nm, initial_bearing_deg, spherical_midpoint
 from flightml.weather.upper_air_client import UpperAirClient
 
 
@@ -192,8 +192,7 @@ def optimize_eco_minimal_contrail_trajectory(
         t2 = pd.to_datetime(r2["time_over"])
         seg_min = max(0.5, (t2 - t1).total_seconds() / 60.0)
 
-        mid_lat = (lat1 + lat2) / 2.0
-        mid_lon = (lon1 + lon2) / 2.0
+        mid_lat, mid_lon = spherical_midpoint(lat1, lon1, lat2, lon2)
         track_deg = initial_bearing_deg(lat1, lon1, lat2, lon2)
 
         # Baseline climb / descent phases (< FL240): follow standard profile

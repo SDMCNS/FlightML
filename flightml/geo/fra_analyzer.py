@@ -159,8 +159,9 @@ def analyze_flight_fra_adherence(
         matched_airway = None
         airway_dist = None
         if len(r_lats) > 0:
-            # Fast bounding pre-filter (~0.2 deg)
-            near_mask = (np.abs(r_lats - lat_i) <= 0.15) & (np.abs(r_lons - lon_i) <= 0.25)
+            # Fast bounding pre-filter (~0.2 deg with antimeridian wrapping)
+            d_rlon = np.minimum(np.abs(r_lons - lon_i), 360.0 - np.abs(r_lons - lon_i))
+            near_mask = (np.abs(r_lats - lat_i) <= 0.15) & (d_rlon <= 0.25)
             if np.any(near_mask):
                 sub_d = haversine_vectorized_nm(lat_i, lon_i, r_lats[near_mask], r_lons[near_mask])
                 min_idx = int(np.argmin(sub_d))
@@ -172,7 +173,8 @@ def analyze_flight_fra_adherence(
         matched_fix_kind = None
         fix_dist = None
         if len(f_lats) > 0:
-            near_f = (np.abs(f_lats - lat_i) <= 0.15) & (np.abs(f_lons - lon_i) <= 0.25)
+            d_flon = np.minimum(np.abs(f_lons - lon_i), 360.0 - np.abs(f_lons - lon_i))
+            near_f = (np.abs(f_lats - lat_i) <= 0.15) & (d_flon <= 0.25)
             if np.any(near_f):
                 sub_fd = haversine_vectorized_nm(lat_i, lon_i, f_lats[near_f], f_lons[near_f])
                 min_fidx = int(np.argmin(sub_fd))

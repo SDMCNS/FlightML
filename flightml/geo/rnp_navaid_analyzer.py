@@ -352,9 +352,10 @@ def analyze_flight_navaids_and_rnp(
         ils_in_rlos: list[tuple[float, str]] = []
         ndb_in_rlos: list[tuple[float, str]] = []
 
-        # Latitude/longitude degree window scaled to RLOS (~3.5 deg lat, ~5.5 deg lon at mid/high latitudes)
+        # Latitude/longitude degree window scaled to RLOS (~3.5 deg lat, ~5.5 deg lon with antimeridian handling)
         for ident, name, ntype, freq, nlat, nlon, nelev, nrng in navaids_raw:
-            if abs(nlat - lat_i) > 3.5 or abs(nlon - lon_i) > 5.5:
+            d_lon = min(abs(nlon - lon_i), 360.0 - abs(nlon - lon_i))
+            if abs(nlat - lat_i) > 3.5 or d_lon > 5.5:
                 continue
             d_nm = haversine_nm(lat_i, lon_i, nlat, nlon)
             rlos_nm = compute_rlos_nm(fl_i, nelev)

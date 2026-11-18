@@ -674,8 +674,18 @@ class FlightDataset:
         subqueries: list[str] = []
         params: list[Any] = []
 
+        if lon + lon_margin > 180.0:
+            lon_filter = "(longitude >= ? OR longitude <= ?)"
+            lon_bounds = [lon - lon_margin, (lon + lon_margin) - 360.0]
+        elif lon - lon_margin < -180.0:
+            lon_filter = "(longitude >= ? OR longitude <= ?)"
+            lon_bounds = [(lon - lon_margin) + 360.0, lon + lon_margin]
+        else:
+            lon_filter = "longitude BETWEEN ? AND ?"
+            lon_bounds = [lon - lon_margin, lon + lon_margin]
+
         if include_fixes:
-            subqueries.append("""
+            subqueries.append(f"""
                 SELECT
                     fix_ident AS ident,
                     'FIX' AS kind,
@@ -685,12 +695,12 @@ class FlightDataset:
                     NULL AS frequency_mhz
                 FROM nav_fixes
                 WHERE latitude BETWEEN ? AND ?
-                  AND longitude BETWEEN ? AND ?
+                  AND {lon_filter}
             """)
-            params.extend([lat - deg_margin, lat + deg_margin, lon - lon_margin, lon + lon_margin])
+            params.extend([lat - deg_margin, lat + deg_margin] + lon_bounds)
 
         if include_navaids:
-            subqueries.append("""
+            subqueries.append(f"""
                 SELECT
                     ident,
                     nav_type AS kind,
@@ -700,9 +710,9 @@ class FlightDataset:
                     frequency_mhz
                 FROM nav_aids_xplane
                 WHERE latitude BETWEEN ? AND ?
-                  AND longitude BETWEEN ? AND ?
+                  AND {lon_filter}
             """)
-            params.extend([lat - deg_margin, lat + deg_margin, lon - lon_margin, lon + lon_margin])
+            params.extend([lat - deg_margin, lat + deg_margin] + lon_bounds)
 
         if not subqueries:
             return pd.DataFrame()

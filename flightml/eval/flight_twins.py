@@ -8,7 +8,8 @@ import pandas as pd
 
 from flightml.data.dataset import FlightDataset
 from flightml.geo.trajectory import analyze_trajectory
-from flightml.geo.geodesy import haversine_distance_nm
+from flightml.geo.geodesy import haversine_distance_nm, circular_mean_longitude
+from flightml.viz.map_builder import create_safe_polyline
 from flightml.eval.fuel_carbon import DEFAULT_FUEL_FLOW_KG_HR, CO2_FACTOR
 from flightml.eval.jet_fuel_prices import get_weekly_fuel_price
 
@@ -189,7 +190,7 @@ def render_twin_comparison_map(
     actual_slow = t_slow["actual"]
 
     mid_lat = float(actual_fast["latitude"].mean()) if not actual_fast.empty else 50.0
-    mid_lon = float(actual_fast["longitude"].mean()) if not actual_fast.empty else 10.0
+    mid_lon = float(circular_mean_longitude(actual_fast["longitude"].tolist())) if not actual_fast.empty else 10.0
 
     m = folium.Map(location=[mid_lat, mid_lon], zoom_start=3, tiles=None)
 
@@ -205,7 +206,7 @@ def render_twin_comparison_map(
     # 1. High-Efficiency Flight Line (Emerald Green)
     if not actual_fast.empty:
         fast_coords = list(zip(actual_fast["latitude"], actual_fast["longitude"]))
-        folium.PolyLine(
+        create_safe_polyline(
             fast_coords,
             color="#27ae60",
             weight=4,
@@ -216,7 +217,7 @@ def render_twin_comparison_map(
     # 2. Low-Efficiency Flight Line (Crimson Red)
     if not actual_slow.empty:
         slow_coords = list(zip(actual_slow["latitude"], actual_slow["longitude"]))
-        folium.PolyLine(
+        create_safe_polyline(
             slow_coords,
             color="#e74c3c",
             weight=4,

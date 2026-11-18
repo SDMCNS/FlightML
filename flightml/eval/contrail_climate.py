@@ -19,7 +19,7 @@ import pandas as pd
 
 from flightml.data.dataset import FlightDataset
 from flightml.eval.jet_fuel_prices import get_weekly_fuel_price
-from flightml.geo.geodesy import haversine_nm, initial_bearing_deg
+from flightml.geo.geodesy import haversine_nm, initial_bearing_deg, spherical_midpoint
 from flightml.weather.upper_air_client import UpperAirClient
 
 
@@ -178,8 +178,7 @@ def analyze_flight_wind_and_contrails(
             gs_val = round(gs_kts, 1)
 
             track_deg = initial_bearing_deg(lat1, lon1, lat2, lon2)
-            mid_lat = (lat1 + lat2) / 2.0
-            mid_lon = (lon1 + lon2) / 2.0
+            mid_lat, mid_lon = spherical_midpoint(lat1, lon1, lat2, lon2)
 
             ua = client.get_upper_air_state(mid_lat, mid_lon, fl, str(r1["time_over"]))
             ua_temp = ua.temperature_c

@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 
 from flightml.data.dataset import FlightDataset
-from flightml.geo.geodesy import haversine_nm, haversine_vectorized_nm
+from flightml.geo.geodesy import haversine_nm, haversine_vectorized_nm, normalize_longitude_deg
 
 # Standard European Jet-A fuel and environmental constants
 JET_A_PRICE_EUR_PER_KG = 0.6421  # Eurocontrol standard benchmark (€/kg)
@@ -754,7 +754,9 @@ def interpolate_great_circle(
         z = A * math.sin(phi1) + B * math.sin(phi2)
         phi_i = math.atan2(z, math.sqrt(x**2 + y**2))
         lambda_i = math.atan2(y, x)
-        points.append((round(math.degrees(phi_i), 5), round(math.degrees(lambda_i), 5)))
+        lat_deg = min(85.0, max(-85.0, math.degrees(phi_i)))
+        lon_deg = normalize_longitude_deg(math.degrees(lambda_i))
+        points.append((round(lat_deg, 5), round(lon_deg, 5)))
     return points
 
 
