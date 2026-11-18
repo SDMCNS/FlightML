@@ -1103,6 +1103,29 @@ def get_longitudinal_seasonality_endpoint(
     return decomp.to_dict()
 
 
+@app.get("/api/v3/longitudinal/fl-capping")
+def get_vertical_capping_endpoint(
+    period: str = Query(default="202402", description="Data period ID"),
+    sample_size: int = Query(default=2500, description="Number of sampled flights"),
+) -> dict[str, Any]:
+    """Vertical flight level capping analysis and estimated fuel/CO2 penalty by market segment."""
+    from flightml.eval.longitudinal_airspace_modernization import get_vertical_capping_analysis
+    ds = FlightDataset(period=period)
+    return get_vertical_capping_analysis(ds, period=period, sample_size=sample_size)
+
+
+@app.get("/api/v3/longitudinal/airway-fra-dividend")
+def get_airway_fra_dividend_endpoint(
+    period: str = Query(default="202402", description="Data period ID"),
+    sample_size: int = Query(default=2500, description="Number of sampled flights"),
+) -> dict[str, Any]:
+    """Quantify operational, fuel, and CO2 savings from Free Route Airspace (FRA) vs fixed ATS airways."""
+    from flightml.eval.longitudinal_airspace_modernization import get_fixed_airways_vs_fra_analysis
+    ds = FlightDataset(period=period)
+    return get_fixed_airways_vs_fra_analysis(ds, period=period, sample_size=sample_size)
+
+
+
 @app.get("/api/v3/predict/airspace")
 def get_predict_airspace_endpoint(
     year: int = Query(default=2026, description="Forecast horizon year"),
@@ -1326,6 +1349,67 @@ def get_all_mct_database_endpoint() -> dict[str, Any]:
         "placeholder_defaults": create_placeholder_mct_profile("DEFAULT").to_dict(),
         "supported_codes": sorted(list(HUB_MCT_INDEX.keys())),
     }
+
+
+@app.get("/api/v1/airports/{ident}/operations")
+def get_airport_operations_endpoint(
+    ident: str,
+    period: str = Query(default="202402", description="Data period ID"),
+    wind_dir: float | None = Query(default=None, description="METAR wind direction in degrees true"),
+    wind_speed: float | None = Query(default=None, description="METAR wind speed in knots"),
+    temp_c: float | None = Query(default=None, description="METAR ambient temperature in Celsius"),
+) -> dict[str, Any]:
+    """Daily airport traffic summary, METAR ingestion, and extrapolated runway crosswind/active configuration."""
+    from flightml.eval.airport_ops import get_airport_operations_report
+    ds = FlightDataset(period=period)
+    metar_override = None
+    if wind_dir is not None or wind_speed is not None or temp_c is not None:
+        metar_override = {
+            "wind_dir_deg": wind_dir if wind_dir is not None else 250.0,
+            "wind_speed_kts": wind_speed if wind_speed is not None else 16.0,
+            "temperature_c": temp_c if temp_c is not None else 12.0,
+            "visibility_km": 10.0,
+            "qnh_hpa": 1013.25,
+        }
+    rep = get_airport_operations_report(ds, airport_ident=ident, period=period, metar_override=metar_override)
+    return rep.to_dict()
+
+
+@app.get("/api/v1/flights/{ectrl_id}/wrap-analysis")
+def get_flight_wrap_analysis_endpoint(
+    ectrl_id: int,
+    period: str = Query(default="202402", description="Data period ID"),
+) -> dict[str, Any]:
+    """Benchmark observed flight kinematics against OpenAP WRAP operational statistical distributions."""
+    from flightml.eval.openap_wrap_engine import analyze_flight_wrap_envelope
+    ds = FlightDataset(period=period)
+    report = analyze_flight_wrap_envelope(ds, ectrl_id=ectrl_id, period=period)
+    return report.to_dict()
+
+
+@app.get("/api/v1/rnav/dme/coverage")
+def get_dme_rnav_coverage_endpoint(
+    flight_level: int = Query(default=300, description="Flight level (e.g. 100, 200, 300, 390)"),
+    lat_min: float = Query(default=48.0),
+    lat_max: float = Query(default=54.0),
+    lon_min: float = Query(default=-3.0),
+    lon_max: float = Query(default=7.0),
+    inactive: str = Query(default="", description="Comma-separated inactive DME idents"),
+) -> dict[str, Any]:
+    """Evaluate 10x10 NM grid DME-DME RNAV coverage and run greedy rationalization deactivation optimizer."""
+    from flightml.eval.dme_rnav_coverage import get_dme_rnav_coverage_report
+    ds = FlightDataset()
+    inact_list = [i.strip().upper() for i in inactive.split(",") if i.strip()]
+    rep = get_dme_rnav_coverage_report(
+        ds,
+        flight_level=flight_level,
+        bbox=(lat_min, lat_max, lon_min, lon_max),
+        inactive_idents=inact_list,
+    )
+    return rep.to_dict()
+
+
+
 
 
 

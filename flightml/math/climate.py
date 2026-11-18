@@ -173,3 +173,42 @@ def contrail_energy_forcing_rf_j(
     duration_s = max(60.0, float(duration_hours)) * 3600.0
     area_m2 = dist_m * width_m
     return float(instantaneous_rf_w_m2) * area_m2 * duration_s * (float(optical_depth) / 0.3)
+
+
+def soot_number_to_optical_depth(
+    ei_num_per_kg: float,
+    nominal_ei_num: float = 1.0e15,
+    nominal_optical_depth: float = 0.30,
+) -> float:
+    """
+    Calculate contrail optical depth (tau) as a function of engine non-volatile particulate matter (nvPM)
+    number emission index (EI_num in particles/kg fuel), based on Kärcher et al. (2015) & Teoh et al. (2020)
+    microphysical scaling:
+        tau = tau_0 * (EI_num / EI_num_0)^0.65
+    Modern lean-burn combustors (EI_num ~ 1e14) produce significantly fewer ice crystals that grow larger
+    and sediment faster, yielding a much lower optical depth (tau ~ 0.07 vs 0.30) and shorter lifetime.
+    """
+    if ei_num_per_kg <= 0.0:
+        return 0.05
+    ratio = max(1.0e-3, min(100.0, float(ei_num_per_kg) / float(nominal_ei_num)))
+    tau = float(nominal_optical_depth) * (ratio ** 0.65)
+    return round(max(0.02, min(1.5, tau)), 4)
+
+
+def initial_ice_crystal_concentration(
+    ei_num_per_kg: float,
+    fuel_flow_kg_s: float,
+    wingspan_m: float,
+    true_airspeed_mps: float,
+) -> float:
+    """
+    Calculate the initial ice crystal number density in the wake vortex plume (crystals per m³):
+    N_ice = (EI_num * fuel_flow_kg_s) / (A_wake * TAS)
+    where wake cross-sectional area A_wake ≈ (pi / 4) * b² (b = wingspan).
+    """
+    if wingspan_m <= 0.0 or true_airspeed_mps <= 0.0 or fuel_flow_kg_s <= 0.0:
+        return 0.0
+    a_wake = (math.pi / 4.0) * (float(wingspan_m) ** 2)
+    vol_rate_m3_s = a_wake * float(true_airspeed_mps)
+    crystals_per_s = float(ei_num_per_kg) * float(fuel_flow_kg_s)
+    return crystals_per_s / vol_rate_m3_s

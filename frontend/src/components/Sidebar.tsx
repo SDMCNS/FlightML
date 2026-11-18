@@ -1,8 +1,11 @@
 import React from 'react';
 import {
   Compass,
+  Building2,
   ShieldAlert,
+  Radio,
   Globe2,
+  TrendingUp,
   Leaf,
   Luggage,
   BookOpen,
@@ -23,15 +26,33 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab, flagge
       icon: <Compass size={18} />,
     },
     {
+      id: 'airport-ops',
+      label: 'Airport Ops & Runways',
+      icon: <Building2 size={18} />,
+      badge: 'MET & Crosswind',
+    },
+    {
       id: 'gnss-shield',
       label: 'GNSS Jamming Shield',
       icon: <ShieldAlert size={18} />,
       badge: flaggedCount > 0 ? `${flaggedCount} Confirmed` : undefined,
     },
     {
+      id: 'dme-rnav',
+      label: 'DME-DME RNAV Lab',
+      icon: <Radio size={18} />,
+      badge: 'PBN / Backup',
+    },
+    {
       id: 'airspace-network',
       label: 'Airspace & FIR Saturation',
       icon: <Globe2 size={18} />,
+    },
+    {
+      id: 'longitudinal-trends',
+      label: 'Longitudinal Modernization',
+      icon: <TrendingUp size={18} />,
+      badge: 'Capping & FRA',
     },
     {
       id: 'climate-eco',

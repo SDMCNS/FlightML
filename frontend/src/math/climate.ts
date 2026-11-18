@@ -81,3 +81,41 @@ export function fuelToCo2Kg(fuelKg: number): number {
 export function fuelToNoxG(fuelKg: number, cruiseEiNox: number = EI_NOX_G_PER_KG_FUEL_CRUISE): number {
   return Math.max(0.0, fuelKg) * cruiseEiNox;
 }
+
+export function contrailEnergyForcingRfJ(
+  distanceKm: number,
+  opticalDepth: number = 0.3,
+  widthKm: number = 10.0,
+  durationHours: number = 4.0,
+  instantaneousRfWM2: number = 12.0
+): number {
+  const distM = Math.max(0.0, distanceKm) * 1000.0;
+  const widthM = Math.max(100.0, widthKm) * 1000.0;
+  const durationS = Math.max(60.0, durationHours) * 3600.0;
+  const areaM2 = distM * widthM;
+  return instantaneousRfWM2 * areaM2 * durationS * (opticalDepth / 0.3);
+}
+
+export function sootNumberToOpticalDepth(
+  eiNumPerKg: number,
+  nominalEiNum: number = 1.0e15,
+  nominalOpticalDepth: number = 0.30
+): number {
+  if (eiNumPerKg <= 0.0) return 0.05;
+  const ratio = Math.max(1.0e-3, Math.min(100.0, eiNumPerKg / nominalEiNum));
+  const tau = nominalOpticalDepth * Math.pow(ratio, 0.65);
+  return Number(Math.max(0.02, Math.min(1.5, tau)).toFixed(4));
+}
+
+export function initialIceCrystalConcentration(
+  eiNumPerKg: number,
+  fuelFlowKgS: number,
+  wingspanM: number,
+  trueAirspeedMps: number
+): number {
+  if (wingspanM <= 0.0 || trueAirspeedMps <= 0.0 || fuelFlowKgS <= 0.0) return 0.0;
+  const aWake = (Math.PI / 4.0) * Math.pow(wingspanM, 2);
+  const volRateM3S = aWake * trueAirspeedMps;
+  const crystalsPerS = eiNumPerKg * fuelFlowKgS;
+  return crystalsPerS / volRateM3S;
+}

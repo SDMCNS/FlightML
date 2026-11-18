@@ -1,7 +1,10 @@
 export type NavigationTab =
   | 'flight-inspector'
+  | 'airport-ops'
   | 'gnss-shield'
   | 'airspace-network'
+  | 'dme-rnav'
+  | 'longitudinal-trends'
   | 'climate-eco'
   | 'passenger-copilot'
   | 'math-reference';
@@ -187,4 +190,187 @@ export interface CRCORouteReport {
   crco_share_of_direct_cost_pct: number;
   fir_breakdown: FIRCostBreakdown[];
 }
+
+export interface RunwayAssessment {
+  airport_ident: string;
+  runway_id: string;
+  le_ident: string;
+  he_ident: string;
+  length_ft: number;
+  width_ft: number;
+  surface: string;
+  le_heading_degT: number;
+  he_heading_degT: number;
+  le_displaced_threshold_ft: number;
+  he_displaced_threshold_ft: number;
+  le_lda_ft: number;
+  he_lda_ft: number;
+  le_crosswind_kts: number;
+  le_headwind_kts: number;
+  he_crosswind_kts: number;
+  he_headwind_kts: number;
+  le_is_tailwind: boolean;
+  he_is_tailwind: boolean;
+  le_exceeds_crosswind_limit: boolean;
+  he_exceeds_crosswind_limit: boolean;
+  preferred_end: string;
+  notes: string;
+}
+
+export interface AirportOperationsReport {
+  airport_ident: string;
+  name: string;
+  municipality: string;
+  country: string;
+  elevation_ft: number;
+  period_id: string;
+  total_arrivals: number;
+  total_departures: number;
+  total_movements: number;
+  mean_arr_delay_min: number;
+  mean_dep_delay_min: number;
+  top_airlines: { operator: string; flights: number; share_pct: number }[];
+  top_aircraft: { ac_type: string; flights: number; share_pct: number }[];
+  hourly_distribution: { hour: number; movements: number }[];
+  weather: {
+    wind_dir_deg: number;
+    wind_speed_kts: number;
+    temperature_c: number;
+    visibility_km: number;
+    qnh_hpa: number;
+    source: string;
+  };
+  runways: RunwayAssessment[];
+  recommended_active_config: string;
+  operational_advisories: string[];
+}
+
+export interface WRAPMetricComparison {
+  variable: string;
+  phase: string;
+  description: string;
+  observed_value: number;
+  observed_unit: string;
+  opt_val: number;
+  min_val: number;
+  max_val: number;
+  dist_model: string;
+  dist_params: string;
+  z_score: number;
+  percentile_pct: number;
+  status: 'NORMAL' | 'ABOVE_AVERAGE' | 'BELOW_AVERAGE' | 'TACTICAL_RESTRICTION' | 'ANOMALY';
+  interpretation: string;
+}
+
+export interface FlightWRAPAnalysisReport {
+  ectrl_id: number;
+  period: string;
+  callsign: string;
+  ac_type: string;
+  ac_operator: string;
+  adep: string;
+  ades: string;
+  canonical_wrap_type: string;
+  total_waypoints: number;
+  overall_normalcy_score_pct: number;
+  envelope_violations_count: number;
+  metrics: WRAPMetricComparison[];
+  phase_summaries: Record<string, any>;
+  tactical_findings: string[];
+}
+
+export interface DMEStation {
+  ident: string;
+  name: string;
+  type: string;
+  latitude: number;
+  longitude: number;
+  elevation_ft: number;
+  country: string;
+  is_active: boolean;
+  service_range_nm: number;
+}
+
+export interface GridCellCoverage {
+  lat: number;
+  lon: number;
+  visible_dme_count: number;
+  has_valid_dme_dme_pair: boolean;
+  best_pair_geometry_deg: number;
+  coverage_status: 'REDUNDANT' | 'ADEQUATE' | 'MARGINAL' | 'OUTAGE';
+}
+
+export interface DMERNAVCoverageReport {
+  flight_level: number;
+  altitude_ft: number;
+  cell_size_nm: number;
+  total_grid_cells: number;
+  covered_cells_count: number;
+  coverage_percentage: number;
+  redundant_cells_percentage: number;
+  outage_cells_percentage: number;
+  total_dmes_count: number;
+  active_dmes_count: number;
+  inactive_dmes_count: number;
+  suggested_deactivations: {
+    ident: string;
+    name: string;
+    country: string;
+    coverage_impact_pct: number;
+    remaining_network_coverage_pct: number;
+    recommendation: string;
+    annual_maintenance_savings_eur: number;
+  }[];
+  dme_stations: DMEStation[];
+  cells_summary: GridCellCoverage[];
+}
+
+export interface VerticalCappingReport {
+  period: string;
+  sample_size: number;
+  capped_flights_count: number;
+  capping_rate_pct: number;
+  mean_deficit_fl: number;
+  mean_fuel_penalty_pct: number;
+  total_excess_fuel_tonnes: number;
+  total_excess_co2_tonnes: number;
+  by_market_segment: {
+    market_segment: string;
+    total_flights: number;
+    capped_flights: number;
+    capping_rate_pct: number;
+    mean_deficit_fl: number;
+    estimated_penalty_pct: number;
+  }[];
+  top_capped_routes: {
+    route: string;
+    adep: string;
+    ades: string;
+    flights: number;
+    capped_flights: number;
+    capping_rate_pct: number;
+    mean_deficit_fl: number;
+  }[];
+}
+
+export interface AirwayFRADividendReport {
+  period: string;
+  sample_size: number;
+  mean_airway_distance_nm: number;
+  mean_actual_distance_nm: number;
+  mean_gcd_distance_nm: number;
+  total_distance_saved_nm: number;
+  mean_distance_saved_pct: number;
+  total_fuel_saved_tonnes: number;
+  total_co2_avoided_tonnes: number;
+  top_beneficiary_routes: {
+    route: string;
+    flights: number;
+    mean_saved_nm: number;
+    mean_saved_pct: number;
+    total_fuel_saved_tonnes: number;
+    total_co2_avoided_tonnes: number;
+  }[];
+}
+
 

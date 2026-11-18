@@ -3,8 +3,11 @@ import type { NavigationTab, FlightSummary, Waypoint, GNSSNetworkScan } from './
 import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
 import { FlightInspectorView } from './views/FlightInspectorView';
+import { AirportOperationsView } from './views/AirportOperationsView';
 import { GNSSShieldView } from './views/GNSSShieldView';
+import { DMERNAVCoverageView } from './views/DMERNAVCoverageView';
 import { AirspaceNetworkView } from './views/AirspaceNetworkView';
+import { LongitudinalTrendsView } from './views/LongitudinalTrendsView';
 import { ClimateEcoView } from './views/ClimateEcoView';
 import { PassengerCopilotView } from './views/PassengerCopilotView';
 import { MathReferenceView } from './views/MathReferenceView';
@@ -149,6 +152,8 @@ export const App: React.FC = () => {
             />
           )}
 
+          {activeTab === 'airport-ops' && <AirportOperationsView period={activePeriod} />}
+
           {activeTab === 'gnss-shield' && (
             <GNSSShieldView
               scan={gnssScan}
@@ -157,7 +162,11 @@ export const App: React.FC = () => {
             />
           )}
 
+          {activeTab === 'dme-rnav' && <DMERNAVCoverageView />}
+
           {activeTab === 'airspace-network' && <AirspaceNetworkView />}
+
+          {activeTab === 'longitudinal-trends' && <LongitudinalTrendsView period={activePeriod} />}
 
           {activeTab === 'climate-eco' && <ClimateEcoView />}
 

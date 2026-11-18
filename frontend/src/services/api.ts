@@ -7,6 +7,11 @@ import type {
   ContrailReport,
   CDOReport,
   CRCORouteReport,
+  AirportOperationsReport,
+  FlightWRAPAnalysisReport,
+  DMERNAVCoverageReport,
+  VerticalCappingReport,
+  AirwayFRADividendReport,
 } from '../types';
 
 // Dynamic API host detection: if in dev on 5173, point to backend 8000, else use current host
@@ -388,5 +393,328 @@ export async function assessPassengerItinerary(
     recommendation: isRisky
       ? 'Tight layover under 60m creates a 38% probability of missed connection and EU261 disruption.'
       : 'Healthy 75m+ buffer absorbs upstream inbound delays.',
+  };
+}
+
+export async function fetchAirportOperations(
+  ident: string,
+  period: string = '202402',
+  metar?: { wind_dir?: number; wind_speed?: number; temp_c?: number }
+): Promise<AirportOperationsReport> {
+  const params = new URLSearchParams({ period });
+  if (metar?.wind_dir !== undefined) params.append('wind_dir', String(metar.wind_dir));
+  if (metar?.wind_speed !== undefined) params.append('wind_speed', String(metar.wind_speed));
+  if (metar?.temp_c !== undefined) params.append('temp_c', String(metar.temp_c));
+
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/airports/${encodeURIComponent(ident)}/operations?${params.toString()}`);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.error('fetchAirportOperations error:', err);
+  }
+
+  // Fallback data
+  return {
+    airport_ident: ident.toUpperCase(),
+    name: `Airport ${ident.toUpperCase()}`,
+    municipality: 'International',
+    country: 'GB',
+    elevation_ft: 83,
+    period_id: period,
+    total_arrivals: 480,
+    total_departures: 495,
+    total_movements: 975,
+    mean_arr_delay_min: 5.4,
+    mean_dep_delay_min: 8.2,
+    top_airlines: [
+      { operator: 'BAW', flights: 420, share_pct: 43.1 },
+      { operator: 'SHT', flights: 75, share_pct: 7.7 },
+      { operator: 'VIR', flights: 48, share_pct: 4.9 },
+    ],
+    top_aircraft: [
+      { ac_type: 'A320', flights: 310, share_pct: 31.8 },
+      { ac_type: 'A319', flights: 180, share_pct: 18.5 },
+      { ac_type: 'A321', flights: 95, share_pct: 9.7 },
+    ],
+    hourly_distribution: Array.from({ length: 24 }, (_, i) => ({
+      hour: i,
+      movements: i >= 6 && i <= 21 ? Math.floor(40 + Math.random() * 30) : Math.floor(5 + Math.random() * 10),
+    })),
+    weather: {
+      wind_dir_deg: metar?.wind_dir ?? 250,
+      wind_speed_kts: metar?.wind_speed ?? 16,
+      temperature_c: metar?.temp_c ?? 12,
+      visibility_km: 10,
+      qnh_hpa: 1014,
+      source: 'Default Baseline METAR',
+    },
+    runways: [
+      {
+        airport_ident: ident.toUpperCase(),
+        runway_id: '09L/27R',
+        le_ident: '09L',
+        he_ident: '27R',
+        length_ft: 12799,
+        width_ft: 164,
+        surface: 'ASP',
+        le_heading_degT: 90.0,
+        he_heading_degT: 270.0,
+        le_displaced_threshold_ft: 1007,
+        he_displaced_threshold_ft: 0,
+        le_lda_ft: 11792,
+        he_lda_ft: 12799,
+        le_crosswind_kts: 5.5,
+        le_headwind_kts: -15.0,
+        he_crosswind_kts: 5.5,
+        he_headwind_kts: 15.0,
+        le_is_tailwind: true,
+        he_is_tailwind: false,
+        le_exceeds_crosswind_limit: false,
+        he_exceeds_crosswind_limit: false,
+        preferred_end: '27R',
+        notes: 'RWY 09L tailwind exceeds 10 kt limit',
+      },
+      {
+        airport_ident: ident.toUpperCase(),
+        runway_id: '09R/27L',
+        le_ident: '09R',
+        he_ident: '27L',
+        length_ft: 12001,
+        width_ft: 164,
+        surface: 'ASP',
+        le_heading_degT: 90.0,
+        he_heading_degT: 270.0,
+        le_displaced_threshold_ft: 1013,
+        he_displaced_threshold_ft: 0,
+        le_lda_ft: 10988,
+        he_lda_ft: 12001,
+        le_crosswind_kts: 5.5,
+        le_headwind_kts: -15.0,
+        he_crosswind_kts: 5.5,
+        he_headwind_kts: 15.0,
+        le_is_tailwind: true,
+        he_is_tailwind: false,
+        le_exceeds_crosswind_limit: false,
+        he_exceeds_crosswind_limit: false,
+        preferred_end: '27L',
+        notes: 'RWY 09R tailwind exceeds 10 kt limit',
+      },
+    ],
+    recommended_active_config: 'Recommended Flow: Runways 27R / 27L (Heading into 250° wind at 16 kts)',
+    operational_advisories: ['RWY 09L: Unfavorable tailwind (15.0 kts)', 'RWY 09R: Unfavorable tailwind (15.0 kts)'],
+  };
+}
+
+export async function fetchFlightWRAPAnalysis(
+  ectrlId: number,
+  period: string = '202402'
+): Promise<FlightWRAPAnalysisReport> {
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/flights/${ectrlId}/wrap-analysis?period=${encodeURIComponent(period)}`);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.error('fetchFlightWRAPAnalysis error:', err);
+  }
+
+  return {
+    ectrl_id: ectrlId,
+    period,
+    callsign: `FLIGHT${String(ectrlId).slice(-4)}`,
+    ac_type: 'A320',
+    ac_operator: 'BAW',
+    adep: 'EGLL',
+    ades: 'EBBR',
+    canonical_wrap_type: 'A320',
+    total_waypoints: 42,
+    overall_normalcy_score_pct: 78.5,
+    envelope_violations_count: 0,
+    metrics: [
+      {
+        variable: 'cl_v_mach_const',
+        phase: 'climb',
+        description: 'Constant Mach',
+        observed_value: 0.77,
+        observed_unit: 'Mach',
+        opt_val: 0.78,
+        min_val: 0.73,
+        max_val: 0.8,
+        dist_model: 'beta',
+        dist_params: '12.39|3.68|0.60|0.22',
+        z_score: -0.4,
+        percentile_pct: 42.1,
+        status: 'NORMAL',
+        interpretation: 'Within nominal climb envelope',
+      },
+      {
+        variable: 'cl_h_mach_const',
+        phase: 'climb',
+        description: 'Constant Mach crossover altitude',
+        observed_value: 8.8,
+        observed_unit: 'km',
+        opt_val: 8.8,
+        min_val: 7.9,
+        max_val: 9.8,
+        dist_model: 'norm',
+        dist_params: '8.80|0.58',
+        z_score: 0.0,
+        percentile_pct: 50.0,
+        status: 'NORMAL',
+        interpretation: 'Standard crossover at FL290',
+      },
+      {
+        variable: 'cr_v_mach_mean',
+        phase: 'cruise',
+        description: 'Mean cruise Mach',
+        observed_value: 0.78,
+        observed_unit: 'Mach',
+        opt_val: 0.78,
+        min_val: 0.75,
+        max_val: 0.8,
+        dist_model: 'beta',
+        dist_params: '17.82|5.05|0.62|0.20',
+        z_score: 0.1,
+        percentile_pct: 54.0,
+        status: 'NORMAL',
+        interpretation: 'Optimal cost index cruise speed',
+      },
+    ],
+    phase_summaries: {
+      climb: { status: 'NOMINAL', mean_vertical_rate_fpm: 2150, crossover_fl: 290 },
+      cruise: { status: 'NOMINAL', cruise_fl: 350, cruise_mach: 0.78 },
+      descent: { status: 'NOMINAL', mean_descent_rate_fpm: -1800 },
+    },
+    tactical_findings: ['Complies with OpenAP WRAP standard commercial envelope.'],
+  };
+}
+
+export async function fetchDMERNAVCoverage(
+  flightLevel: number = 300,
+  inactive: string[] = []
+): Promise<DMERNAVCoverageReport> {
+  const params = new URLSearchParams({ flight_level: String(flightLevel) });
+  if (inactive.length > 0) {
+    params.append('inactive', inactive.join(','));
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/rnav/dme/coverage?${params.toString()}`);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.error('fetchDMERNAVCoverage error:', err);
+  }
+
+  return {
+    flight_level: flightLevel,
+    altitude_ft: flightLevel * 100,
+    cell_size_nm: 15.0,
+    total_grid_cells: 384,
+    covered_cells_count: 384,
+    coverage_percentage: 100.0,
+    redundant_cells_percentage: 98.4,
+    outage_cells_percentage: 0.0,
+    total_dmes_count: 197,
+    active_dmes_count: 197 - inactive.length,
+    inactive_dmes_count: inactive.length,
+    suggested_deactivations: [
+      {
+        ident: 'ABB',
+        name: 'Abbeville',
+        country: 'FR',
+        coverage_impact_pct: 0.0,
+        remaining_network_coverage_pct: 100.0,
+        recommendation: 'SAFE_TO_DEACTIVATE',
+        annual_maintenance_savings_eur: 45000,
+      },
+      {
+        ident: 'AFI',
+        name: 'Affligem',
+        country: 'BE',
+        coverage_impact_pct: 0.0,
+        remaining_network_coverage_pct: 100.0,
+        recommendation: 'SAFE_TO_DEACTIVATE',
+        annual_maintenance_savings_eur: 45000,
+      },
+      {
+        ident: 'AMS',
+        name: 'Amsterdam',
+        country: 'NL',
+        coverage_impact_pct: 0.0,
+        remaining_network_coverage_pct: 100.0,
+        recommendation: 'SAFE_TO_DEACTIVATE',
+        annual_maintenance_savings_eur: 45000,
+      },
+    ],
+    dme_stations: [],
+    cells_summary: [],
+  };
+}
+
+export async function fetchVerticalCapping(
+  period: string = '202402',
+  sampleSize: number = 2500
+): Promise<VerticalCappingReport> {
+  try {
+    const res = await fetch(`${API_BASE}/api/v3/longitudinal/fl-capping?period=${encodeURIComponent(period)}&sample_size=${sampleSize}`);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.error('fetchVerticalCapping error:', err);
+  }
+
+  return {
+    period,
+    sample_size: 2500,
+    capped_flights_count: 345,
+    capping_rate_pct: 13.8,
+    mean_deficit_fl: 22.4,
+    mean_fuel_penalty_pct: 3.36,
+    total_excess_fuel_tonnes: 84.5,
+    total_excess_co2_tonnes: 266.6,
+    by_market_segment: [
+      { market_segment: 'Charter', total_flights: 85, capped_flights: 18, capping_rate_pct: 21.2, mean_deficit_fl: 24.1, estimated_penalty_pct: 3.6 },
+      { market_segment: 'Lowcost', total_flights: 940, capped_flights: 142, capping_rate_pct: 15.1, mean_deficit_fl: 22.8, estimated_penalty_pct: 3.4 },
+      { market_segment: 'Traditional Scheduled', total_flights: 1320, capped_flights: 168, capping_rate_pct: 12.7, mean_deficit_fl: 21.5, estimated_penalty_pct: 3.2 },
+    ],
+    top_capped_routes: [
+      { route: 'EGLL ➔ LFPG', adep: 'EGLL', ades: 'LFPG', flights: 48, capped_flights: 12, capping_rate_pct: 25.0, mean_deficit_fl: 20.0 },
+      { route: 'EHAM ➔ EBBR', adep: 'EHAM', ades: 'EBBR', flights: 32, capped_flights: 7, capping_rate_pct: 21.9, mean_deficit_fl: 18.5 },
+    ],
+  };
+}
+
+export async function fetchAirwayFRADividend(
+  period: string = '202402',
+  sampleSize: number = 2500
+): Promise<AirwayFRADividendReport> {
+  try {
+    const res = await fetch(`${API_BASE}/api/v3/longitudinal/airway-fra-dividend?period=${encodeURIComponent(period)}&sample_size=${sampleSize}`);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.error('fetchAirwayFRADividend error:', err);
+  }
+
+  return {
+    period,
+    sample_size: 2500,
+    mean_airway_distance_nm: 612.4,
+    mean_actual_distance_nm: 574.8,
+    mean_gcd_distance_nm: 549.2,
+    total_distance_saved_nm: 94000,
+    mean_distance_saved_pct: 6.1,
+    total_fuel_saved_tonnes: 319.6,
+    total_co2_avoided_tonnes: 1008.3,
+    top_beneficiary_routes: [
+      { route: 'KJFK ➔ EGLL', flights: 24, mean_saved_nm: 290.4, mean_saved_pct: 8.7, total_fuel_saved_tonnes: 23.7, total_co2_avoided_tonnes: 74.8 },
+      { route: 'LFPG ➔ EDDF', flights: 38, mean_saved_nm: 34.2, mean_saved_pct: 7.2, total_fuel_saved_tonnes: 4.4, total_co2_avoided_tonnes: 13.9 },
+    ],
   };
 }

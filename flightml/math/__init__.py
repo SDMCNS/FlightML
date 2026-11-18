@@ -88,6 +88,8 @@ from flightml.math.climate import (
     schmidt_appleman_threshold_c,
     sonntag_saturation_vapor_pressure_ice_hpa,
     sonntag_saturation_vapor_pressure_liquid_hpa,
+    soot_number_to_optical_depth,
+    initial_ice_crystal_concentration,
 )
 
 # Economics
@@ -192,6 +194,8 @@ __all__ = [
     "fuel_to_nox_g",
     "fuel_to_h2o_kg",
     "contrail_energy_forcing_rf_j",
+    "soot_number_to_optical_depth",
+    "initial_ice_crystal_concentration",
     # Economics
     "DEFAULT_MTOW_TONNES",
     "COST_GATE_DELAY_EUR_PER_MIN",

@@ -113,6 +113,17 @@ def test_climate_sonntag_and_contrail_sac():
     t_sac = fmath.schmidt_appleman_threshold_c(250.0, 0.35)
     assert -43.0 < t_sac < -39.0
 
+    # nvPM Soot microphysics: low soot (lean combustor ~1e14) vs nominal (1e15)
+    tau_lean = fmath.soot_number_to_optical_depth(1.0e14, nominal_ei_num=1.0e15, nominal_optical_depth=0.30)
+    tau_nominal = fmath.soot_number_to_optical_depth(1.0e15, nominal_ei_num=1.0e15, nominal_optical_depth=0.30)
+    assert tau_lean < tau_nominal
+    assert 0.05 < tau_lean < 0.10
+    assert math.isclose(tau_nominal, 0.30, abs_tol=1e-3)
+
+    # Initial ice crystal concentration
+    n_ice = fmath.initial_ice_crystal_concentration(1.0e15, fuel_flow_kg_s=0.75, wingspan_m=35.8, true_airspeed_mps=230.0)
+    assert n_ice > 1.0e9  # particles per m³
+
     # Persistent contrail formation
     assert fmath.is_persistent_contrail_forming(-45.0, 250.0, 105.0) is True
     assert fmath.is_persistent_contrail_forming(-35.0, 250.0, 105.0) is False  # Too warm
