@@ -13,25 +13,40 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({ waypoints, highlightAnom
   const mapInstanceRef = useRef<L.Map | null>(null);
   const layerGroupRef = useRef<L.LayerGroup | null>(null);
 
+  // Initialize Map once
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
-    if (!mapInstanceRef.current) {
-      const map = L.map(mapContainerRef.current, {
-        center: [48.85, 12.0],
-        zoom: 4,
-        zoomControl: true,
-      });
-
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap contributors',
-        maxZoom: 18,
-      }).addTo(map);
-
-      layerGroupRef.current = L.layerGroup().addTo(map);
-      mapInstanceRef.current = map;
+    // Safety clear in case of StrictMode remount
+    const container = mapContainerRef.current as HTMLElement & { _leaflet_id?: unknown };
+    if (container._leaflet_id) {
+      delete container._leaflet_id;
     }
 
+    const map = L.map(container, {
+      center: [48.85, 12.0],
+      zoom: 4,
+      zoomControl: true,
+    });
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 18,
+    }).addTo(map);
+
+    const layers = L.layerGroup().addTo(map);
+    mapInstanceRef.current = map;
+    layerGroupRef.current = layers;
+
+    return () => {
+      map.remove();
+      mapInstanceRef.current = null;
+      layerGroupRef.current = null;
+    };
+  }, []);
+
+  // Update Layers & Bounds when waypoints change
+  useEffect(() => {
     const map = mapInstanceRef.current;
     const layers = layerGroupRef.current;
     if (!map || !layers) return;

@@ -4,7 +4,7 @@ import os
 from typing import Any
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -93,6 +93,14 @@ app.add_middleware(
 
 frontend_dist = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist"))
 if os.path.isdir(frontend_dist):
+    assets_dir = os.path.join(frontend_dist, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/cockpit")
+    def cockpit_redirect():
+        return RedirectResponse(url="/cockpit/")
+
     app.mount("/cockpit", StaticFiles(directory=frontend_dist, html=True), name="cockpit")
 
 # Global singletons
