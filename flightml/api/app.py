@@ -521,6 +521,117 @@ def stress_test_endpoint(
 
 
 # -----------------------------------------------------------------------------
+# Core Mathematical Library Endpoints
+# -----------------------------------------------------------------------------
+
+@app.get("/api/v1/math/summary")
+def get_math_library_summary() -> dict[str, Any]:
+    """Retrieve catalog and function counts of the FlightML mathematical library."""
+    import flightml.math as fmath
+    return {
+        "status": "ok",
+        "total_functions_and_constants": len(fmath.__all__),
+        "domains": [
+            "Geodesy & Spherical Trigonometry",
+            "Atmospheric Physics & ISA",
+            "Aerodynamics & Kinematics",
+            "Climate Microphysics & Emissions",
+            "Aviation Economics & Passenger Liability",
+            "Operational Efficiency & Navigation Infrastructure",
+            "GNSS Kinematics & Electronic Warfare Shield",
+        ],
+        "exports": fmath.__all__,
+    }
+
+
+@app.get("/api/v1/math/isa")
+def get_isa_math_endpoint(
+    altitude_m: float = Query(10668.0, description="Altitude in meters (10668m = FL350)"),
+) -> dict[str, Any]:
+    """Compute exact International Standard Atmosphere (ISA) values for a given altitude."""
+    import flightml.math as fmath
+    fl = fmath.altitude_m_to_flight_level(altitude_m)
+    return {
+        "altitude_m": altitude_m,
+        "flight_level": round(fl, 1),
+        "temperature_c": round(fmath.isa_temperature_c(altitude_m), 2),
+        "temperature_k": round(fmath.isa_temperature_k(altitude_m), 2),
+        "pressure_hpa": round(fmath.isa_pressure_hpa(altitude_m), 2),
+        "density_kg_m3": round(fmath.isa_density_kg_m3(altitude_m), 4),
+        "speed_of_sound_kts": round(fmath.speed_of_sound_kts(altitude_m), 1),
+        "speed_of_sound_mps": round(fmath.speed_of_sound_mps(altitude_m), 2),
+    }
+
+
+@app.get("/api/v1/math/geodesy/distance")
+def get_geodesy_distance_endpoint(
+    lat1: float = Query(51.4700, description="Latitude origin"),
+    lon1: float = Query(-0.4543, description="Longitude origin"),
+    lat2: float = Query(40.6413, description="Latitude destination"),
+    lon2: float = Query(-73.7781, description="Longitude destination"),
+) -> dict[str, Any]:
+    """Compute Haversine distance, initial and final bearings between two coordinates."""
+    import flightml.math as fmath
+    dist_nm = fmath.haversine_distance_nm(lat1, lon1, lat2, lon2)
+    dist_km = fmath.haversine_distance_km(lat1, lon1, lat2, lon2)
+    init_b = fmath.initial_bearing_deg(lat1, lon1, lat2, lon2)
+    final_b = fmath.final_bearing_deg(lat1, lon1, lat2, lon2)
+    m_lat, m_lon = fmath.spherical_midpoint(lat1, lon1, lat2, lon2)
+    return {
+        "origin": [lat1, lon1],
+        "destination": [lat2, lon2],
+        "distance_nm": round(dist_nm, 2),
+        "distance_km": round(dist_km, 2),
+        "initial_bearing_deg": round(init_b, 1),
+        "final_bearing_deg": round(final_b, 1),
+        "spherical_midpoint": [round(m_lat, 4), round(m_lon, 4)],
+    }
+
+
+@app.get("/api/v1/math/climate/contrail")
+def get_climate_contrail_endpoint(
+    temp_c: float = Query(-45.0, description="Ambient air temperature in Celsius"),
+    pressure_hpa: float = Query(250.0, description="Atmospheric pressure in hPa"),
+    rh_ice_pct: float = Query(105.0, description="Relative humidity with respect to ice (%)"),
+    propulsion_efficiency: float = Query(0.35, description="Overall propulsion efficiency (0.30 - 0.40)"),
+) -> dict[str, Any]:
+    """Evaluate Schmidt-Appleman Criterion and persistent contrail formation."""
+    import flightml.math as fmath
+    t_sac = fmath.schmidt_appleman_threshold_c(pressure_hpa, propulsion_efficiency)
+    is_forming = fmath.is_persistent_contrail_forming(temp_c, pressure_hpa, rh_ice_pct, propulsion_efficiency)
+    is_issr = fmath.is_ice_supersaturated(rh_ice_pct)
+    return {
+        "ambient_temp_c": temp_c,
+        "pressure_hpa": pressure_hpa,
+        "rh_ice_pct": rh_ice_pct,
+        "t_sac_threshold_c": round(t_sac, 2),
+        "is_ice_supersaturated_issr": is_issr,
+        "is_persistent_contrail_forming": is_forming,
+    }
+
+
+@app.get("/api/v1/math/economics/crco")
+def get_crco_charge_endpoint(
+    distance_km: float = Query(1000.0, description="Charging distance in kilometers"),
+    mtow_tonnes: float = Query(77.0, description="Aircraft Maximum Take-Off Weight (tonnes)"),
+    unit_rate_eur: float = Query(75.0, description="National charging zone unit rate (EUR)"),
+) -> dict[str, Any]:
+    """Compute Eurocontrol CRCO En-Route route charge."""
+    import flightml.math as fmath
+    w_fac = fmath.crco_weight_factor(mtow_tonnes)
+    d_fac = fmath.crco_distance_factor(distance_km)
+    charge = fmath.crco_route_charge_eur(distance_km, mtow_tonnes, unit_rate_eur)
+    return {
+        "distance_km": distance_km,
+        "mtow_tonnes": mtow_tonnes,
+        "unit_rate_eur": unit_rate_eur,
+        "distance_factor": round(d_fac, 3),
+        "weight_factor": round(w_fac, 4),
+        "route_charge_eur": round(charge, 2),
+    }
+
+
+# -----------------------------------------------------------------------------
 # GNSS Jamming & Spoofing Network Endpoints
 # -----------------------------------------------------------------------------
 
