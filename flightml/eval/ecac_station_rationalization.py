@@ -282,7 +282,16 @@ def load_ecac_stations(
     lon_min = fir_bbox[2] if fir_bbox else ECAC_LON_MIN
     lon_max = fir_bbox[3] if fir_bbox else ECAC_LON_MAX
 
-    # 1. Fetch ECAC airports (filtered to FIR polygon if specified)
+    # 1. Load Stations with Line-of-Sight Buffer
+    # Buffer station search box: Radar range is 250 NM (~4.2 deg), DME is 160 NM (~2.8 deg)
+    buf_lat = 4.2 if station_type == "RADAR" else 2.8
+    buf_lon = 6.0 if station_type == "RADAR" else 4.2
+    sta_lat_min = max(-80.0, lat_min - buf_lat)
+    sta_lat_max = min(80.0, lat_max + buf_lat)
+    sta_lon_min = max(-175.0, lon_min - buf_lon)
+    sta_lon_max = min(175.0, lon_max + buf_lon)
+
+    # 2. Fetch ECAC commercial airports (both inside domain and within neighbor buffer)
     airports_df = dataset.cursor.execute(
         """
         WITH moves AS (
@@ -306,18 +315,17 @@ def load_ecac_stations(
           AND a.type IN ('large_airport', 'medium_airport')
         ORDER BY daily_movements DESC
         """,
-        [lat_min - 0.2, lat_max + 0.2, lon_min - 0.5, lon_max + 0.5],
+        [sta_lat_min, sta_lat_max, sta_lon_min, sta_lon_max],
     ).df()
 
+    all_candidate_airports: list[dict[str, Any]] = []
     airports: list[dict[str, Any]] = []
     for _, row in airports_df.iterrows():
         a_lat = float(row["latitude"])
         a_lon = float(row["longitude"])
-        if fir_poly and not fir_poly.contains(Point(a_lon, a_lat)):
-            continue
-
-        airports.append({
-            "ident": str(row["ident"]),
+        is_inside = (fir_poly is None) or fir_poly.contains(Point(a_lon, a_lat))
+        apt_dict = {
+            "ident": str(row["ident"]).strip().upper(),
             "name": str(row["name"]),
             "latitude": a_lat,
             "longitude": a_lon,
@@ -325,16 +333,10 @@ def load_ecac_stations(
             "country": str(row.get("iso_country") or "EU"),
             "daily_movements": float(row["daily_movements"]),
             "is_high_density": float(row["daily_movements"]) >= 500.0,
-        })
-
-    # 2. Load Stations with Line-of-Sight Buffer
-    # Buffer station search box: Radar range is 250 NM (~4.2 deg), DME is 160 NM (~2.8 deg)
-    buf_lat = 4.2 if station_type == "RADAR" else 2.8
-    buf_lon = 6.0 if station_type == "RADAR" else 4.2
-    sta_lat_min = max(-80.0, lat_min - buf_lat)
-    sta_lat_max = min(80.0, lat_max + buf_lat)
-    sta_lon_min = max(-175.0, lon_min - buf_lon)
-    sta_lon_max = min(175.0, lon_max + buf_lon)
+        }
+        all_candidate_airports.append(apt_dict)
+        if is_inside:
+            airports.append(apt_dict)
 
     stations: list[ECACStation] = []
     seen_ids = set()
@@ -359,7 +361,7 @@ def load_ecac_stations(
                 # Check proximity to nearest airport (<= 5 NM)
                 min_dist = 99999.0
                 nearest_apt_ident = None
-                for a in airports:
+                for a in all_candidate_airports:
                     if abs(lat - a["latitude"]) > 0.15 or abs(lon - a["longitude"]) > 0.25:
                         continue
                     d = fmath.haversine_distance_nm(lat, lon, a["latitude"], a["longitude"])
@@ -384,6 +386,123 @@ def load_ecac_stations(
                         annual_power_savings_mwh=RADAR_ANNUAL_POWER_MWH,
                     )
                 )
+
+        # Radar Coverage Gap Infill Assumption:
+        # In parts of ECAC airspace where there are radar coverage gaps in the initial dataset,
+        # assume that any commercial airport in one of those gaps has at least 1 radar
+        # (and for airports with over 500 movements in a day, assume 2 radars).
+        # Labels are formatted as ABCD_assumed (and ABCD_assumed_2) where ABCD is the ICAO code.
+        if all_candidate_airports:
+            initial_radars = list(stations)
+            if initial_radars:
+                s_lats = np.array([s.latitude for s in initial_radars])
+                s_lons = np.array([s.longitude for s in initial_radars])
+                s_elev = np.array([s.elevation_ft for s in initial_radars])
+                s_nom = np.array([s.nominal_range_nm for s in initial_radars])
+                rlos_50 = 1.23 * (np.sqrt(5000.0) + np.sqrt(np.maximum(0.0, s_elev)))
+                max_r_50 = np.minimum(s_nom, rlos_50)
+
+                for a in all_candidate_airports:
+                    icao = a["ident"]
+                    if not icao or len(icao) < 3:
+                        continue
+                    a_lat = a["latitude"]
+                    a_lon = a["longitude"]
+
+                    dlat = (a_lat - s_lats) * 60.0
+                    mid_lat = np.radians((a_lat + s_lats) / 2.0)
+                    dlon = (a_lon - s_lons) * 60.0 * np.cos(mid_lat)
+                    dists = np.sqrt(dlat**2 + dlon**2)
+                    has_cov = (dists <= max_r_50).any()
+
+                    if not has_cov:
+                        # Commercial airport is in an initial radar coverage gap
+                        is_busy = a["is_high_density"]
+                        r_id = f"{icao}_assumed"
+                        if r_id not in seen_ids:
+                            seen_ids.add(r_id)
+                            stations.append(
+                                ECACStation(
+                                    id=r_id,
+                                    name=r_id,
+                                    type="RADAR",
+                                    latitude=a_lat,
+                                    longitude=a_lon,
+                                    elevation_ft=a["elevation_ft"],
+                                    country=a["country"],
+                                    is_airport_station=True,
+                                    nearest_airport_ident=icao,
+                                    nominal_range_nm=250.0,
+                                    annual_cost_savings_eur=RADAR_ANNUAL_COST_SAVINGS_EUR,
+                                    annual_power_savings_mwh=RADAR_ANNUAL_POWER_MWH,
+                                )
+                            )
+                        if is_busy:
+                            r_id_2 = f"{icao}_assumed_2"
+                            if r_id_2 not in seen_ids:
+                                seen_ids.add(r_id_2)
+                                stations.append(
+                                    ECACStation(
+                                        id=r_id_2,
+                                        name=r_id_2,
+                                        type="RADAR",
+                                        latitude=a_lat,
+                                        longitude=a_lon,
+                                        elevation_ft=a["elevation_ft"],
+                                        country=a["country"],
+                                        is_airport_station=True,
+                                        nearest_airport_ident=icao,
+                                        nominal_range_nm=250.0,
+                                        annual_cost_savings_eur=RADAR_ANNUAL_COST_SAVINGS_EUR,
+                                        annual_power_savings_mwh=RADAR_ANNUAL_POWER_MWH,
+                                    )
+                                )
+            else:
+                # No initial radars in zone: every candidate airport gets assumed radar(s)
+                for a in all_candidate_airports:
+                    icao = a["ident"]
+                    if not icao or len(icao) < 3:
+                        continue
+                    is_busy = a["is_high_density"]
+                    r_id = f"{icao}_assumed"
+                    if r_id not in seen_ids:
+                        seen_ids.add(r_id)
+                        stations.append(
+                            ECACStation(
+                                id=r_id,
+                                name=r_id,
+                                type="RADAR",
+                                latitude=a["latitude"],
+                                longitude=a["longitude"],
+                                elevation_ft=a["elevation_ft"],
+                                country=a["country"],
+                                is_airport_station=True,
+                                nearest_airport_ident=icao,
+                                nominal_range_nm=250.0,
+                                annual_cost_savings_eur=RADAR_ANNUAL_COST_SAVINGS_EUR,
+                                annual_power_savings_mwh=RADAR_ANNUAL_POWER_MWH,
+                            )
+                        )
+                    if is_busy:
+                        r_id_2 = f"{icao}_assumed_2"
+                        if r_id_2 not in seen_ids:
+                            seen_ids.add(r_id_2)
+                            stations.append(
+                                ECACStation(
+                                    id=r_id_2,
+                                    name=r_id_2,
+                                    type="RADAR",
+                                    latitude=a["latitude"],
+                                    longitude=a["longitude"],
+                                    elevation_ft=a["elevation_ft"],
+                                    country=a["country"],
+                                    is_airport_station=True,
+                                    nearest_airport_ident=icao,
+                                    nominal_range_nm=250.0,
+                                    annual_cost_savings_eur=RADAR_ANNUAL_COST_SAVINGS_EUR,
+                                    annual_power_savings_mwh=RADAR_ANNUAL_POWER_MWH,
+                                )
+                            )
     else:  # DME
         df_dme = dataset.cursor.execute(
             """
@@ -408,7 +527,7 @@ def load_ecac_stations(
 
             min_dist = 99999.0
             nearest_apt_ident = None
-            for a in airports:
+            for a in all_candidate_airports:
                 if abs(lat - a["latitude"]) > 0.15 or abs(lon - a["longitude"]) > 0.25:
                     continue
                 d = fmath.haversine_distance_nm(lat, lon, a["latitude"], a["longitude"])
@@ -602,20 +721,22 @@ def _compute_dme_navigation_standards_views(
 
     while (~cur_paired & rnav5_target).any():
         rem_target = ~cur_paired & rnav5_target
+        rem_idx = np.where(rem_target)[0]
         act = list(rnav5_set)
-        act_vis = vis_200[:, act]
-        act_brg = bearings_cell[:, act]
+        act_vis = vis_200[rem_idx, :][:, act]
+        act_brg = bearings_cell[rem_idx, :][:, act]
         best_s = -1
         best_gain = 0
-        for s in range(n_sta):
+        cand_stations = np.where(vis_200[rem_idx, :].any(axis=0))[0]
+        for s in cand_stations:
             if s in rnav5_set:
                 continue
-            s_vis = vis_200[:, s]
-            s_brg = bearings_cell[:, s, None]
+            s_vis = vis_200[rem_idx, s]
+            s_brg = bearings_cell[rem_idx, s, None]
             diff = np.abs(act_brg - s_brg)
             diff = np.minimum(diff, 360.0 - diff)
             new_pairs = (act_vis & s_vis[:, None]) & (diff >= 30.0) & (diff <= 150.0)
-            gain = int((new_pairs.any(axis=1) & rem_target).sum())
+            gain = int(new_pairs.any(axis=1).sum())
             if gain > best_gain:
                 best_gain = gain
                 best_s = s
@@ -626,12 +747,13 @@ def _compute_dme_navigation_standards_views(
             if unc_counts[best_s] <= 0:
                 break
         rnav5_set.add(best_s)
-        act = list(rnav5_set)
-        act_vis = vis_200[:, act]
-        act_brg = bearings_cell[:, act]
-        diff = np.abs(act_brg[:, :, None] - act_brg[:, None, :])
+        # Fast incremental update of cur_paired for remaining targets
+        s_vis = vis_200[rem_idx, best_s]
+        s_brg = bearings_cell[rem_idx, best_s, None]
+        diff = np.abs(act_brg - s_brg)
         diff = np.minimum(diff, 360.0 - diff)
-        cur_paired = ((act_vis[:, :, None] & act_vis[:, None, :]) & (diff >= 30.0) & (diff <= 150.0)).any(axis=(1, 2))
+        new_pairs = (act_vis & s_vis[:, None]) & (diff >= 30.0) & (diff <= 150.0)
+        cur_paired[rem_idx] |= new_pairs.any(axis=1)
 
     # 2. RNAV 2: Continental / Transition (±2 NM, range <= 130 NM, dual at busy hubs)
     rnav2_set: set[int] = set(rnav5_set)

@@ -237,3 +237,62 @@ def test_navigation_performance_standards_scenarios():
     assert folium_map is not None
 
 
+def test_radar_coverage_gap_assumed_stations():
+    """
+    Test that commercial airports in initial radar coverage gaps are augmented
+    with assumed radars:
+    - Exactly 1 radar (ABCD_assumed) for commercial airports in coverage gaps.
+    - Exactly 2 radars (ABCD_assumed and ABCD_assumed_2) for gap airports with >500 movements/day.
+    - No assumed radars for airports already covered in the initial dataset (e.g. EGLL, LFPG, EDDF).
+    - In single FIR evaluations (e.g. LRBBFIR), assumed airport radars inside the FIR are scoped to inside_stations.
+    """
+    ds = FlightDataset("202510")
+    radars, airports = load_ecac_stations(ds, station_type="RADAR")
+
+    # 1. High-density gap hubs (>500 movements/day) must have 2 assumed radars
+    busy_gap_hubs = ["LIRF", "LGAV", "LIMC", "ENGM", "ESSA"]
+    for icao in busy_gap_hubs:
+        matched = [s for s in radars if s.id.startswith(f"{icao}_assumed")]
+        assert len(matched) == 2, f"Expected 2 assumed radars for {icao}, found {len(matched)}"
+        ids = {s.id for s in matched}
+        assert f"{icao}_assumed" in ids
+        assert f"{icao}_assumed_2" in ids
+        for s in matched:
+            assert s.type == "RADAR"
+            assert s.is_airport_station is True
+            assert s.nearest_airport_ident == icao
+            assert s.nominal_range_nm == 250.0
+
+    # 2. Medium commercial gap airports (<500 movements/day) must have exactly 1 assumed radar
+    medium_gap_airports = ["LROP", "ENVA", "LUKK", "LRIA"]
+    for icao in medium_gap_airports:
+        matched = [s for s in radars if s.id.startswith(f"{icao}_assumed")]
+        assert len(matched) == 1, f"Expected 1 assumed radar for {icao}, found {len(matched)}"
+        assert matched[0].id == f"{icao}_assumed"
+        assert matched[0].type == "RADAR"
+        assert matched[0].is_airport_station is True
+
+    # 3. Already covered hubs must NOT have assumed radars
+    covered_hubs = ["EGLL", "LFPG", "EDDF", "EHAM"]
+    for icao in covered_hubs:
+        matched = [s for s in radars if s.id.startswith(f"{icao}_assumed")]
+        assert len(matched) == 0, f"Expected 0 assumed radars for {icao}, found {len(matched)}"
+
+    # 4. Single FIR territorial scoping: LRBBFIR (Bucharest) gets inside assumed radars
+    geom = get_fir_geometry(ds, "LRBBFIR")
+    assert geom is not None
+    poly, _, bbox = geom
+    s_in, a_fir, s_adj = load_ecac_stations(
+        ds,
+        station_type="RADAR",
+        fir_poly=poly,
+        fir_bbox=bbox,
+        include_adjacent=True,
+    )
+    assert len(s_in) > 0
+    in_assumed = [s for s in s_in if s.id.endswith("_assumed") or "_assumed_" in s.id]
+    assert len(in_assumed) > 0
+    assert any(s.id == "LROP_assumed" for s in s_in)
+
+
+
