@@ -2010,3 +2010,173 @@ def create_gnss_flight_route_map(
 
 
 
+
+
+def create_ecac_coverage_map(
+    coverage_report: dict[str, Any],
+    selected_fl: int = 200,
+    show_cells: bool = True,
+    show_stations: bool = True,
+    show_gap_fillers: bool = True,
+    show_hubs: bool = True,
+    output_html_path: Path | str | None = None,
+) -> folium.Map:
+    """
+    Generate an interactive Leaflet/Folium coverage map for ECAC airspace:
+    - 10x10 NM cell grid coverage at FL50, FL100, FL200, or FL300
+    - Multi-tier color coding: Dual+ (green), Single (amber), Outage (red), Uncoverable Gap (slate)
+    - Active stations (blue) vs Standby/Deactivated stations (gray)
+    - Proposed synthetic gap-filling facilities (purple/magenta)
+    - High-density hubs (gold) with FL10 terminal coverage status
+    """
+    m = folium.Map(
+        location=[50.0, 10.0],
+        zoom_start=4,
+        tiles="OpenStreetMap",
+        control_scale=True,
+    )
+
+    fl_key = f"fl{selected_fl}"
+    fl_data = coverage_report.get("coverage_by_fl", {}).get(fl_key, {})
+    station_type = coverage_report.get("station_type", "RADAR")
+    active_view = coverage_report.get("active_view", "VIEW_1")
+
+    # 1. Coverage Grid Layer
+    if show_cells and fl_data and "cells" in fl_data:
+        cell_group = folium.FeatureGroup(name=f"Coverage Grid (FL{selected_fl})", show=True).add_to(m)
+        for cell in fl_data["cells"]:
+            status = cell.get("status", "OUTAGE")
+            cnt = cell.get("count", 0)
+            lat, lon = cell["lat"], cell["lon"]
+
+            if status == "DUAL_OR_MORE":
+                color = "#10b981"
+                tip = f"Dual+ Coverage: {cnt} {station_type}s visible at FL{selected_fl}"
+                opac = 0.55
+                rad = 5.0
+            elif status == "SINGLE":
+                color = "#f59e0b"
+                tip = f"Single Coverage: 1 {station_type} visible at FL{selected_fl}"
+                opac = 0.65
+                rad = 5.0
+            elif status == "OUTAGE":
+                color = "#ef4444"
+                tip = f"Coverable Outage: 0 active {station_type}s at FL{selected_fl}"
+                opac = 0.75
+                rad = 5.0
+            else:  # UNCOVERABLE
+                color = "#94a3b8"
+                tip = f"Dataset Gap: Uncoverable with current inventory at FL{selected_fl}"
+                opac = 0.25
+                rad = 3.5
+
+            folium.CircleMarker(
+                location=[lat, lon],
+                radius=rad,
+                color=color,
+                fill=True,
+                fill_color=color,
+                fill_opacity=opac,
+                weight=0.5,
+                tooltip=tip,
+            ).add_to(cell_group)
+
+    # 2. Stations Layer (Active vs Deactivated)
+    if show_stations and "stations" in coverage_report:
+        sta_active_group = folium.FeatureGroup(name=f"Active {station_type}s", show=True).add_to(m)
+        sta_inact_group = folium.FeatureGroup(name=f"Deactivated (Standby) {station_type}s", show=True).add_to(m)
+
+        for s in coverage_report["stations"]:
+            is_act = s.get("is_active", True)
+            lat, lon = s["latitude"], s["longitude"]
+            s_id = s.get("id", "")
+            s_name = s.get("name", s_id)
+            near_apt = s.get("nearest_airport")
+            apt_txt = f" (Airport: {near_apt})" if near_apt else ""
+
+            if is_act:
+                folium.CircleMarker(
+                    location=[lat, lon],
+                    radius=5.5,
+                    color="#1d4ed8",
+                    fill=True,
+                    fill_color="#3b82f6",
+                    fill_opacity=0.9,
+                    weight=1.5,
+                    tooltip=f"ACTIVE {station_type}: {s_id} - {s_name}{apt_txt}",
+                ).add_to(sta_active_group)
+            else:
+                folium.CircleMarker(
+                    location=[lat, lon],
+                    radius=4.0,
+                    color="#475569",
+                    fill=True,
+                    fill_color="#94a3b8",
+                    fill_opacity=0.6,
+                    weight=1.0,
+                    tooltip=f"STANDBY {station_type}: {s_id} - {s_name} [Deactivated for Rationalization]",
+                ).add_to(sta_inact_group)
+
+    # 3. Proposed Synthetic Gap-Filler Stations
+    if show_gap_fillers and "synthetic_gap_fillers" in coverage_report:
+        gap_group = folium.FeatureGroup(name="Proposed Gap-Filler Infill Facilities", show=True).add_to(m)
+        for g in coverage_report["synthetic_gap_fillers"]:
+            folium.Marker(
+                location=[g["latitude"], g["longitude"]],
+                icon=folium.Icon(color="purple", icon="star", prefix="fa"),
+                tooltip=f"PROPOSED INFILL: {g['id']} - {g['name']} | Covers {g['cells_covered_count']} gap cells | {g['region_note']}",
+            ).add_to(gap_group)
+
+    # 4. High-Density Hubs
+    if show_hubs and "airports" in coverage_report:
+        hub_group = folium.FeatureGroup(name="High-Density Hubs (>=500 mov/day)", show=True).add_to(m)
+        for a in coverage_report["airports"]:
+            if not a.get("is_high_density", False):
+                continue
+            c10 = a.get("coverage_count_fl10", 0)
+            icon_color = "green" if c10 >= 2 else "orange" if c10 == 1 else "red"
+            folium.Marker(
+                location=[a["latitude"], a["longitude"]],
+                icon=folium.Icon(color=icon_color, icon="plane", prefix="fa"),
+                tooltip=f"HUB {a['ident']} ({a['name']}): {a['daily_movements']:.0f} mov/day | Surface/FL10 {station_type}s: {c10}",
+            ).add_to(hub_group)
+
+    # 5. Legend & KPI Box
+    single_pct = fl_data.get("single_coverage_pct", 0.0)
+    dual_pct = fl_data.get("dual_coverage_pct", 0.0)
+    act_sta = coverage_report.get("active_stations_count", 0)
+    tot_sta = coverage_report.get("total_stations_count", 0)
+    savings_eur = coverage_report.get("annual_cost_savings_eur", 0.0)
+    gap_count = len(coverage_report.get("synthetic_gap_fillers", []))
+
+    legend_html = f"""
+    <div style="position: fixed;
+                bottom: 25px; left: 15px; width: 380px; height: 185px;
+                background-color: white; border: 2px solid #94a3b8; border-radius: 8px;
+                z-index: 9999; font-size: 11.5px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                padding: 10px; box-shadow: 2px 2px 8px rgba(0,0,0,0.25);">
+        <b style="font-size: 13px; color: #1e293b;">🇪🇺 ECAC {station_type} Rationalization Map — FL{selected_fl}</b><br>
+        <b>View:</b> {active_view} | <b>Active {station_type}s:</b> {act_sta}/{tot_sta}<br>
+        <b>En-Route Coverage:</b> <span style="color: #10b981; font-weight: bold;">Dual: {dual_pct:.1f}%</span> |
+        <span style="color: #f59e0b; font-weight: bold;">Single: {single_pct:.1f}%</span><br>
+        <b>Annual Savings:</b> <span style="color: #059669; font-weight: bold;">€{savings_eur:,.0f}/yr</span><br>
+        <hr style="margin: 5px 0;">
+        <span style="color: #10b981;">●</span> Dual / High Redundancy (≥2) &nbsp;&nbsp;
+        <span style="color: #f59e0b;">●</span> Single Coverage (1)<br>
+        <span style="color: #ef4444;">●</span> Coverable Outage &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+        <span style="color: #94a3b8;">●</span> Dataset Gap (Uncoverable)<br>
+        <span style="color: #3b82f6;">●</span> Active Station &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+        <span style="color: #64748b;">●</span> Standby (Decommissioned)<br>
+        <span style="color: #9333ea;">★</span> Proposed Infill ({gap_count} locations) &nbsp;&nbsp;
+        <span style="color: #d97706;">✈</span> High-Density Hubs
+    </div>
+    """
+    m.get_root().html.add_child(folium.Element(legend_html))
+    folium.LayerControl(position="topright", collapsed=True).add_to(m)
+
+    if output_html_path:
+        out_p = Path(output_html_path)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        m.save(str(out_p))
+
+    return m

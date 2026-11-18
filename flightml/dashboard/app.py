@@ -112,6 +112,7 @@ from flightml.viz.map_builder import (
     create_fra_boundary_map,
     create_gnss_interference_network_map,
     create_gnss_flight_route_map,
+    create_ecac_coverage_map,
 )
 from flightml.viz.html_exporter import (
     generate_static_html_report,
@@ -144,6 +145,7 @@ from flightml.eval.airport_ops import get_airport_operations_report, assess_runw
 from flightml.eval.openap_wrap_engine import analyze_flight_wrap_envelope
 from flightml.eval.dme_rnav_coverage import get_dme_rnav_coverage_report
 from flightml.eval.radar_coverage import get_radar_coverage_report
+from flightml.eval.ecac_station_rationalization import get_ecac_rationalization_report
 from flightml.eval.longitudinal_airspace_modernization import (
     get_vertical_capping_analysis,
     get_fixed_airways_vs_fra_analysis,
@@ -299,6 +301,23 @@ def _cached_radar_coverage(period: str, flight_level: int, inactive_tuple: tuple
         get_dataset(period),
         flight_level=flight_level,
         inactive_ids=list(inactive_tuple),
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _cached_ecac_rationalization(
+    period: str,
+    station_type: str,
+    active_view: str,
+    custom_inactive_tuple: tuple[str, ...],
+    custom_active_tuple: tuple[str, ...],
+):
+    return get_ecac_rationalization_report(
+        get_dataset(period),
+        station_type=station_type,
+        active_view=active_view,
+        custom_inactive_ids=custom_inactive_tuple if custom_inactive_tuple else None,
+        custom_active_ids=custom_active_tuple if custom_active_tuple else None,
     )
 
 
@@ -4886,244 +4905,233 @@ with tab_cat_maps:
             else:
                 st.info("No navaids match the current filter selection.")
 
-    with map_sub_dme:
-        st.header("📻 DME-DME RNAV Backup Coverage & Navaid Rationalization Lab")
+    def render_ecac_rationalization_section(station_type: str, selected_period: str):
+        icon = "📻" if station_type == "DME" else "🛰️"
+        name = "DME-DME RNAV" if station_type == "DME" else "Primary & Secondary Radar Surveillance (SSR / Mode S)"
+        st.header(f"{icon} ECAC {name} Rationalization & Multi-Tier Coverage Lab")
         st.caption(
-            "ICAO Doc 9613 line-of-sight and dual-station geometry (30° ≤ Δθ ≤ 150°) evaluation across 10×10 NM cells "
-            "with greedy deactivation recommender to identify redundant DMEs that can be decommissioned without degrading PBN navigation."
+            f"European Civil Aviation Conference (ECAC) continental airspace evaluation across 10×10 NM cells. "
+            f"Features 3 progressive static rationalization views with user augmentation, FL50–FL300 coverage maps, "
+            f"uncoverable gap detection, and minimum-equipment facility location recommendations."
         )
 
-        col_dme_fl, col_dme_btns = st.columns([1, 2])
-        with col_dme_fl:
-            dme_fl = st.slider(
-                "Flight Level (1,000 ft steps)",
-                min_value=10,
-                max_value=450,
-                value=300,
-                step=10,
-                format="FL%d",
-                key=f"dme_fl_slider_{selected_period}",
-                help="Evaluate DME-DME coverage in 1,000 ft altitude increments (FL010 = 1,000 ft to FL450 = 45,000 ft).",
+        prefix = station_type.lower()
+        view_key = f"{prefix}_ecac_view_{selected_period}"
+        fl_key = f"{prefix}_ecac_fl_{selected_period}"
+        inact_key = f"{prefix}_ecac_inact_{selected_period}"
+        act_key = f"{prefix}_ecac_act_{selected_period}"
+
+        if view_key not in st.session_state:
+            st.session_state[view_key] = "VIEW_1"
+        if fl_key not in st.session_state:
+            st.session_state[fl_key] = 200
+        if inact_key not in st.session_state:
+            st.session_state[inact_key] = []
+        if act_key not in st.session_state:
+            st.session_state[act_key] = []
+
+        # 1. View and Map FL selectors
+        col_v1, col_v2 = st.columns([2, 1])
+        with col_v1:
+            view_labels = {
+                "VIEW_1": "View 1: Minimum Baseline (≥1 station at FL200+ & ≥1 at FL10 at airports)",
+                "VIEW_2": "View 2: Dual En-Route Redundancy (≥2 stations at FL200+ & ≥1 at airports)",
+                "VIEW_3": "View 3: Low-Level Infill & Busy Hub Dual (≥1 at FL50+, ≥2 at FL200+, ≥2 at busy hubs ≥500 mv/d at FL10)",
+            }
+            chosen_view = st.selectbox(
+                f"🎯 Select Static Rationalization View Architecture ({station_type}):",
+                options=list(view_labels.keys()),
+                format_func=lambda k: view_labels[k],
+                index=list(view_labels.keys()).index(st.session_state[view_key]),
+                key=f"{prefix}_sel_view_{selected_period}",
+                help="Choose between Minimum Baseline, Dual En-Route Redundancy, or Low-Level Infill & High-Density Hub Terminal Redundancy."
             )
-        with col_dme_btns:
-            st.markdown(f"**Selected Altitude:** `FL{dme_fl}` (`{dme_fl*100:,} ft MSL`)")
+            if chosen_view != st.session_state[view_key]:
+                st.session_state[view_key] = chosen_view
+                st.session_state[inact_key] = []
+                st.session_state[act_key] = []
+                st.rerun()
 
-        if "dme_inactive_idents" not in st.session_state:
-            st.session_state["dme_inactive_idents"] = []
+        with col_v2:
+            fl_options = [50, 100, 200, 300]
+            cur_fl_idx = fl_options.index(st.session_state[fl_key]) if st.session_state[fl_key] in fl_options else 2
+            chosen_fl = st.selectbox(
+                f"🗺️ Coverage Map Flight Level ({station_type}):",
+                options=fl_options,
+                format_func=lambda fl: f"FL{fl} ({fl*100:,} ft MSL)",
+                index=cur_fl_idx,
+                key=f"{prefix}_sel_fl_{selected_period}",
+                help="View coverage and redundancy levels across ECAC at FL50, FL100, FL200, or FL300."
+            )
+            if chosen_fl != st.session_state[fl_key]:
+                st.session_state[fl_key] = chosen_fl
+                st.rerun()
 
+        # 2. Compute report
         try:
-            with st.spinner("Computing radio horizons, station line-of-sight and dual-station angular intersections..."):
-                dme_rep = _cached_dme_coverage(
+            with st.spinner(f"Evaluating ECAC {station_type} multi-tier coverage, static rationalization & facility location..."):
+                rep = _cached_ecac_rationalization(
                     selected_period,
-                    dme_fl,
-                    tuple(sorted(st.session_state["dme_inactive_idents"])),
+                    station_type,
+                    st.session_state[view_key],
+                    tuple(sorted(st.session_state[inact_key])),
+                    tuple(sorted(st.session_state[act_key])),
                 )
         except Exception as e:
-            dme_rep = None
-            st.error(f"Error computing DME-DME RNAV coverage: {e}")
+            st.error(f"Error computing ECAC rationalization: {e}")
+            return
 
-        if dme_rep:
-            dm1, dm2, dm3, dm4 = st.columns(4)
-            dm1.metric("DME-DME Coverage", f"{dme_rep.coverage_percentage:.1f}%", f"{dme_rep.covered_cells_count} of {dme_rep.total_grid_cells} cells")
-            dm2.metric("Redundant Availability", f"{dme_rep.redundant_cells_percentage:.1f}%", "≥ 3 pairs with 30°–150° angle")
-            dm3.metric("Active Stations", f"{dme_rep.active_dmes_count} / {dme_rep.total_dmes_count}", f"{dme_rep.inactive_dmes_count} deactivated")
-            dm4.metric("Deactivation Potential", f"{len(dme_rep.suggested_deactivations)} DMEs", "Zero impact on 98%+ coverage")
+        # 3. KPI Metrics
+        fl_data = rep["coverage_by_fl"][f"fl{st.session_state[fl_key]}"]
+        km1, km2, km3, km4, km5 = st.columns(5)
+        km1.metric(
+            f"Active {station_type}s",
+            f"{rep['active_stations_count']} / {rep['total_stations_count']}",
+            f"{rep['deactivated_stations_count']} Standby ({(rep['deactivated_stations_count']/max(1, rep['total_stations_count']))*100:.1f}%)"
+        )
+        km2.metric(
+            "Annual Cost Savings",
+            f"€{rep['annual_cost_savings_eur']:,.0f}/yr",
+            f"O&M Rationalization"
+        )
+        km3.metric(
+            "Power Savings",
+            f"{rep['annual_power_savings_mwh']:,.0f} MWh/yr",
+            f"Grid & Standby Reduction"
+        )
+        km4.metric(
+            f"FL{st.session_state[fl_key]} Dual Coverage",
+            f"{fl_data['dual_coverage_pct']:.1f}%",
+            f"Single: {fl_data['single_coverage_pct']:.1f}%"
+        )
+        km5.metric(
+            "Hubs Dual Ground",
+            f"{rep['high_density_dual_pct']:.1f}%",
+            f"{rep['high_density_dual_target_met_count']} of {rep['high_density_airports_count']} Busy Hubs"
+        )
 
-            st.markdown("---")
-            st.markdown("### 🌿 Greedy Navaid Rationalization Optimizer (Decommissioning Recommender)")
-            st.caption("Identifies redundant terrestrial DMEs whose removal preserves at least 98.0% PBN RNAV 1 navigation coverage.")
+        # 4. Map View
+        st.markdown("---")
+        st.markdown(f"### 🗺️ ECAC {station_type} Coverage & Redundancy Map (FL{st.session_state[fl_key]})")
+        col_map_t1, col_map_t2, col_map_t3 = st.columns([1, 1, 2])
+        with col_map_t1:
+            show_cells = st.checkbox("Show 10×10 NM Cell Grid", value=True, key=f"{prefix}_chk_cells_{selected_period}")
+        with col_map_t2:
+            show_gap = st.checkbox("Show Proposed Gap-Fillers", value=True, key=f"{prefix}_chk_gap_{selected_period}")
+        with col_map_t3:
+            show_hubs = st.checkbox("Highlight High-Density Hubs (≥500 mv/d)", value=True, key=f"{prefix}_chk_hubs_{selected_period}")
 
-            col_dme_act1, col_dme_act2 = st.columns([1, 4])
-            with col_dme_act1:
-                if st.button("Deactivate All Suggested", key=f"btn_deact_all_dme_{selected_period}"):
-                    suggested_ids = [s["ident"] for s in dme_rep.suggested_deactivations]
-                    st.session_state["dme_inactive_idents"] = list(set(st.session_state["dme_inactive_idents"] + suggested_ids))
+        cov_map = create_ecac_coverage_map(
+            rep,
+            selected_fl=st.session_state[fl_key],
+            show_cells=show_cells,
+            show_stations=True,
+            show_gap_fillers=show_gap,
+            show_hubs=show_hubs,
+        )
+        st_folium(cov_map, width=1200, height=540, returned_objects=[])
+
+        # 5. Proposed Gap-Filling Facilities (Facility Location Solver)
+        st.markdown("---")
+        st.markdown("### 💡 Ideal Gap-Filling Facilities (Minimum Equipment to Bridge Dataset Gaps)")
+        st.caption(
+            "Certain peripheral or boundary cells lack coverage data in the current inventory. "
+            "The Facility Location algorithm determined the exact minimum number of new installations required to bridge 100% of these gaps without brute-force looping."
+        )
+        if rep["synthetic_gap_fillers"]:
+            gap_df = pd.DataFrame([
+                {
+                    "Proposed Facility ID": g["id"],
+                    "Facility Name": g["name"],
+                    "Latitude": f"{g['latitude']:.3f}°N",
+                    "Longitude": f"{g['longitude']:.3f}°E",
+                    "Elevation": f"{g['elevation_ft']:.0f} ft",
+                    "Target Altitude": f"FL{g['target_flight_level']}",
+                    "Nominal Range": f"{g['service_range_nm']:.0f} NM",
+                    "Gap Cells Filled": g["cells_covered_count"],
+                    "Geographic Region / Tactical Rationale": g["region_note"],
+                }
+                for g in rep["synthetic_gap_fillers"]
+            ])
+            st.dataframe(gap_df, use_container_width=True)
+        else:
+            st.success("No uncoverable coverage gaps detected in the active airspace region.")
+
+        # 6. Station Inventory & User Augmentation Controls
+        st.markdown("---")
+        st.markdown(f"### 🎛️ {station_type} Stations Roster & Interactive User Augmentation")
+        st.caption("Augment the static baseline view by toggling specific stations on or off to inspect the resulting coverage impact.")
+
+        col_btn1, col_btn2 = st.columns([1, 4])
+        btn_deact_label = "Deactivate All Suggested Heads" if station_type == "RADAR" else "Deactivate All Suggested"
+        btn_deact_key = f"btn_deact_all_rad_{selected_period}" if station_type == "RADAR" else f"btn_deact_all_dme_{selected_period}"
+        btn_reset_key = f"btn_reset_rad_{selected_period}" if station_type == "RADAR" else f"btn_reset_dme_{selected_period}"
+
+        with col_btn1:
+            if st.button(btn_deact_label, key=btn_deact_key):
+                all_inactive = [s["id"] for s in rep["stations"] if not s["is_active"]]
+                st.session_state[inact_key] = all_inactive
+                st.session_state[act_key] = []
+                st.rerun()
+        with col_btn2:
+            if st.session_state[inact_key] or st.session_state[act_key]:
+                if st.button(f"Reset to Static {st.session_state[view_key]} Baseline", key=btn_reset_key):
+                    st.session_state[inact_key] = []
+                    st.session_state[act_key] = []
                     st.rerun()
-            with col_dme_act2:
-                if st.session_state["dme_inactive_idents"]:
-                    if st.button("Reset All DMEs to Active", key=f"btn_reset_dme_{selected_period}"):
-                        st.session_state["dme_inactive_idents"] = []
-                        st.rerun()
 
-            if dme_rep.suggested_deactivations:
-                sug_df = pd.DataFrame([
-                    {
-                        "DME Ident": s["ident"],
-                        "Name": s["name"],
-                        "Country": s["country"],
-                        "Coverage Impact": f"{s['coverage_impact_pct']:.2f}%",
-                        "Remaining Network Coverage": f"{s['remaining_network_coverage_pct']:.1f}%",
-                        "Recommendation": s["recommendation"],
-                        "Annual Savings": f"€{s['annual_maintenance_savings_eur']:,}/yr",
-                        "Current Status": "INACTIVE" if s["ident"] in st.session_state["dme_inactive_idents"] else "ACTIVE",
-                    }
-                    for s in dme_rep.suggested_deactivations[:12]
-                ])
-                st.dataframe(sug_df, use_container_width=True)
+        col_tbl, col_toggle = st.columns([3, 2])
+        with col_tbl:
+            sta_df = pd.DataFrame([
+                {
+                    "Station ID": s["id"],
+                    "Name": s["name"],
+                    "Country": s["country"],
+                    "Co-located Airport": s["nearest_airport"] if s["is_airport_station"] else "En-Route",
+                    "Status": "ACTIVE" if s["is_active"] else "STANDBY (Deactivated)",
+                    "Annual Savings (€)": f"€{s['annual_savings_eur']:,}/yr" if not s["is_active"] else "€0 (Active)",
+                }
+                for s in rep["stations"][:100]
+            ])
+            st.dataframe(sta_df, use_container_width=True)
 
-            st.markdown("---")
-            col_grid_m, col_roster_m = st.columns(2)
-            with col_grid_m:
-                st.markdown(f"#### 10×10 NM Spatial Grid Status (FL{dme_rep.flight_level})")
-                st.markdown(
-                    f"- 🟢 **Redundant (≥3 pairs):** `{dme_rep.redundant_cells_percentage:.1f}%`\n"
-                    f"- 🔵 **Adequate (2 pairs):** `{dme_rep.coverage_percentage - dme_rep.redundant_cells_percentage:.1f}%`\n"
-                    f"- 🔴 **Outage / Blindspot:** `{dme_rep.outage_cells_percentage:.1f}%`"
-                )
-                if dme_rep.cells_summary:
-                    grid_sample = [
-                        {"Lat": c["lat"], "Lon": c["lon"], "Visible DMEs": c["visible_dme_count"], "Valid Pair": c["has_valid_dme_dme_pair"], "Best Angle": f"{c['best_pair_geometry_deg']:.1f}°", "Status": c["coverage_status"]}
-                        for c in dme_rep.cells_summary[:50]
-                    ]
-                    st.dataframe(pd.DataFrame(grid_sample), use_container_width=True)
+        with col_toggle:
+            st.markdown(f"**Simulate Outages (Deactivate {station_type}s):**")
+            all_sta_ids = [s["id"] for s in rep["stations"]]
+            deact_selection = st.multiselect(
+                f"Simulate Inactive / Offline {station_type} Stations" if station_type == "DME" else "Simulate Inactive / Offline Radar Heads",
+                options=all_sta_ids,
+                default=st.session_state[inact_key],
+                key=f"{prefix}_ms_inact_{selected_period}",
+                help="Select stations to force into standby/offline mode."
+            )
+            if deact_selection != st.session_state[inact_key]:
+                st.session_state[inact_key] = deact_selection
+                st.rerun()
 
-            with col_roster_m:
-                st.markdown("#### Terrestrial DME Stations Inventory & Outage Toggles")
-                st.caption("Select stations to simulate outages or decommissioning:")
-                all_dmes = [s["ident"] for s in dme_rep.dme_stations]
-                selected_inactive = st.multiselect(
-                    "Simulate Inactive / Offline DME Stations",
-                    options=all_dmes,
-                    default=st.session_state["dme_inactive_idents"],
-                    key=f"dme_ms_inactive_{selected_period}",
-                )
-                if selected_inactive != st.session_state["dme_inactive_idents"]:
-                    st.session_state["dme_inactive_idents"] = selected_inactive
-                    st.rerun()
+        # 7. High-Density Aerodromes Ground Surveillance Integrity
+        st.markdown("---")
+        st.markdown("### 🏢 High-Density Aerodromes Terminal / Ground Surveillance Integrity (≥500 Movements / Day)")
+        st.caption(f"Verifies terminal/surface coverage (FL10) down to aerodrome elevation at all {rep['high_density_airports_count']} major European hubs.")
+        if rep["airports"]:
+            busy_apts = [a for a in rep["airports"] if a["is_high_density"]]
+            apt_df = pd.DataFrame([
+                {
+                    "Hub Ident": a["ident"],
+                    "Aerodrome Name": a["name"],
+                    "Daily Movements": f"{a['daily_movements']:.0f} mov/day",
+                    f"Visible {station_type}s at FL10": a["coverage_count_fl10"],
+                    "Target Met": "✅ DUAL TERMINAL OK" if a["target_met"] else "⚠️ SINGLE HEAD ONLY",
+                }
+                for a in busy_apts
+            ])
+            st.dataframe(apt_df, use_container_width=True)
+
+    with map_sub_dme:
+        render_ecac_rationalization_section("DME", selected_period)
 
     with map_sub_radar:
-        st.header("🛰️ Primary & Secondary Radar Surveillance (SSR / Mode S) & Multi-Tier Optimization Lab")
-        st.caption(
-            "ICAO Doc 9684 line-of-sight surveillance model (250 NM max range) evaluated across 10×10 NM cells in 1,000 ft increments. "
-            "Enforces multi-tier criteria: Dual-head (≥2) above FL100, Single-head (≥1) below FL100, and Dual radar coverage to the ground "
-            "at high-density aerodromes (> 500 movements/day), prioritizing radars within 5 NM of an airport."
-        )
-
-        col_rad_fl, col_rad_btns = st.columns([1, 2])
-        with col_rad_fl:
-            radar_fl = st.slider(
-                "Surveillance Flight Level (1,000 ft steps)",
-                min_value=10,
-                max_value=450,
-                value=300,
-                step=10,
-                format="FL%d",
-                key=f"radar_fl_slider_{selected_period}",
-                help="Evaluate radar coverage in 1,000 ft increments (FL010 = 1,000 ft to FL450 = 45,000 ft).",
-            )
-        with col_rad_btns:
-            st.markdown(
-                f"**Selected Altitude:** `FL{radar_fl}` (`{radar_fl*100:,} ft MSL`)\n\n"
-                f"**Target Standard:** `{'Dual-Head Coverage (≥2 radars)' if radar_fl >= 100 else 'Single-Head Coverage (≥1 radar)'}`"
-            )
-
-        if "radar_inactive_ids" not in st.session_state:
-            st.session_state["radar_inactive_ids"] = []
-
-        try:
-            with st.spinner("Evaluating radar horizons, high-density hub surface LOS & multi-tier target compliance..."):
-                radar_rep = _cached_radar_coverage(
-                    selected_period,
-                    radar_fl,
-                    tuple(sorted(st.session_state["radar_inactive_ids"])),
-                )
-        except Exception as e:
-            radar_rep = None
-            st.error(f"Error computing radar surveillance coverage: {e}")
-
-        if radar_rep:
-            rm1, rm2, rm3, rm4, rm5 = st.columns(5)
-            rm1.metric("Target Met %", f"{radar_rep.target_met_percentage:.1f}%", f"{'Dual ≥FL100' if radar_fl >= 100 else 'Single <FL100'}")
-            rm2.metric("Total Coverage", f"{radar_rep.coverage_percentage:.1f}%", f"{radar_rep.covered_cells_count} of {radar_rep.total_grid_cells} cells")
-            rm3.metric("Hubs Dual Ground", f"{radar_rep.high_density_dual_ground_pct:.1f}%", "≥2 heads at >500 mv/d hubs")
-            rm4.metric("Active Radars", f"{radar_rep.active_radars_count} / {radar_rep.total_radars_count}", f"{radar_rep.airport_radars_count} within 5 NM")
-            rm5.metric("Standby Potential", f"{len(radar_rep.suggested_deactivations)} Heads", f"€{len(radar_rep.suggested_deactivations)*85000:,}/yr")
-
-            st.markdown("---")
-            st.markdown("### 🏢 High-Density Aerodromes Ground Surveillance Integrity (>500 Movements / Day)")
-            st.caption("Verifies dual radar coverage down to aerodrome surface elevation (h_ac = h_airport), giving high priority to radars within 5 NM.")
-
-            if radar_rep.high_density_airports:
-                hd_df = pd.DataFrame([
-                    {
-                        "Hub Ident": a["ident"],
-                        "Aerodrome Name": a["name"],
-                        "Elevation": f"{a['elevation_ft']:.0f} ft MSL",
-                        "Daily Movements": f"{a['daily_movements']:.0f}/day",
-                        "Visible Heads to Ground": a["visible_radar_count"],
-                        "Dual Ground Target Met": "✅ DUAL GROUND OK" if a["meets_dual_radar_target"] else "⚠️ SINGLE HEAD ONLY",
-                        "Covering Radar Heads": ", ".join(a["covering_radars"][:4]),
-                    }
-                    for a in radar_rep.high_density_airports
-                ])
-                st.dataframe(hd_df, use_container_width=True)
-
-            st.markdown("---")
-            st.markdown("### 🌿 Multi-Tier Radar Network Rationalization Optimizer (Learning Engine)")
-            st.caption(
-                "Identifies redundant radar heads that can be placed in standby while strictly preserving dual-head coverage above FL100, "
-                "single-head below FL100, and dual ground coverage at major hubs. Protects airport-co-located radars (≤ 5 NM)."
-            )
-
-            col_rad_act1, col_rad_act2 = st.columns([1, 4])
-            with col_rad_act1:
-                if st.button("Deactivate All Suggested Heads", key=f"btn_deact_all_rad_{selected_period}"):
-                    suggested_rids = [s["radar_id"] for s in radar_rep.suggested_deactivations]
-                    st.session_state["radar_inactive_ids"] = list(set(st.session_state["radar_inactive_ids"] + suggested_rids))
-                    st.rerun()
-            with col_rad_act2:
-                if st.session_state["radar_inactive_ids"]:
-                    if st.button("Reset All Radars to Active", key=f"btn_reset_rad_{selected_period}"):
-                        st.session_state["radar_inactive_ids"] = []
-                        st.rerun()
-
-            if radar_rep.suggested_deactivations:
-                sug_rad_df = pd.DataFrame([
-                    {
-                        "Radar ID": s["radar_id"],
-                        "Name": s["name"],
-                        "Co-located Airport": f"Airport ({s['nearest_airport']})" if s["is_airport_radar"] else "En-Route",
-                        "Coverage Impact": f"{s['coverage_loss_pct']:.2f}%",
-                        "Remaining Dual Coverage": f"{s['remaining_dual_coverage_pct']:.1f}%",
-                        "Recommendation": s["recommendation"],
-                        "Annual Cost Savings": f"€{s['annual_cost_savings_eur']:,}/yr",
-                        "Annual Power Savings": f"{s['annual_power_savings_kwh']:,.0f} kWh/yr",
-                        "Current Status": "INACTIVE" if s["radar_id"] in st.session_state["radar_inactive_ids"] else "ACTIVE",
-                    }
-                    for s in radar_rep.suggested_deactivations[:12]
-                ])
-                st.dataframe(sug_rad_df, use_container_width=True)
-
-            st.markdown("---")
-            col_rgrid, col_rroster = st.columns(2)
-            with col_rgrid:
-                st.markdown(f"#### 10×10 NM Spatial Grid Status (FL{radar_rep.flight_level})")
-                st.markdown(
-                    f"- 🟢 **High Redundancy (≥3 heads):** `{100.0 * radar_rep.dual_head_cells_count / max(1, radar_rep.total_grid_cells):.1f}%`\n"
-                    f"- 🔵 **Dual-Head (2 heads):** Meets high altitude standard\n"
-                    f"- 🟡 **Single-Head (1 head):** Adequate for FL < 100\n"
-                    f"- 🔴 **Outage (0 heads):** `{100.0 * radar_rep.outage_cells_count / max(1, radar_rep.total_grid_cells):.1f}%`"
-                )
-                if radar_rep.cells_summary:
-                    rad_sample = [
-                        {"Lat": c["lat"], "Lon": c["lon"], "Visible Radars": c["visible_radars_count"], "Status": c["coverage_status"], "Target Met": "✅ YES" if c["target_met"] else "❌ NO"}
-                        for c in radar_rep.cells_summary[:50]
-                    ]
-                    st.dataframe(pd.DataFrame(rad_sample), use_container_width=True)
-
-            with col_rroster:
-                st.markdown("#### Surveillance Radar Heads Inventory & Outage Toggles")
-                st.caption("Select radar heads to simulate outages:")
-                all_rads = [r["id"] for r in radar_rep.radars]
-                selected_rad_inactive = st.multiselect(
-                    "Simulate Inactive / Offline Radar Heads",
-                    options=all_rads,
-                    default=st.session_state["radar_inactive_ids"],
-                    key=f"rad_ms_inactive_{selected_period}",
-                )
-                if selected_rad_inactive != st.session_state["radar_inactive_ids"]:
-                    st.session_state["radar_inactive_ids"] = selected_rad_inactive
-                    st.rerun()
+        render_ecac_rationalization_section("RADAR", selected_period)
 
         # ----------------- TAB 3: Recurring Series & Diurnal Trends -----------------
 
