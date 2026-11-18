@@ -139,6 +139,17 @@ from flightml.viz.math_accordions import (
     render_experimental_ai_math_accordion,
     render_passenger_copilot_math_accordion,
 )
+import flightml.math as fmath
+from flightml.eval.airport_ops import get_airport_operations_report, assess_runways_with_wind
+from flightml.eval.openap_wrap_engine import analyze_flight_wrap_envelope
+from flightml.eval.dme_rnav_coverage import get_dme_rnav_coverage_report
+from flightml.eval.radar_coverage import get_radar_coverage_report
+from flightml.eval.longitudinal_airspace_modernization import (
+    get_vertical_capping_analysis,
+    get_fixed_airways_vs_fra_analysis,
+)
+from flightml.eval.mct_database import HUB_MCT_DATABASE
+
 
 
 
@@ -530,12 +541,13 @@ with tab_cat_single:
         "delay root-cause diagnostics, and environmental/LTO emissions accounting for the selected active flight."
     )
     render_page_export_bar("single_flight", "cat_single")
-    sf_sub1, sf_sub2, sf_sub3, sf_sub4, sf_sub5 = st.tabs(
+    sf_sub1, sf_sub2, sf_sub3, sf_sub4, sf_sub5, sf_sub6 = st.tabs(
         [
             "🗺️ 4D Trajectory & RNP Profile",
             "📉 Vertical Profile: CDO & CCO",
             "🩺 Delay & Runway Diagnostics",
             "🌱 Fuel, Carbon & Surface LTO",
+            "📊 OpenAP WRAP Flight Envelope Kinematics",
             "📝 Flight Notes & Anomaly Explanations",
         ]
     )
@@ -1229,11 +1241,12 @@ with tab_cat_single:
                     )
                     st.caption(eco_rep.operational_feasibility_summary)
 
-                c_tab1, c_tab2, c_tab3, c_tab4 = st.tabs([
+                c_tab1, c_tab2, c_tab3, c_tab4, c_tab5 = st.tabs([
                     "🗺️ Horizontal Route (Flown vs. Eco-Optimal Trajectory)",
                     "📈 Vertical Flight Profile (Flown vs. Eco-Optimal Altitude)",
                     "⚖️ Multi-Objective Trade-Off & Aircraft Envelope Analysis",
                     "📋 Sequenced Contrail Segments & Advisories",
+                    "🔬 ICAO nvPM Soot Microphysics & Ice Nucleation Scaling",
                 ])
 
                 with c_tab1:
@@ -1544,6 +1557,45 @@ with tab_cat_single:
                     else:
                         st.info("No persistent contrail segments detected along this flight trajectory.")
 
+                with c_tab5:
+                    st.markdown("##### 🔬 ICAO nvPM Engine Soot Microphysics & Contrail Optical Depth Scaling")
+                    st.caption(
+                        "Models the physical sensitivity of persistent contrail cirrus to engine soot non-volatile particulate matter (nvPM). "
+                        "Lean-burn and low-soot staged combustors emit fewer soot particles (EI_num), resulting in fewer, larger ice crystals, "
+                        "markedly reduced optical depth (τ), and suppressed radiative warming."
+                    )
+                    nv_c1, nv_c2 = st.columns([1, 2])
+                    with nv_c1:
+                        ei_slider = st.select_slider(
+                            "ICAO nvPM Soot Emission Index (EI_num part/kg fuel)",
+                            options=[1e13, 5e13, 1e14, 2e14, 5e14, 1e15, 2e15, 5e15, 1e16],
+                            value=1e15,
+                            format_func=lambda x: f"{x:.0e} part/kg",
+                            help="Conventional RQL baseline: ~1e15 part/kg. Modern lean-burn combustor: ~1e14 part/kg (-90% soot).",
+                            key=f"ei_slider_{active_flight_id}",
+                        )
+
+                    tau_val = fmath.soot_number_to_optical_depth(ei_slider, nominal_ei_num=1.0e15, nominal_optical_depth=0.30)
+                    fuel_flow_sample = 0.75
+                    tas_sample = 230.0
+                    wingspan_sample = 35.8
+                    n_ice_val = fmath.initial_ice_crystal_concentration(ei_slider, fuel_flow_sample, wingspan_sample, tas_sample)
+
+                    with nv_c2:
+                        st.markdown(
+                            f"- **Contrail Optical Depth ($\\tau$):** `{tau_val:.3f}` (Baseline $\\tau_0 = 0.300$)\n"
+                            f"- **Initial Wake Vortex Ice Crystal Concentration:** `{n_ice_val:.2e} \\text{{ m}}^{{-3}}`\n"
+                            f"- **Optical Depth Ratio:** `{tau_val / 0.30:.2f}x` vs conventional baseline"
+                        )
+
+                    soot_comp_df = pd.DataFrame([
+                        {"Combustor Technology": "Next-Gen Lean-Burn / Staged", "EI_num (part/kg)": "1.0e14", "Optical Depth (τ)": f"{fmath.soot_number_to_optical_depth(1e14):.3f}", "Impact vs Conventional": "-73% Optical Depth (Cirrus Suppressed)"},
+                        {"Combustor Technology": "Modern Dual-Annular / TALON", "EI_num (part/kg)": "3.0e14", "Optical Depth (τ)": f"{fmath.soot_number_to_optical_depth(3e14):.3f}", "Impact vs Conventional": "-48% Optical Depth"},
+                        {"Combustor Technology": "Standard RQL (Conventional Baseline)", "EI_num (part/kg)": "1.0e15", "Optical Depth (τ)": f"{fmath.soot_number_to_optical_depth(1e15):.3f}", "Impact vs Conventional": "0% (Baseline Reference)"},
+                        {"Combustor Technology": "Legacy / High-Aromatic Fuel", "EI_num (part/kg)": "3.0e15", "Optical Depth (τ)": f"{fmath.soot_number_to_optical_depth(3e15):.3f}", "Impact vs Conventional": "+44% Optical Depth (Optically Thick Cirrus)"},
+                    ])
+                    st.dataframe(soot_comp_df, use_container_width=True)
+
                 with st.expander("📖 Why Flown Distance Does Not Equal Fuel Efficiency: Air Distance (ESAD) & Jet Stream Mechanics", expanded=False):
                     st.markdown(
                         """
@@ -1615,8 +1667,52 @@ with tab_cat_single:
         # ----------------- View Mathematics & Physics Accordion -----------------
         render_fuel_emissions_math_accordion()
 
-        # ----------------- TAB 5: Flight Notes & Anomaly Explanations -----------------
+        # ----------------- TAB 5: OpenAP WRAP Flight Envelope Kinematics -----------------
     with sf_sub5:
+        st.header(f"📊 OpenAP WRAP Flight Envelope Kinematics (Flight #{active_flight_id})")
+        st.caption(
+            "Empirically benchmarks observed 4D radar trajectory kinematics against aircraft-type-specific "
+            "OpenAP WRAP (Kinematic Trajectory Parameters) envelope: takeoff/climb boundaries, CAS/Mach crossover, "
+            "cruise Mach, descent deceleration profile, and approach speeds."
+        )
+        try:
+            wrap_rep = analyze_flight_wrap_envelope(ds, int(active_flight_id), period=selected_period)
+        except Exception as e:
+            wrap_rep = None
+            st.error(f"Error computing OpenAP WRAP envelope: {e}")
+
+        if wrap_rep:
+            w1, w2, w3, w4 = st.columns(4)
+            w1.metric("Aircraft Type", f"{wrap_rep.ac_type}")
+            w2.metric("Envelope Normalcy Score", f"{wrap_rep.overall_normalcy_score_pct:.1f}%")
+            w3.metric("Anomalies Detected", f"{wrap_rep.anomalous_metrics_count}")
+            w4.metric("Flight Phase", f"{wrap_rep.flight_phase}")
+
+            st.markdown("### 📋 Trajectory Kinematics vs. OpenAP WRAP Model Boundaries")
+            wrap_metrics_data = [
+                {
+                    "Kinematic Metric": m.description,
+                    "Flown Value": f"{m.observed_val:.2f} {m.unit}",
+                    "OpenAP Nominal": f"{m.opt_val:.2f} {m.unit}",
+                    "Min Boundary": f"{m.min_val:.2f} {m.unit}",
+                    "Max Boundary": f"{m.max_val:.2f} {m.unit}",
+                    "Percentile": f"{m.percentile_pct:.1f}%",
+                    "Status": "⚠️ ANOMALOUS" if m.is_anomalous else "✅ NOMINAL",
+                }
+                for m in wrap_rep.metrics
+            ]
+            st.dataframe(pd.DataFrame(wrap_metrics_data), use_container_width=True)
+
+            if wrap_rep.tactical_findings:
+                st.markdown("### 🔍 Tactical Kinematic Findings")
+                for finding in wrap_rep.tactical_findings:
+                    if "Exceeds" in finding or "Anomaly" in finding:
+                        st.warning(f"• {finding}")
+                    else:
+                        st.info(f"• {finding}")
+
+        # ----------------- TAB 6: Flight Notes & Anomaly Explanations -----------------
+    with sf_sub6:
         st.header("📝 Flight Operational Notes & Anomaly Explanations")
         st.caption(
             f"Attach persistent qualitative explanations, diplomatic/overflight permission issues, weather diversions, "
@@ -1710,12 +1806,13 @@ with tab_cat_system:
         "cross-decade historical traffic growth, and network-wide hub weather correlation."
     )
     render_page_export_bar("system_summary", "cat_system")
-    sys_sub_kpi, sys_sub1, sys_sub_fra, sys_sub_gnss, sys_sub2 = st.tabs(
+    sys_sub_kpi, sys_sub1, sys_sub_fra, sys_sub_gnss, sys_sub_airports, sys_sub2 = st.tabs(
         [
             "📊 Multi-Level KPI Suite (Flight / Fleet / Airport / Network)",
             "🌐 Network Status & Airspace Saturation",
             "🗺️ Free Route Airspace (FRA) & FIR Boundary Inefficiency",
             "🛰️ GNSS Jamming & Spoofing Network Anomaly Detector",
+            "🛫 Airport Operations, Runway Crosswinds & Diurnal Flow",
             "📈 Macro Evolution & AIRAC Diff",
         ]
     )
@@ -3505,6 +3602,80 @@ with tab_cat_system:
         # ----------------- View Mathematics & Physics Accordion -----------------
         render_gnss_jamming_math_accordion()
 
+    with sys_sub_airports:
+        st.header("🛫 Airport Operations, Runway Crosswinds & Diurnal Flow Analysis")
+        st.caption(
+            "Synthesizes daily flight arrivals and departures, live/archived ASOS METAR wind vectors, "
+            "and active runway configuration modeling with along-track headwind/tailwind and crosswind components."
+        )
+
+        col_apt_sel, col_apt_date = st.columns([2, 1])
+        with col_apt_sel:
+            all_hubs = ["EGLL", "EHAM", "LFPG", "EDDF", "LTFM", "LEMD", "LEBL", "LIRF", "EDDM", "LSZH", "LPPT", "EKCH", "EGKK", "LOWW", "EIDW", "KJFK", "KLAX", "KORD"]
+            sel_apt = st.selectbox(
+                "Select Airport (ICAO)",
+                options=all_hubs,
+                index=0,
+                key=f"apt_ops_sel_{selected_period}",
+            )
+        with col_apt_date:
+            st.info(f"Analyzing Period: **{selected_period}**")
+
+        try:
+            with st.spinner(f"Aggregating runway layout, METAR winds and movements for {sel_apt}..."):
+                apt_ops_rep = get_airport_operations_report(ds, sel_apt, period=selected_period)
+        except Exception as e:
+            apt_ops_rep = None
+            st.error(f"Error loading airport operations for {sel_apt}: {e}")
+
+        if apt_ops_rep:
+            ao1, ao2, ao3, ao4, ao5 = st.columns(5)
+            ao1.metric("Airport", f"{apt_ops_rep.airport_ident}", apt_ops_rep.name[:25])
+            ao2.metric("Total Movements", f"{apt_ops_rep.total_movements:,}", f"{apt_ops_rep.daily_movements:.0f}/day")
+            ao3.metric("Departures / Arrivals", f"{apt_ops_rep.total_departures:,} / {apt_ops_rep.total_arrivals:,}")
+            ao4.metric("Mean Dep Delay", f"{apt_ops_rep.mean_dep_delay_min:+.1f} min")
+            ao5.metric("Mean Arr Delay", f"{apt_ops_rep.mean_arr_delay_min:+.1f} min")
+
+            st.markdown("---")
+            st.markdown(f"### 🌬️ Surface Weather & Runway Vector Extrapolation ({apt_ops_rep.metar_source})")
+            w_col1, w_col2 = st.columns([1, 2])
+            with w_col1:
+                st.markdown(
+                    f"- **Surface Wind:** `{apt_ops_rep.wind_direction_deg}° at {apt_ops_rep.wind_speed_kts} kts`"
+                    f"{f' (Gusts: {apt_ops_rep.wind_gust_kts} kts)' if apt_ops_rep.wind_gust_kts > 0 else ''}\n"
+                    f"- **Temperature / Dewpoint:** `{apt_ops_rep.temperature_c}°C / {apt_ops_rep.dewpoint_c}°C`\n"
+                    f"- **Visibility / Altimeter:** `{apt_ops_rep.visibility_miles} SM / {apt_ops_rep.altimeter_inhg} inHg`\n"
+                    f"- **Elevation:** `{apt_ops_rep.elevation_ft:.0f} ft MSL`"
+                )
+            with w_col2:
+                st.success(f"🛬 **Active Runway Configuration:** {apt_ops_rep.recommended_active_config}")
+                st.caption(
+                    "Recommended operating configuration selects runway headings that maximize headwind components "
+                    "and maintain crosswinds within safe ICAO Annex 14 operational envelope (< 15 kts dry / < 10 kts contaminated)."
+                )
+
+            st.markdown("### 🛫 Aerodrome Runway Crosswind & Headwind Breakdown")
+            rwy_data = [
+                {
+                    "Runway": r.designator,
+                    "Length (ft)": f"{r.length_ft:,.0f}",
+                    "Surface": r.surface,
+                    "LE Ident": r.le_ident,
+                    "HE Ident": r.he_ident,
+                    "Preferred End": r.preferred_end,
+                    "Along-Track Wind": f"{abs(r.le_headwind_kts):.1f} kts ({'Headwind' if r.le_headwind_kts >= 0 else 'Tailwind'})",
+                    "Crosswind": f"{r.le_crosswind_kts:.1f} kts",
+                    "Advisory": r.crosswind_advisory,
+                }
+                for r in apt_ops_rep.runways
+            ]
+            st.dataframe(pd.DataFrame(rwy_data), use_container_width=True)
+
+            if apt_ops_rep.hourly_movements:
+                st.markdown("### 📈 Diurnal Hourly Movement Distribution (UTC)")
+                hour_df = pd.DataFrame(apt_ops_rep.hourly_movements)
+                st.bar_chart(hour_df.set_index("hour_utc")[["departures", "arrivals"]])
+
     with sys_sub2:
         st.header("Macro Evolution, FRA Structural Shift, Weather Correlation & AIRAC Diffing")
         render_page_export_bar("macro_reference", "sys_macro")
@@ -3627,12 +3798,14 @@ with tab_cat_longitudinal:
         "annual 3-season surge decomposition, predictive sector saturation forecasting, and airline economics."
     )
     render_page_export_bar("longitudinal_trends", "cat_long")
-    long_sub1, long_sub2, long_sub3, long_sub4 = st.tabs(
+    long_sub1, long_sub2, long_sub3, long_sub4, long_sub5, long_sub6 = st.tabs(
         [
             "📊 Multi-Period Timeline & Fleet Evolution",
             "🔄 Year-over-Year (YoY) & Seasonality",
             "🔮 Predictive Airspace Saturation Forecaster",
             "💶 Airline Economics & Delay Contagion",
+            "📉 Vertical Flight Level Capping & Airspace Inefficiency",
+            "⚡ Fixed Airways vs Free Route Airspace (FRA) Dividend",
         ]
     )
 
@@ -4097,7 +4270,63 @@ with tab_cat_longitudinal:
                             for s in spreaders[:15]
                         ])
                         st.dataframe(sp_df, use_container_width=True)
-                        st.dataframe(sp_df, use_container_width=True)
+
+    with long_sub5:
+        st.header("📉 Vertical Flight Level Capping & Airspace Inefficiency")
+        st.caption(
+            "Analyzes systemic air traffic control (ATC) vertical capping: flights restricted below their requested "
+            "fuel-optimal flight level due to en-route sector congestion, military danger area activation, or cross-border LOAs."
+        )
+        cap_sample = st.slider("Sample Size for Capping Analysis", min_value=100, max_value=2000, value=500, step=100, key=f"cap_slider_{selected_period}")
+        try:
+            with st.spinner("Analyzing vertical flight level capping, altitude deficits, and excess fuel burn..."):
+                cap_rep = get_vertical_capping_analysis(ds, period=selected_period, sample_size=cap_sample)
+        except Exception as e:
+            cap_rep = None
+            st.error(f"Error computing vertical capping analysis: {e}")
+
+        if cap_rep:
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Capping Rate", f"{cap_rep['capping_rate_pct']:.1f}%", f"{cap_rep['capped_flights_count']} of {cap_rep['sample_size']} sampled")
+            c2.metric("Mean Altitude Deficit", f"FL{cap_rep['mean_deficit_fl']:.1f}", f"~{cap_rep['mean_deficit_fl']*100:.0f} ft below optimal")
+            c3.metric("Excess Fuel Burn", f"{cap_rep['total_excess_fuel_tonnes']:.1f} tonnes", f"+{cap_rep['mean_fuel_penalty_pct']:.1f}% mean penalty")
+            c4.metric("Excess CO₂ Emissions", f"{cap_rep['total_excess_co2_tonnes']:.1f} tonnes", f"Period {selected_period}")
+
+            if cap_rep.get("by_market_segment"):
+                st.markdown("### 🏢 Capping Inefficiency by Airline Market Segment")
+                seg_df = pd.DataFrame(cap_rep["by_market_segment"])
+                st.dataframe(seg_df, use_container_width=True)
+
+            if cap_rep.get("top_capped_routes"):
+                st.markdown("### 🛣️ Top Systemically Capped City-Pair Routes")
+                routes_df = pd.DataFrame(cap_rep["top_capped_routes"])
+                st.dataframe(routes_df, use_container_width=True)
+
+    with long_sub6:
+        st.header("⚡ Fixed Airways vs Free Route Airspace (FRA) Dividend")
+        st.caption(
+            "Quantifies the operational and environmental dividend of Free Route Airspace (FRA) direct routing: "
+            "compares actual flown distance against legacy ATS structured airway distance and Great Circle (GCD) distance."
+        )
+        fra_sample = st.slider("Sample Size for FRA Analysis", min_value=100, max_value=2000, value=500, step=100, key=f"fra_slider_{selected_period}")
+        try:
+            with st.spinner("Sampling flights across FRA sectors against fixed ATS network..."):
+                fra_rep = get_fixed_airways_vs_fra_analysis(ds, period=selected_period, sample_size=fra_sample)
+        except Exception as e:
+            fra_rep = None
+            st.error(f"Error computing FRA dividend: {e}")
+
+        if fra_rep:
+            f1, f2, f3, f4 = st.columns(4)
+            f1.metric("Mean Distance Saved", f"{fra_rep['mean_distance_saved_pct']:.1f}%", f"Total: {fra_rep['total_distance_saved_nm']:,.0f} nm saved")
+            f2.metric("Mean Airway vs Actual", f"{fra_rep['mean_airway_distance_nm']:.0f} nm ➔ {fra_rep['mean_actual_distance_nm']:.0f} nm", f"GCD: {fra_rep['mean_gcd_distance_nm']:.0f} nm")
+            f3.metric("Total Fuel Saved", f"{fra_rep['total_fuel_saved_tonnes']:.1f} tonnes", "Direct routing savings")
+            f4.metric("Total CO₂ Avoided", f"{fra_rep['total_co2_avoided_tonnes']:.1f} tonnes CO₂", f"Sample: {fra_rep['sample_size']} flights")
+
+            if fra_rep.get("top_beneficiary_routes"):
+                st.markdown("### 🏆 Top Beneficiary City-Pairs (Maximum Distance & Fuel Savings)")
+                ben_df = pd.DataFrame(fra_rep["top_beneficiary_routes"])
+                st.dataframe(ben_df, use_container_width=True)
 
 
 # =============================================================================
@@ -4474,9 +4703,11 @@ with tab_cat_maps:
         "4D co-altitude aircraft conflict radar, global radio navaids world directory, and regulatory KPI references."
     )
     render_page_export_bar("maps_navigation", "cat_maps")
-    map_sub1, map_sub2 = st.tabs(
+    map_sub1, map_sub_dme, map_sub_radar, map_sub2 = st.tabs(
         [
             "📡 Global Radio Navaids World Map",
+            "📻 DME-DME RNAV Backup & Rationalization Lab",
+            "🛰️ Primary & Secondary Radar Surveillance (SSR/Mode S) Lab",
             "📖 Methodology & KPI Reference",
         ]
     )
@@ -4593,6 +4824,245 @@ with tab_cat_maps:
                 st.dataframe(disp_nav_df, use_container_width=True)
             else:
                 st.info("No navaids match the current filter selection.")
+
+    with map_sub_dme:
+        st.header("📻 DME-DME RNAV Backup Coverage & Navaid Rationalization Lab")
+        st.caption(
+            "ICAO Doc 9613 line-of-sight and dual-station geometry (30° ≤ Δθ ≤ 150°) evaluation across 10×10 NM cells "
+            "with greedy deactivation recommender to identify redundant DMEs that can be decommissioned without degrading PBN navigation."
+        )
+
+        col_dme_fl, col_dme_btns = st.columns([1, 2])
+        with col_dme_fl:
+            dme_fl = st.slider(
+                "Flight Level (1,000 ft steps)",
+                min_value=10,
+                max_value=450,
+                value=300,
+                step=10,
+                format="FL%d",
+                key=f"dme_fl_slider_{selected_period}",
+                help="Evaluate DME-DME coverage in 1,000 ft altitude increments (FL010 = 1,000 ft to FL450 = 45,000 ft).",
+            )
+        with col_dme_btns:
+            st.markdown(f"**Selected Altitude:** `FL{dme_fl}` (`{dme_fl*100:,} ft MSL`)")
+
+        if "dme_inactive_idents" not in st.session_state:
+            st.session_state["dme_inactive_idents"] = []
+
+        try:
+            with st.spinner("Computing radio horizons, station line-of-sight and dual-station angular intersections..."):
+                dme_rep = get_dme_rnav_coverage_report(
+                    ds,
+                    flight_level=dme_fl,
+                    inactive_idents=st.session_state["dme_inactive_idents"],
+                )
+        except Exception as e:
+            dme_rep = None
+            st.error(f"Error computing DME-DME RNAV coverage: {e}")
+
+        if dme_rep:
+            dm1, dm2, dm3, dm4 = st.columns(4)
+            dm1.metric("DME-DME Coverage", f"{dme_rep.coverage_percentage:.1f}%", f"{dme_rep.covered_cells_count} of {dme_rep.total_grid_cells} cells")
+            dm2.metric("Redundant Availability", f"{dme_rep.redundant_cells_percentage:.1f}%", "≥ 3 pairs with 30°–150° angle")
+            dm3.metric("Active Stations", f"{dme_rep.active_dmes_count} / {dme_rep.total_dmes_count}", f"{dme_rep.inactive_dmes_count} deactivated")
+            dm4.metric("Deactivation Potential", f"{len(dme_rep.suggested_deactivations)} DMEs", "Zero impact on 98%+ coverage")
+
+            st.markdown("---")
+            st.markdown("### 🌿 Greedy Navaid Rationalization Optimizer (Decommissioning Recommender)")
+            st.caption("Identifies redundant terrestrial DMEs whose removal preserves at least 98.0% PBN RNAV 1 navigation coverage.")
+
+            col_dme_act1, col_dme_act2 = st.columns([1, 4])
+            with col_dme_act1:
+                if st.button("Deactivate All Suggested", key=f"btn_deact_all_dme_{selected_period}"):
+                    suggested_ids = [s["ident"] for s in dme_rep.suggested_deactivations]
+                    st.session_state["dme_inactive_idents"] = list(set(st.session_state["dme_inactive_idents"] + suggested_ids))
+                    st.rerun()
+            with col_dme_act2:
+                if st.session_state["dme_inactive_idents"]:
+                    if st.button("Reset All DMEs to Active", key=f"btn_reset_dme_{selected_period}"):
+                        st.session_state["dme_inactive_idents"] = []
+                        st.rerun()
+
+            if dme_rep.suggested_deactivations:
+                sug_df = pd.DataFrame([
+                    {
+                        "DME Ident": s["ident"],
+                        "Name": s["name"],
+                        "Country": s["country"],
+                        "Coverage Impact": f"{s['coverage_impact_pct']:.2f}%",
+                        "Remaining Network Coverage": f"{s['remaining_network_coverage_pct']:.1f}%",
+                        "Recommendation": s["recommendation"],
+                        "Annual Savings": f"€{s['annual_maintenance_savings_eur']:,}/yr",
+                        "Current Status": "INACTIVE" if s["ident"] in st.session_state["dme_inactive_idents"] else "ACTIVE",
+                    }
+                    for s in dme_rep.suggested_deactivations[:12]
+                ])
+                st.dataframe(sug_df, use_container_width=True)
+
+            st.markdown("---")
+            col_grid_m, col_roster_m = st.columns(2)
+            with col_grid_m:
+                st.markdown(f"#### 10×10 NM Spatial Grid Status (FL{dme_rep.flight_level})")
+                st.markdown(
+                    f"- 🟢 **Redundant (≥3 pairs):** `{dme_rep.redundant_cells_percentage:.1f}%`\n"
+                    f"- 🔵 **Adequate (2 pairs):** `{dme_rep.coverage_percentage - dme_rep.redundant_cells_percentage:.1f}%`\n"
+                    f"- 🔴 **Outage / Blindspot:** `{dme_rep.outage_cells_percentage:.1f}%`"
+                )
+                if dme_rep.cells_summary:
+                    grid_sample = [
+                        {"Lat": c["lat"], "Lon": c["lon"], "Visible DMEs": c["visible_dme_count"], "Valid Pair": c["has_valid_dme_dme_pair"], "Best Angle": f"{c['best_pair_geometry_deg']:.1f}°", "Status": c["coverage_status"]}
+                        for c in dme_rep.cells_summary[:50]
+                    ]
+                    st.dataframe(pd.DataFrame(grid_sample), use_container_width=True)
+
+            with col_roster_m:
+                st.markdown("#### Terrestrial DME Stations Inventory & Outage Toggles")
+                st.caption("Select stations to simulate outages or decommissioning:")
+                all_dmes = [s["ident"] for s in dme_rep.dme_stations]
+                selected_inactive = st.multiselect(
+                    "Simulate Inactive / Offline DME Stations",
+                    options=all_dmes,
+                    default=st.session_state["dme_inactive_idents"],
+                    key=f"dme_ms_inactive_{selected_period}",
+                )
+                if selected_inactive != st.session_state["dme_inactive_idents"]:
+                    st.session_state["dme_inactive_idents"] = selected_inactive
+                    st.rerun()
+
+    with map_sub_radar:
+        st.header("🛰️ Primary & Secondary Radar Surveillance (SSR / Mode S) & Multi-Tier Optimization Lab")
+        st.caption(
+            "ICAO Doc 9684 line-of-sight surveillance model (250 NM max range) evaluated across 10×10 NM cells in 1,000 ft increments. "
+            "Enforces multi-tier criteria: Dual-head (≥2) above FL100, Single-head (≥1) below FL100, and Dual radar coverage to the ground "
+            "at high-density aerodromes (> 500 movements/day), prioritizing radars within 5 NM of an airport."
+        )
+
+        col_rad_fl, col_rad_btns = st.columns([1, 2])
+        with col_rad_fl:
+            radar_fl = st.slider(
+                "Surveillance Flight Level (1,000 ft steps)",
+                min_value=10,
+                max_value=450,
+                value=300,
+                step=10,
+                format="FL%d",
+                key=f"radar_fl_slider_{selected_period}",
+                help="Evaluate radar coverage in 1,000 ft increments (FL010 = 1,000 ft to FL450 = 45,000 ft).",
+            )
+        with col_rad_btns:
+            st.markdown(
+                f"**Selected Altitude:** `FL{radar_fl}` (`{radar_fl*100:,} ft MSL`)\n\n"
+                f"**Target Standard:** `{'Dual-Head Coverage (≥2 radars)' if radar_fl >= 100 else 'Single-Head Coverage (≥1 radar)'}`"
+            )
+
+        if "radar_inactive_ids" not in st.session_state:
+            st.session_state["radar_inactive_ids"] = []
+
+        try:
+            with st.spinner("Evaluating radar horizons, high-density hub surface LOS & multi-tier target compliance..."):
+                radar_rep = get_radar_coverage_report(
+                    ds,
+                    flight_level=radar_fl,
+                    inactive_ids=st.session_state["radar_inactive_ids"],
+                )
+        except Exception as e:
+            radar_rep = None
+            st.error(f"Error computing radar surveillance coverage: {e}")
+
+        if radar_rep:
+            rm1, rm2, rm3, rm4, rm5 = st.columns(5)
+            rm1.metric("Target Met %", f"{radar_rep.target_met_percentage:.1f}%", f"{'Dual ≥FL100' if radar_fl >= 100 else 'Single <FL100'}")
+            rm2.metric("Total Coverage", f"{radar_rep.coverage_percentage:.1f}%", f"{radar_rep.covered_cells_count} of {radar_rep.total_grid_cells} cells")
+            rm3.metric("Hubs Dual Ground", f"{radar_rep.high_density_dual_ground_pct:.1f}%", "≥2 heads at >500 mv/d hubs")
+            rm4.metric("Active Radars", f"{radar_rep.active_radars_count} / {radar_rep.total_radars_count}", f"{radar_rep.airport_radars_count} within 5 NM")
+            rm5.metric("Standby Potential", f"{len(radar_rep.suggested_deactivations)} Heads", f"€{len(radar_rep.suggested_deactivations)*85000:,}/yr")
+
+            st.markdown("---")
+            st.markdown("### 🏢 High-Density Aerodromes Ground Surveillance Integrity (>500 Movements / Day)")
+            st.caption("Verifies dual radar coverage down to aerodrome surface elevation (h_ac = h_airport), giving high priority to radars within 5 NM.")
+
+            if radar_rep.high_density_airports:
+                hd_df = pd.DataFrame([
+                    {
+                        "Hub Ident": a["ident"],
+                        "Aerodrome Name": a["name"],
+                        "Elevation": f"{a['elevation_ft']:.0f} ft MSL",
+                        "Daily Movements": f"{a['daily_movements']:.0f}/day",
+                        "Visible Heads to Ground": a["visible_radar_count"],
+                        "Dual Ground Target Met": "✅ DUAL GROUND OK" if a["meets_dual_radar_target"] else "⚠️ SINGLE HEAD ONLY",
+                        "Covering Radar Heads": ", ".join(a["covering_radars"][:4]),
+                    }
+                    for a in radar_rep.high_density_airports
+                ])
+                st.dataframe(hd_df, use_container_width=True)
+
+            st.markdown("---")
+            st.markdown("### 🌿 Multi-Tier Radar Network Rationalization Optimizer (Learning Engine)")
+            st.caption(
+                "Identifies redundant radar heads that can be placed in standby while strictly preserving dual-head coverage above FL100, "
+                "single-head below FL100, and dual ground coverage at major hubs. Protects airport-co-located radars (≤ 5 NM)."
+            )
+
+            col_rad_act1, col_rad_act2 = st.columns([1, 4])
+            with col_rad_act1:
+                if st.button("Deactivate All Suggested Heads", key=f"btn_deact_all_rad_{selected_period}"):
+                    suggested_rids = [s["radar_id"] for s in radar_rep.suggested_deactivations]
+                    st.session_state["radar_inactive_ids"] = list(set(st.session_state["radar_inactive_ids"] + suggested_rids))
+                    st.rerun()
+            with col_rad_act2:
+                if st.session_state["radar_inactive_ids"]:
+                    if st.button("Reset All Radars to Active", key=f"btn_reset_rad_{selected_period}"):
+                        st.session_state["radar_inactive_ids"] = []
+                        st.rerun()
+
+            if radar_rep.suggested_deactivations:
+                sug_rad_df = pd.DataFrame([
+                    {
+                        "Radar ID": s["radar_id"],
+                        "Name": s["name"],
+                        "Co-located Airport": f"Airport ({s['nearest_airport']})" if s["is_airport_radar"] else "En-Route",
+                        "Coverage Impact": f"{s['coverage_loss_pct']:.2f}%",
+                        "Remaining Dual Coverage": f"{s['remaining_dual_coverage_pct']:.1f}%",
+                        "Recommendation": s["recommendation"],
+                        "Annual Cost Savings": f"€{s['annual_cost_savings_eur']:,}/yr",
+                        "Annual Power Savings": f"{s['annual_power_savings_kwh']:,.0f} kWh/yr",
+                        "Current Status": "INACTIVE" if s["radar_id"] in st.session_state["radar_inactive_ids"] else "ACTIVE",
+                    }
+                    for s in radar_rep.suggested_deactivations[:12]
+                ])
+                st.dataframe(sug_rad_df, use_container_width=True)
+
+            st.markdown("---")
+            col_rgrid, col_rroster = st.columns(2)
+            with col_rgrid:
+                st.markdown(f"#### 10×10 NM Spatial Grid Status (FL{radar_rep.flight_level})")
+                st.markdown(
+                    f"- 🟢 **High Redundancy (≥3 heads):** `{100.0 * radar_rep.dual_head_cells_count / max(1, radar_rep.total_grid_cells):.1f}%`\n"
+                    f"- 🔵 **Dual-Head (2 heads):** Meets high altitude standard\n"
+                    f"- 🟡 **Single-Head (1 head):** Adequate for FL < 100\n"
+                    f"- 🔴 **Outage (0 heads):** `{100.0 * radar_rep.outage_cells_count / max(1, radar_rep.total_grid_cells):.1f}%`"
+                )
+                if radar_rep.cells_summary:
+                    rad_sample = [
+                        {"Lat": c["lat"], "Lon": c["lon"], "Visible Radars": c["visible_radars_count"], "Status": c["coverage_status"], "Target Met": "✅ YES" if c["target_met"] else "❌ NO"}
+                        for c in radar_rep.cells_summary[:50]
+                    ]
+                    st.dataframe(pd.DataFrame(rad_sample), use_container_width=True)
+
+            with col_rroster:
+                st.markdown("#### Surveillance Radar Heads Inventory & Outage Toggles")
+                st.caption("Select radar heads to simulate outages:")
+                all_rads = [r["id"] for r in radar_rep.radars]
+                selected_rad_inactive = st.multiselect(
+                    "Simulate Inactive / Offline Radar Heads",
+                    options=all_rads,
+                    default=st.session_state["radar_inactive_ids"],
+                    key=f"rad_ms_inactive_{selected_period}",
+                )
+                if selected_rad_inactive != st.session_state["radar_inactive_ids"]:
+                    st.session_state["radar_inactive_ids"] = selected_rad_inactive
+                    st.rerun()
 
         # ----------------- TAB 3: Recurring Series & Diurnal Trends -----------------
 
@@ -6176,6 +6646,19 @@ with tab_cat_passenger:
             st.error(f"**Airport Transit Note:** {c.terminal_transfer_note}")
             if c.weather_compound_guidance:
                 st.caption(f"ℹ️ **Detailed Hub Weather Guidance:** {c.weather_compound_guidance}")
+
+            # Enhanced MCT Database Matrix for the Hub
+            hub_code = c.hub
+            if hub_code in HUB_MCT_DATABASE:
+                hub_mct = HUB_MCT_DATABASE[hub_code]
+                with st.expander(f"📊 {hub_code} Minimum Connection Time (MCT) Terminal Rules & Transfer Limits", expanded=False):
+                    mct_m1, mct_m2, mct_m3, mct_m4 = st.columns(4)
+                    mct_m1.metric("Domestic ➔ Domestic", str(hub_mct.get("D_to_D", "N/A")))
+                    mct_m2.metric("Domestic ➔ International", str(hub_mct.get("D_to_I", "N/A")))
+                    mct_m3.metric("International ➔ Domestic", str(hub_mct.get("I_to_D", "N/A")))
+                    mct_m4.metric("International ➔ International", str(hub_mct.get("I_to_I", "N/A")))
+                    st.markdown(f"**Airport Complex:** {hub_mct.get('airport', hub_code)} ({hub_mct.get('city', '')}, {hub_mct.get('country', '')})")
+                    st.info(f"ℹ️ **Terminal & Border Rules:** {hub_mct.get('notes', 'Standard terminal MCT applies.')}")
 
         # When Should I Fly? Departure Wave Comparison
         st.markdown("---")
