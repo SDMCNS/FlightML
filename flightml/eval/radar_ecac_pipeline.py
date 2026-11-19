@@ -231,6 +231,7 @@ def create_ecac_radar_network_map(
     # 2. Harmonized Ground Radars Layer
     active_group = folium.FeatureGroup(name="Active Core Radars", show=True)
     standby_group = folium.FeatureGroup(name="Standby / Rationalized Radars", show=True)
+    canopy_group = folium.FeatureGroup(name="Active Radar Service Canopy (200 NM)", show=False)
 
     for sid, info in harmonized_network_state.items():
         is_standby = info.get("recommended_posture") == "STANDBY"
@@ -240,20 +241,34 @@ def create_ecac_radar_network_map(
 
         folium.CircleMarker(
             location=[info["latitude"], info["longitude"]],
-            radius=6 if not is_standby else 5,
+            radius=7 if not is_standby else 5,
             color=color,
             weight=2,
             fill=True,
             fill_color=fill_color,
-            fill_opacity=0.9 if not is_standby else 0.6,
+            fill_opacity=0.9 if not is_standby else 0.7,
             tooltip=(
                 f"📡 <b>{html.escape(info.get('name', sid))} [{sid}]</b><br>"
-                f"FIR: {info.get('home_fir', 'ECAC')}<br>"
+                f"Home FIR: <b>{info.get('home_fir', 'ECAC')}</b><br>"
                 f"Status: <b>{info.get('recommended_posture', 'ACTIVE')}</b><br>"
-                f"Standard: {info.get('last_assessed_standard', 'VIEW_1')}"
+                f"Coordinates: {info['latitude']:.3f}°N, {info['longitude']:.3f}°E<br>"
+                f"Standard: {info.get('last_assessed_standard', 'VIEW_3')}"
             ),
         ).add_to(target_group)
 
+        if not is_standby:
+            folium.Circle(
+                location=[info["latitude"], info["longitude"]],
+                radius=float(info.get("nominal_range_nm", 200.0)) * 1852.0,
+                color="#10b981",
+                weight=1,
+                fill=True,
+                fill_color="#34d399",
+                fill_opacity=0.03,
+                tooltip=f"📡 {html.escape(info.get('name', sid))} (200 NM Service Canopy)",
+            ).add_to(canopy_group)
+
+    canopy_group.add_to(m)
     active_group.add_to(m)
     standby_group.add_to(m)
     folium.LayerControl(collapsed=False).add_to(m)
@@ -289,20 +304,53 @@ def generate_ecac_radar_summary_report(
     except Exception:
         pass
 
-    # Gather harmonized network state
-    harmonized_network_state: dict[str, Any] = {}
+    # Load all continental radar infrastructure
+    all_continental_stations, _ = load_ecac_stations(dataset, station_type="RADAR")
+
+    # Match stations to their true sovereign home FIRs
+    fir_polys = []
+    for fid in ECAC_FIR_REGISTRY:
+        if fid == "ALL":
+            continue
+        geom = get_fir_geometry(dataset, fid)
+        if geom and geom[0]:
+            fir_polys.append((fid, geom[0]))
+
+    station_home_fir: dict[str, str] = {}
+    for s in all_continental_stations:
+        pt = Point(s.longitude, s.latitude)
+        for fid, poly in fir_polys:
+            if poly.contains(pt):
+                station_home_fir[s.id] = fid
+                break
+        if s.id not in station_home_fir:
+            station_home_fir[s.id] = getattr(s, "country", "ECAC") or "ECAC"
+
+    # Identify decommissioned vs active stations across evaluated FIRs
+    evaluated_decommissioned_ids: set[str] = set()
+    evaluated_active_ids: set[str] = set()
     for a in fir_analyses:
         opt = a.optimal_permutation
-        opt_act = set(opt.active_station_ids) if opt else set()
-        for u in (a.station_utilization or []):
-            harmonized_network_state[u.station_id] = {
-                "name": u.station_name,
-                "home_fir": a.fir_id,
-                "latitude": u.latitude,
-                "longitude": u.longitude,
-                "last_assessed_standard": target_standard,
-                "recommended_posture": "ACTIVE" if u.station_id in opt_act else "STANDBY",
-            }
+        if opt:
+            evaluated_decommissioned_ids.update(opt.disabled_station_ids)
+            evaluated_active_ids.update(opt.active_station_ids)
+
+    # Build comprehensive continental harmonized network state across all European radar heads
+    harmonized_network_state: dict[str, Any] = {}
+    for s in all_continental_stations:
+        is_standby = s.id in evaluated_decommissioned_ids
+        posture = "STANDBY" if is_standby else "ACTIVE"
+        h_fir = station_home_fir.get(s.id, "ECAC")
+        harmonized_network_state[s.id] = {
+            "name": s.name,
+            "home_fir": h_fir,
+            "latitude": s.latitude,
+            "longitude": s.longitude,
+            "elevation_ft": s.elevation_ft,
+            "nominal_range_nm": getattr(s, "nominal_range_nm", 200.0),
+            "last_assessed_standard": target_standard,
+            "recommended_posture": posture,
+        }
 
     m = create_ecac_radar_network_map(dataset, harmonized_network_state)
     map_iframe_html = _folium_map_to_iframe(
