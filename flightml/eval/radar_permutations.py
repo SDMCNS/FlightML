@@ -299,8 +299,13 @@ def _compute_radar_window_costs(
 
     # Operational Delay Penalties
     enroute_vector_delay_min = flights_exposed * 6.5  # +6.5 min radar vector spacing delay
-    terminal_holding_min = degraded_airports_count * 16.0 * (duration_hours / 24.0) * (total_window_traffic * 0.12)
-    ground_delay_min = degraded_airports_count * 8.0 * (duration_hours / 24.0) * (total_window_traffic * 0.08)
+
+    # Terminal Approach & Ground Holding Penalties for Degraded Airports
+    # Each degraded airport handles ~12.0 flights/hr (scaled across duration and diurnal curve)
+    apt_hourly_rate = min(20.0, max(6.0, traffic_hourly_avg * 0.04))
+    apt_flights_window = degraded_airports_count * duration_hours * apt_hourly_rate * traffic_peak_multiplier
+    terminal_holding_min = (apt_flights_window * 0.50) * 14.0  # 50% arrivals held 14 min
+    ground_delay_min = (apt_flights_window * 0.50) * 8.0      # 50% departures delayed 8 min
     total_delay_min = enroute_vector_delay_min + terminal_holding_min + ground_delay_min
 
     # Tactical Detours & Fuel Burn
@@ -1071,6 +1076,11 @@ def simulate_radar_permutations(
             classification = "OPTIMAL_RATIONALIZATION"
             is_valid = True
             rationale = f"Status Quo reference datum ({n_inside} active Radars, 100% equipment baseline)."
+        elif p_id == "P-CORE-VIEW1" and std_norm in ("VIEW_3", "SURV_3", "FL50", "LOW_LEVEL"):
+            # View 1 is a valid comparative datum in the report, but does not meet FL50/FL10 requirements
+            classification = "CRITICAL_DEFICIT" if (len(newly_degraded_apts) > 0 or cov_coverable_pct < 98.0) else "ACCEPTABLE_DEGRADATION"
+            is_valid = False
+            rationale = f"View 1 comparative datum: FL200 single baseline ({cov_coverable_pct}% coverable compliance). Does not satisfy required FL50 en-route and terminal FL10 standard."
         elif has_strong_coverage and is_terminal_sound and day_net <= 0.0:
             classification = "OPTIMAL_RATIONALIZATION"
             is_valid = True
@@ -1129,13 +1139,28 @@ def simulate_radar_permutations(
         )
 
     # 6. Optimal & Pareto Frontier Selection
-    valid_configs = [r for r in results if r.is_valid and r.category != "BASELINE"]
-    if not valid_configs:
-        valid_configs = [r for r in results if r.is_valid]
-    if valid_configs:
-        optimal_permutation = min(valid_configs, key=lambda x: x.windows["24h"].net_economic_impact_eur)
+    if std_norm in ("VIEW_3", "SURV_3", "FL50", "LOW_LEVEL"):
+        # Optimal choice MUST be the candidate that facilitates the FL50 and FL10 requirements with 0 degraded airports
+        fl50_candidates = [
+            r for r in results
+            if r.category != "BASELINE" and "VIEW1" not in r.permutation_id and len(r.degraded_airports_idents) == 0 and r.coverage_coverable_pct >= 95.0
+        ]
+        v3_match = [r for r in fl50_candidates if "VIEW3" in r.permutation_id]
+        if v3_match:
+            optimal_permutation = v3_match[0]
+        elif fl50_candidates:
+            optimal_permutation = min(fl50_candidates, key=lambda x: x.windows["24h"].net_economic_impact_eur)
+        else:
+            # If no rationalized core meets FL50/FL10 (e.g. small FIR with <= 3 radars), baseline P-001 facilitates FL50 & FL10
+            optimal_permutation = results[0] if results else None
     else:
-        optimal_permutation = results[0] if results else None
+        valid_configs = [r for r in results if r.is_valid and r.category != "BASELINE"]
+        if not valid_configs:
+            valid_configs = [r for r in results if r.is_valid]
+        if valid_configs:
+            optimal_permutation = min(valid_configs, key=lambda x: x.windows["24h"].net_economic_impact_eur)
+        else:
+            optimal_permutation = results[0] if results else None
 
     pareto_frontier: list[RadarPermutationResult] = []
     sorted_by_cov = sorted(results, key=lambda x: (x.coverage_coverable_pct, -x.windows["24h"].net_economic_impact_eur), reverse=True)
@@ -2081,13 +2106,16 @@ def generate_radar_resilience_html_report(
         out_frac = newly_deg_cells / cov_tot
 
         # Acute 1-day outage traffic impact metrics
-        flights_exposed_1day = max(1.0, analysis.traffic_daily_avg * out_frac + (len(newly_deg_apts) * analysis.traffic_daily_avg * 0.12))
+        enroute_exposed_1day = analysis.traffic_daily_avg * out_frac
+        apt_hourly_rate = min(20.0, max(6.0, analysis.traffic_hourly_avg * 0.04))
+        apt_exposed_1day = len(newly_deg_apts) * 24.0 * apt_hourly_rate
+        flights_exposed_1day = max(1.0, enroute_exposed_1day + apt_exposed_1day)
         if tracked_daily > 0:
             flights_exposed_1day = min(tracked_daily, flights_exposed_1day)
 
-        enroute_vector_delay_min = flights_exposed_1day * 6.5
-        terminal_holding_min = len(newly_deg_apts) * 16.0 * (analysis.traffic_daily_avg * 0.12)
-        ground_delay_min = len(newly_deg_apts) * 8.0 * (analysis.traffic_daily_avg * 0.08)
+        enroute_vector_delay_min = enroute_exposed_1day * 6.5
+        terminal_holding_min = (apt_exposed_1day * 0.50) * 14.0
+        ground_delay_min = (apt_exposed_1day * 0.50) * 8.0
         primary_delay_min = enroute_vector_delay_min + terminal_holding_min + ground_delay_min
 
         reroute_flights = flights_exposed_1day * 0.25
@@ -2106,7 +2134,7 @@ def generate_radar_resilience_html_report(
         if outage_daily_cost <= 0.0:
             outage_daily_cost = primary_delay_min * EUROCONTROL_AIRBORNE_DELAY_EUR_PER_MIN + reroute_distance_nm * FUEL_AND_ETS_EUR_PER_NM
         if outage_hourly_cost <= 0.0:
-            outage_hourly_cost = outage_daily_cost / 14.0
+            outage_hourly_cost = outage_daily_cost / 18.46
 
         # Planned maintenance contrast comparison
         maint_daily_cost = maint.daily_maintenance_disruption_cost_eur if maint else (outage_daily_cost * 0.005)
@@ -2173,7 +2201,7 @@ def generate_radar_resilience_html_report(
       <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px;">
         <div style="font-size: 11.5px; font-weight: 700; color: #64748b; text-transform: uppercase;">1-Day Outage Economic Penalty</div>
         <div style="font-size: 24px; font-weight: 800; color: #b91c1c;">€{outage_daily_cost:,.0f} / day</div>
-        <div style="font-size: 12px; color: #64748b;">Peak 1-hour shock: €{outage_hourly_cost:,.0f} / hr</div>
+        <div style="font-size: 12px; color: #64748b;">Peak 1-hour shock: €{outage_hourly_cost:,.0f} / hr &bull; Diurnal curve: ~{(outage_daily_cost / max(1.0, outage_hourly_cost)):.1f}x peak hour</div>
       </div>
     </div>
 

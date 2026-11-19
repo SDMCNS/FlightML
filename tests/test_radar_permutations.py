@@ -233,4 +233,16 @@ def test_simulate_radar_permutations_view3_fl50_fl10(dataset):
     opt = analysis.optimal_permutation
     assert opt.coverage_coverable_pct > 80.0
     assert opt.terminal_airports_total > 0
+    # Optimal choice under VIEW_3 must not pick P-CORE-VIEW1 which violates FL50/FL10
+    assert opt.permutation_id != "P-CORE-VIEW1"
+    assert opt.degraded_airports_count == 0
+
+    # Verify 1-day outage economic penalty vs 1-hour peak shock ratio
+    assert analysis.critical_stations is not None
+    for cs in analysis.critical_stations:
+        day_cost = cs["outage_daily_delay_cost_eur"]
+        hr_cost = cs["outage_hourly_delay_cost_eur"]
+        if hr_cost > 0:
+            assert day_cost <= 24.0 * hr_cost, f"Daily shock {day_cost} exceeds 24 * hourly shock {hr_cost}"
+            assert day_cost <= 20.0 * hr_cost, f"Daily shock {day_cost} should reflect diurnal off-peak curve <= 20x hourly"
 
