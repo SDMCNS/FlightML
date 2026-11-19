@@ -5035,8 +5035,7 @@ with tab_cat_maps:
                 )
                 out_dir = Path("data/reports/dme_resilience")
                 out_dir.mkdir(parents=True, exist_ok=True)
-                ts_slug = analysis.generated_at.replace("-", "").replace(":", "").replace(" ", "_").replace("UTC", "").strip()
-                report_file = out_dir / f"dme_resilience_{sel_fir}_{sel_std}_{sim_period}_{ts_slug}.html"
+                report_file = out_dir / f"dme_resilience_{sel_fir}_{sel_std}_{sim_period}.html"
                 generate_dme_resilience_html_report(analysis, output_path=report_file, dataset=ds)
                 st.session_state[res_state_key] = (analysis, report_file)
                 st.success(f"Simulation completed! Evaluated {len(analysis.permutations)} configurations for {sel_fir} ({sim_period}). Report generated.")
@@ -5447,8 +5446,7 @@ with tab_cat_maps:
                 )
                 out_dir = Path("data/reports/radar_resilience")
                 out_dir.mkdir(parents=True, exist_ok=True)
-                ts_slug = analysis.generated_at.replace("-", "").replace(":", "").replace(" ", "_").replace("UTC", "").strip()
-                report_file = out_dir / f"radar_resilience_{sel_fir}_{sel_std}_{sim_period}_{ts_slug}.html"
+                report_file = out_dir / f"radar_resilience_{sel_fir}_{sel_std}_{sim_period}.html"
                 generate_radar_resilience_html_report(analysis, output_path=report_file, dataset=ds)
                 st.session_state[res_state_key] = (analysis, report_file)
                 st.success(f"Simulation completed! Evaluated {len(analysis.permutations)} configurations for {sel_fir} ({sim_period}). Report generated.")

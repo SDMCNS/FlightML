@@ -275,11 +275,19 @@ def generate_ecac_radar_summary_report(
     if output_path is None:
         out_dir = Path("data/reports/radar_resilience")
         out_dir.mkdir(parents=True, exist_ok=True)
-        ts_slug = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
-        output_path = out_dir / f"ecac_radar_summary_report_{period}_{target_standard}_{ts_slug}.html"
+        output_path = out_dir / f"ecac_radar_summary_report_{period}_{target_standard}.html"
     else:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Maintain strictly one version: prune older timestamped reports
+    try:
+        prefix = f"ecac_radar_summary_report_{period}_{target_standard}"
+        for old_f in output_path.parent.glob(f"{prefix}*.html"):
+            if old_f.resolve() != output_path.resolve():
+                old_f.unlink(missing_ok=True)
+    except Exception:
+        pass
 
     # Gather harmonized network state
     harmonized_network_state: dict[str, Any] = {}

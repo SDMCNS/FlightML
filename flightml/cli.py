@@ -3756,8 +3756,7 @@ def cli_dme_resilience(
 
         out_path = Path(output_dir)
         out_path.mkdir(parents=True, exist_ok=True)
-        ts_slug = analysis.generated_at.replace("-", "").replace(":", "").replace(" ", "_").replace("UTC", "").strip()
-        report_file = out_path / f"dme_resilience_{fir_clean}_{std_clean}_{period}_{ts_slug}.html"
+        report_file = out_path / f"dme_resilience_{fir_clean}_{std_clean}_{period}.html"
         generated_report = generate_dme_resilience_html_report(analysis, output_path=report_file, dataset=dataset)
 
     opt = analysis.optimal_permutation or analysis.permutations[0]
@@ -4205,8 +4204,7 @@ def cli_radar_resilience(
 
         out_path = Path(output_dir)
         out_path.mkdir(parents=True, exist_ok=True)
-        ts_slug = analysis.generated_at.replace("-", "").replace(":", "").replace(" ", "_").replace("UTC", "").strip()
-        report_file = out_path / f"radar_resilience_{fir_clean}_{std_clean}_{period}_{ts_slug}.html"
+        report_file = out_path / f"radar_resilience_{fir_clean}_{std_clean}_{period}.html"
         generated_report = generate_radar_resilience_html_report(analysis, output_path=report_file, dataset=dataset)
 
     opt = analysis.optimal_permutation or analysis.permutations[0]

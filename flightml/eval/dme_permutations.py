@@ -2167,6 +2167,23 @@ def create_dme_resilience_map(
     return m
 
 
+def prune_older_report_versions(target_path: Path | str, prefix: str) -> None:
+    """
+    Ensure only one version of any given HTML report is retained.
+    Prunes any older timestamped or duplicate versions of the report from the directory.
+    """
+    try:
+        target = Path(target_path).resolve()
+        parent = target.parent
+        if not parent.exists():
+            return
+        for old_f in parent.glob(f"{prefix}*.html"):
+            if old_f.resolve() != target:
+                old_f.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def generate_dme_resilience_html_report(
     analysis: DMEFIRResilienceAnalysis,
     output_path: Path | str | None = None,
@@ -2177,15 +2194,19 @@ def generate_dme_resilience_html_report(
     Generate a robust, standalone HTML resilience report including interactive Folium Leaflet map,
     executive KPI cards, permutation comparison table, selection criteria analysis,
     and a comprehensive mathematical and economic appendix.
+    Maintains strictly one version (the most recent) of any given report.
     """
+    prefix = f"dme_resilience_{analysis.fir_id}_{analysis.target_standard}_{analysis.period}"
     if output_path is None:
         out_dir = Path("data/reports/dme_resilience")
         out_dir.mkdir(parents=True, exist_ok=True)
-        ts_slug = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
-        output_path = out_dir / f"dme_resilience_{analysis.fir_id}_{analysis.target_standard}_{analysis.period}_{ts_slug}.html"
+        output_path = out_dir / f"{prefix}.html"
     else:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Maintain strictly one version of this report
+    prune_older_report_versions(output_path, prefix)
 
     opt = selected_permutation or analysis.optimal_permutation or analysis.permutations[0]
     base = analysis.permutations[0]
