@@ -5098,6 +5098,37 @@ with tab_cat_maps:
                 ]
                 st.dataframe(pd.DataFrame(crit_rows), use_container_width=True)
 
+            # DME Station Utilization Table
+            if getattr(analysis, "station_utilization", None):
+                st.markdown("#### 📡 DME Station Utilization & Flight Journey Exposure")
+                st.caption("Average daily, hourly, and peak hourly flights utilizing each terrestrial DME as part of their navigation journey.")
+                util_df_data = [
+                    {
+                        "Station Ident": u.station_id,
+                        "Station Name": u.station_name,
+                        "Airspace Role": u.airspace_role,
+                        "Coordinates": f"{u.latitude:.2f}°N, {u.longitude:.2f}°E",
+                        "Target Config Status": "Active Core" if (u.station_id in opt.active_station_ids) else "Standby",
+                        "Daily Flights": f"{u.daily_flights_using:,.1f}",
+                        "Hourly Flights": f"{u.hourly_flights_using:,.1f}",
+                        "Peak Hourly Flights": f"{u.peak_hourly_flights_using:,.1f}",
+                        "Fleet Utilization": f"{u.utilization_pct:.1f}%",
+                        "Valid Pairs": u.valid_pairs_formed,
+                    }
+                    for u in analysis.station_utilization
+                ]
+                st.dataframe(pd.DataFrame(util_df_data), use_container_width=True)
+
+            # Maintenance & Planned Outages Reliability Assessment (0.5% Outage Rate)
+            if getattr(analysis, "maintenance_impact", None):
+                st.markdown("#### 🛠️ Planned Outages & Maintenance Reliability (0.5% Outage Rate)")
+                m = analysis.maintenance_impact
+                mc1, mc2, mc3, mc4 = st.columns(4)
+                mc1.metric("SPOF Cells", f"{m.spof_cells_count} / {m.total_cells} cells")
+                mc2.metric("Fully Redundant Cells", f"{m.redundant_cells_count} cells")
+                mc3.metric("Annual Reduced Hours", f"{m.annual_cell_hours_reduced_rnav:,.1f} h/yr")
+                mc4.metric("Annual Outage Cost", f"€{m.annual_outage_cost_eur:,.0f} / yr", f"€{m.monthly_outage_cost_eur:,.0f}/mo")
+
         # ----------------- PAN-EUROPEAN ECAC NETWORK SUMMARY & MULTI-PERIOD OUTCOMES -----------------
         st.markdown("---")
         st.subheader("🇪🇺 Pan-European ECAC Network Outcomes Dataset & Multi-Period Analysis")

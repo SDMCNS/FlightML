@@ -3902,6 +3902,48 @@ def cli_dme_resilience(
         t_sim.add_row("Downstream Cancellation & Curfew Risks", f"{canc_style}{sim.cancellation_risk_count} flights[/] ({sim.curfew_breaches_count} night curfew breaches, {sim.crew_fdp_timeouts_count} crew FDP timeouts)")
         console.print(t_sim)
 
+    # 6. DME Station Utilization Table
+    if getattr(analysis, "station_utilization", None):
+        t_util = Table(title="📡 Top Utilized DMEs (Average Flights Using Beacon as Part of Journey)", border_style="blue")
+        t_util.add_column("Station Ident & Name", style="bold cyan")
+        t_util.add_column("Airspace Role", style="yellow")
+        t_util.add_column("Daily Flights", justify="right", style="bold green")
+        t_util.add_column("Hourly Avg", justify="right", style="cyan")
+        t_util.add_column("Peak Hour", justify="right", style="magenta")
+        t_util.add_column("Fleet Util.", justify="right", style="bold")
+        t_util.add_column("Status", justify="center")
+
+        opt_act_ids = set(opt.active_station_ids) if opt else set()
+        for u in analysis.station_utilization[:8]:
+            is_active = u.station_id in opt_act_ids
+            st_badge = "[green]ACTIVE CORE[/green]" if is_active else "[red]STANDBY[/red]"
+            t_util.add_row(
+                f"{u.station_name} [{u.station_id}]",
+                u.airspace_role,
+                f"{u.daily_flights_using:,.1f} / day",
+                f"{u.hourly_flights_using:,.1f} / h",
+                f"{u.peak_hourly_flights_using:,.1f} / h",
+                f"{u.utilization_pct:.1f}%",
+                st_badge,
+            )
+        console.print(t_util)
+
+    # 7. Planned Outage & Maintenance Reliability Assessment (0.5% Outage Rate)
+    if getattr(analysis, "maintenance_impact", None):
+        maint = analysis.maintenance_impact
+        t_maint = Table(title="🛠️ Maintenance & Planned Outage Reliability Assessment (0.5% Station Outage Rate)", border_style="yellow")
+        t_maint.add_column("Reliability / Outage Metric", style="bold yellow")
+        t_maint.add_column("Value / Operational Outcome", style="white")
+        t_maint.add_row("Planned Station Outage Rate", f"{maint.outage_rate_pct:.1f}% annual downtime (43.8 h/year per transponder)")
+        spof_style = "[bold red]" if maint.spof_cells_count > 0 else "[green]"
+        t_maint.add_row("Single Point of Failure (SPOF) Cells", f"{spof_style}{maint.spof_cells_count:,}[/] of {maint.total_cells:,} cells (Cells where all valid pairs rely on 1 station)")
+        t_maint.add_row("Fully Redundant Multi-Pair Cells", f"[green]{maint.redundant_cells_count:,}[/green] cells (Resilient to N-1 outages)")
+        t_maint.add_row("Permanent Deficit Cells (Excluded)", f"{maint.permanently_degraded_cells_count:,} cells (Double-counting strictly avoided)")
+        t_maint.add_row("Cumulative Reduced Capability Time", f"{maint.annual_cell_hours_reduced_rnav:,.1f} cell-hours / year")
+        t_maint.add_row("Flights Impacted during Maintenance", f"{maint.annual_flights_impacted:,} flights/year ({maint.monthly_flights_impacted:,} flights/month)")
+        t_maint.add_row("Annual Outage Disruption Cost", f"[bold red]€{maint.annual_outage_cost_eur:,.0f} / year[/bold red] (€{maint.daily_outage_cost_eur:,.0f} / day)")
+        console.print(t_maint)
+
     console.print(
         Panel(
             f"[bold green]✓ Standalone HTML Report Successfully Generated:[/bold green]\n"

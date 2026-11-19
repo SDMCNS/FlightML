@@ -55,10 +55,25 @@ def test_simulate_dme_permutations_egtt(dataset):
     assert analysis.ml_diagnostics["total_samples_learned"] > 0
     assert "EGTTFIR" in analysis.ml_diagnostics["unique_firs_evaluated"]
 
-    # Verify air traffic simulation and rotational knock-on modeling
+    # Verify air traffic simulation and rotational knock-on modeling across ALL flights
     assert analysis.traffic_simulation is not None
-    assert analysis.traffic_simulation.total_flights_simulated > 0
+    assert analysis.traffic_simulation.total_flights_simulated > 100_000
     assert analysis.traffic_simulation.directly_impacted_flights >= 0
+
+    # Verify DME Station Utilization table
+    assert analysis.station_utilization is not None
+    assert len(analysis.station_utilization) == analysis.baseline_station_count
+    top_u = analysis.station_utilization[0]
+    assert top_u.daily_flights_using > 50.0
+    assert top_u.hourly_flights_using > 2.0
+    assert top_u.utilization_pct > 0.0
+
+    # Verify 0.5% Planned Outages and Maintenance Reliability Model
+    assert analysis.maintenance_impact is not None
+    assert analysis.maintenance_impact.outage_rate_pct == 0.5
+    assert analysis.maintenance_impact.total_cells > 0
+    assert analysis.maintenance_impact.annual_cell_hours_reduced_rnav > 0.0
+    assert analysis.maintenance_impact.annual_outage_cost_eur > 0.0
 
 
 def test_generate_dme_resilience_html_report(dataset, tmp_path):
@@ -89,6 +104,11 @@ def test_generate_dme_resilience_html_report(dataset, tmp_path):
     assert "Self-Reinforcing Multi-FIR Machine Learning Engine" in html_content
     assert "Line-of-Sight &amp; DME-DME GDOP Geometry Formulation" in html_content
     assert "Eurocontrol Standard Inputs for Economic Cost-Benefit Analyses" in html_content
+    assert "DME Station Utilization &amp; Flight Journey Exposure" in html_content
+    assert "Maintenance &amp; Planned Outage Reliability Assessment (0.5% Station Outage Rate)" in html_content
+    assert "Navaid Selection Likelihood &amp; Flight Journey DME Utilization" in html_content
+    assert "Planned Outages, Maintenance Combinatorics &amp; Double-Counting Avoidance" in html_content
+    assert "ATC Operational Restrictions &amp; Tactical Intervention Economics" in html_content
 
 
 def test_cli_dme_resilience_command(tmp_path):
