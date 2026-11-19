@@ -866,9 +866,14 @@ def compute_static_rationalization_views(
             stations, grid_cells, airports, fixed_active_stations=fixed_active_stations
         )
 
-    cell_mat, apt_mat = _compute_coverage_matrices(stations, grid_cells, airports, flight_levels=(10, 50, 200))
-    n_sta = len(stations)
-    sta_ids = [s.id for s in stations]
+    n_internal = len(stations)
+    fixed_list = list(fixed_active_stations) if fixed_active_stations else []
+    all_stations = list(stations) + fixed_list
+    n_sta = len(all_stations)
+    fixed_indices = set(range(n_internal, n_sta))
+    internal_indices = list(range(n_internal))
+
+    cell_mat, apt_mat = _compute_coverage_matrices(all_stations, grid_cells, airports, flight_levels=(10, 50, 200))
 
     # Coverability masks (cells that have at least 1 station when ALL stations are active)
     coverable_c_fl200 = cell_mat[200].sum(axis=1) > 0
@@ -882,15 +887,15 @@ def compute_static_rationalization_views(
             coverable_busy_fl10[i] = True
 
     # ---------------- VIEW 1: Minimum Baseline ----------------
-    view_1_set: set[int] = set()
+    view_1_set: set[int] = set(fixed_indices)
 
     # Priority 1: Cover all coverable airports at FL10
-    apt_cov_mask = np.zeros(len(airports), dtype=bool)
+    apt_cov_mask = (apt_mat[10][:, list(view_1_set)].sum(axis=1) > 0) if view_1_set else np.zeros(len(airports), dtype=bool)
     while (~apt_cov_mask & coverable_a_fl10).any():
         uncovered = ~apt_cov_mask & coverable_a_fl10
         best_sta = -1
         best_gain = 0
-        for s in range(n_sta):
+        for s in internal_indices:
             if s in view_1_set:
                 continue
             gain = (apt_mat[10][:, s] & uncovered).sum()
@@ -910,7 +915,7 @@ def compute_static_rationalization_views(
             break
         best_sta = -1
         best_gain = 0
-        for s in range(n_sta):
+        for s in internal_indices:
             if s in view_1_set:
                 continue
             gain = (cell_mat[200][:, s] & uncovered).sum()
@@ -932,7 +937,7 @@ def compute_static_rationalization_views(
         needed = cell_cov_count_v2 < target_fl200_cov
         best_sta = -1
         best_gain = 0
-        for s in range(n_sta):
+        for s in internal_indices:
             if s in view_2_set:
                 continue
             gain = (cell_mat[200][:, s] & needed).sum()
@@ -954,7 +959,7 @@ def compute_static_rationalization_views(
         cur_apt_cov = apt_mat[10][i, list(view_3_set)].sum() if view_3_set else 0
         while cur_apt_cov < 2:
             best_s = -1
-            for s in range(n_sta):
+            for s in internal_indices:
                 if s not in view_3_set and apt_mat[10][i, s]:
                     best_s = s
                     break
@@ -971,7 +976,7 @@ def compute_static_rationalization_views(
             break
         best_sta = -1
         best_gain = 0
-        for s in range(n_sta):
+        for s in internal_indices:
             if s in view_3_set:
                 continue
             gain = (cell_mat[50][:, s] & uncovered).sum()
@@ -984,12 +989,12 @@ def compute_static_rationalization_views(
         cell_cov_fl50 += cell_mat[50][:, best_sta]
 
     return {
-        "VIEW_1": {sta_ids[idx] for idx in view_1_set},
-        "VIEW_2": {sta_ids[idx] for idx in view_2_set},
-        "VIEW_3": {sta_ids[idx] for idx in view_3_set},
-        "SURV_1": {sta_ids[idx] for idx in view_1_set},
-        "SURV_2": {sta_ids[idx] for idx in view_2_set},
-        "SURV_3": {sta_ids[idx] for idx in view_3_set},
+        "VIEW_1": {all_stations[idx].id for idx in view_1_set if idx < n_internal},
+        "VIEW_2": {all_stations[idx].id for idx in view_2_set if idx < n_internal},
+        "VIEW_3": {all_stations[idx].id for idx in view_3_set if idx < n_internal},
+        "SURV_1": {all_stations[idx].id for idx in view_1_set if idx < n_internal},
+        "SURV_2": {all_stations[idx].id for idx in view_2_set if idx < n_internal},
+        "SURV_3": {all_stations[idx].id for idx in view_3_set if idx < n_internal},
     }
 
 

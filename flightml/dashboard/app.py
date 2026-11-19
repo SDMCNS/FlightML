@@ -158,6 +158,17 @@ from flightml.eval.dme_ecac_pipeline import (
     load_network_evaluations,
     OUTCOMES_JSONL_PATH,
 )
+from flightml.eval.radar_permutations import (
+    simulate_radar_permutations,
+    generate_radar_resilience_html_report,
+    create_radar_resilience_map,
+    RADAR_ANNUAL_COST_SAVINGS_EUR,
+)
+from flightml.eval.radar_ecac_pipeline import (
+    get_ranked_radar_firs,
+    load_radar_network_evaluations,
+    RADAR_OUTCOMES_JSONL_PATH,
+)
 from flightml.eval.longitudinal_airspace_modernization import (
     get_vertical_capping_analysis,
     get_fixed_airways_vs_fra_analysis,
@@ -4830,7 +4841,7 @@ with tab_cat_maps:
             "📡 Global Radio Navaids World Map",
             "📻 DME-DME RNAV Backup & Rationalization Lab",
             "🛰️ Primary & Secondary Radar Surveillance (SSR/Mode S) Lab",
-            "📉 DME Resilience Permutations & Reports",
+            "📉 Navigation & Surveillance Resilience Reports",
             "📖 Methodology & KPI Reference",
         ]
     )
@@ -5279,6 +5290,355 @@ with tab_cat_maps:
         else:
             st.info("No stored HTML resilience reports found in `data/reports/dme_resilience/`. Run a simulation above or via CLI command `flightml dme-resilience` to generate reports.")
 
+    def render_radar_resilience_section(selected_period: str):
+        st.header("🛰️ Radar Surveillance Network Resilience, Outage Permutations & Operational Cost Engine")
+        st.caption(
+            "Stress test primary and secondary radar surveillance network resilience across European FIRs with disclosed radar infrastructure. "
+            "Evaluates permutations of enabled/disabled radar heads against operational surveillance coverage standards (FL200 single/dual redundancy, FL50 terminal infill), "
+            "quantifying non-radar procedural separation expansions (5 NM radar spacing expanding to 10–20 NM miles-in-trail), en-route vectoring delays, tactical reroutes, "
+            "and terminal approach stack holding, presented as average operational costs across 1-hour, 6-hour, and 1-day (24-hour) operational windows. "
+            "Note: Only FIRs with disclosed radar installations are available for evaluation."
+        )
+        render_page_export_bar("radar_resilience", "tab_radar_resilience")
+
+        ds = get_dataset(selected_period)
+        ranked_radar_firs = get_ranked_radar_firs(ds, period=selected_period)
+        if not ranked_radar_firs:
+            st.warning("No sovereign FIRs with disclosed radar infrastructure found in the current dataset.")
+            return
+
+        fir_ids = [r["fir_id"] for r in ranked_radar_firs]
+        fir_dict = {r["fir_id"]: f"{r['fir_id']} — {r['fir_name']} ({r['radar_count']} radars)" for r in ranked_radar_firs}
+        default_fir_idx = fir_ids.index("EDUUUIR") if "EDUUUIR" in fir_ids else 0
+
+        col_c1, col_c2, col_c3, col_c4 = st.columns([1.5, 1.2, 1.0, 1.0])
+        with col_c1:
+            sel_fir = st.selectbox(
+                "Select FIR with Disclosed Radars",
+                options=fir_ids,
+                index=default_fir_idx,
+                format_func=lambda x: fir_dict.get(x, x),
+                key=f"radar_res_fir_{selected_period}",
+                help="Only FIRs containing disclosed radar stations in data/radars.json are eligible for assessment.",
+            )
+        with col_c2:
+            sel_std = st.selectbox(
+                "Target Surveillance Standard",
+                options=["VIEW_1", "VIEW_2", "VIEW_3"],
+                index=0,
+                format_func=lambda x: {
+                    "VIEW_1": "View 1: FL200 Single En-Route Baseline (5 NM)",
+                    "VIEW_2": "View 2: FL200 Dual En-Route Redundancy (N-1 Overlap)",
+                    "VIEW_3": "View 3: FL50 Low-Level Infill & Major Hub TMA",
+                }.get(x, x),
+                key=f"radar_res_std_{selected_period}",
+                help="Operational surveillance standard driving separation requirements.",
+            )
+        with col_c3:
+            max_perms = st.slider(
+                "Max Permutations",
+                min_value=5,
+                max_value=30,
+                value=15,
+                step=1,
+                key=f"radar_res_maxperms_{selected_period}",
+            )
+        with col_c4:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            run_sim = st.button("🚀 Run Radar Resilience Simulation", key=f"btn_run_radar_res_{selected_period}", type="primary")
+
+        res_state_key = f"radar_res_result_{sel_fir}_{sel_std}_{selected_period}"
+
+        if run_sim:
+            with st.spinner(f"Simulating radar permutations & procedural separation delays for {sel_fir} ({sel_std})..."):
+                analysis = simulate_radar_permutations(
+                    dataset=ds,
+                    fir_id=sel_fir,
+                    period=selected_period,
+                    target_standard=sel_std,
+                    max_permutations=max_perms,
+                )
+                out_dir = Path("data/reports/radar_resilience")
+                out_dir.mkdir(parents=True, exist_ok=True)
+                ts_slug = analysis.generated_at.replace("-", "").replace(":", "").replace(" ", "_").replace("UTC", "").strip()
+                report_file = out_dir / f"radar_resilience_{sel_fir}_{sel_std}_{selected_period}_{ts_slug}.html"
+                generate_radar_resilience_html_report(analysis, output_path=report_file, dataset=ds)
+                st.session_state[res_state_key] = (analysis, report_file)
+                st.success(f"Simulation completed! Evaluated {len(analysis.permutations)} configurations for {sel_fir}. Report generated.")
+
+        if res_state_key in st.session_state:
+            analysis, report_path = st.session_state[res_state_key]
+            opt = analysis.optimal_permutation or analysis.permutations[0]
+
+            st.markdown("---")
+            st.subheader(f"🏆 Optimal Rationalization Posture — {analysis.fir_name}")
+
+            mcol1, mcol2, mcol3, mcol4, mcol5 = st.columns(5)
+            mcol1.metric(
+                "Optimal Radar Equipment",
+                f"{opt.active_count} / {analysis.baseline_station_count} Radars",
+                f"-{opt.disabled_count} redundant",
+            )
+            mcol2.metric(
+                "1h Peak Net Impact",
+                f"-€{abs(opt.windows['1h'].net_economic_impact_eur):,.0f}/h" if opt.windows['1h'].net_economic_impact_eur <= 0 else f"+€{opt.windows['1h'].net_economic_impact_eur:,.0f}/h",
+                "Net Benefit" if opt.windows['1h'].net_economic_impact_eur <= 0 else "Net Cost",
+            )
+            mcol3.metric(
+                "6h Shift Net Impact",
+                f"-€{abs(opt.windows['6h'].net_economic_impact_eur):,.0f}/6h" if opt.windows['6h'].net_economic_impact_eur <= 0 else f"+€{opt.windows['6h'].net_economic_impact_eur:,.0f}/6h",
+                "Net Benefit" if opt.windows['6h'].net_economic_impact_eur <= 0 else "Net Cost",
+            )
+            mcol4.metric(
+                "24h Daily Savings",
+                f"€{abs(opt.windows['24h'].net_economic_impact_eur):,.0f} / day",
+                f"€{opt.disabled_count * RADAR_ANNUAL_COST_SAVINGS_EUR:,.0f} / yr OPEX",
+            )
+            mcol5.metric(
+                f"{sel_std} Compliance",
+                f"{opt.coverage_coverable_pct:.1f}%",
+                f"{opt.degraded_airports_count} degraded major hubs",
+            )
+
+            # Direct Download Button for this run's report
+            if report_path.exists():
+                with open(report_path, "r", encoding="utf-8") as rf:
+                    report_html_data = rf.read()
+                st.download_button(
+                    label=f"⬇️ Download HTML Radar Resilience Report ({report_path.name})",
+                    data=report_html_data,
+                    file_name=report_path.name,
+                    mime="text/html",
+                    key=f"dl_btn_radar_current_{selected_period}",
+                )
+
+            # Interactive Folium Map
+            st.markdown("#### 🗺️ Airspace Radar Surveillance Coverage & Station Posture Map")
+            res_map = create_radar_resilience_map(analysis, selected_permutation=opt, dataset=ds)
+            st_folium(res_map, width=1200, height=520, returned_objects=[])
+
+            # Permutations Comparison Table
+            st.markdown("#### 📊 Permutations Comparison & Multi-Window Economic Balances")
+            p_rows = []
+            for p in analysis.permutations:
+                def _fmt(val):
+                    return f"-€{abs(val):,.0f}" if val <= 0 else f"+€{val:,.0f}"
+                p_rows.append({
+                    "Permutation ID": p.permutation_id,
+                    "Configuration Name": ("★ " + p.name) if (opt and p.permutation_id == opt.permutation_id) else p.name,
+                    "Category": p.category,
+                    "Active Radars": f"{p.active_count} / {analysis.baseline_station_count}",
+                    "Coverage Met (%)": f"{p.coverage_coverable_pct:.1f}%",
+                    "Degraded Hubs": p.degraded_airports_count,
+                    "1-Hour Net Impact (€)": _fmt(p.windows["1h"].net_economic_impact_eur),
+                    "6-Hour Net Impact (€)": _fmt(p.windows["6h"].net_economic_impact_eur),
+                    "24-Hour Net Impact (€)": _fmt(p.windows["24h"].net_economic_impact_eur),
+                    "Classification": p.classification,
+                })
+            st.dataframe(pd.DataFrame(p_rows), use_container_width=True)
+
+            if analysis.critical_stations:
+                st.markdown("#### 🚨 Top Critical Single Point of Failure Radars")
+                crit_rows = [
+                    {
+                        "Radar Station": f"{cs['name']} [{cs['id']}]",
+                        "Location": f"{cs['latitude']:.2f}°N, {cs['longitude']:.2f}°E ({cs['near_airport']})",
+                        "Hourly Delay Penalty (€/h)": f"+€{cs['outage_hourly_delay_cost_eur']:,.0f}/h",
+                        "Daily Delay Impact (€/day)": f"+€{cs['outage_daily_delay_cost_eur']:,.0f}/day",
+                    }
+                    for cs in analysis.critical_stations
+                ]
+                st.dataframe(pd.DataFrame(crit_rows), use_container_width=True)
+
+            # Air Traffic Micro-Simulation Table
+            if getattr(analysis, "traffic_simulation", None):
+                st.markdown("#### ✈️ Air Traffic Micro-Simulation: Non-Radar Separation & Rotational Delays")
+                sim = analysis.traffic_simulation
+                s_c1, s_c2, s_c3, s_c4 = st.columns(4)
+                s_c1.metric("Simulated Trajectories", f"{sim.total_flights_simulated:,} flights", f"{sim.directly_impacted_flights:,} impacted")
+                s_c2.metric("Non-Radar Separation", f"{sim.separation_standard_nm:.1f} NM MIT", f"+{sim.total_primary_delay_min:,.0f} min primary")
+                s_c3.metric("Downstream Rotational", f"+{sim.total_reactionary_delay_min:,.0f} min", f"×{sim.reactionary_multiplier:.2f} knock-on multiplier")
+                s_c4.metric("Rotational Cancellations", f"{sim.cancellation_risk_count} flights", f"{sim.curfew_breaches_count} curfew breaches")
+
+            # Radar Station Utilization Table
+            if getattr(analysis, "station_utilization", None):
+                st.markdown("#### 📡 Radar Station Utilization & Traffic Tracking Exposure")
+                st.caption("Average daily, hourly, and peak hourly flights tracked by each primary/secondary radar head.")
+                util_df_data = [
+                    {
+                        "Radar Ident": u.station_id,
+                        "Radar Name": u.station_name,
+                        "Airspace Role": u.airspace_role,
+                        "Coordinates": f"{u.latitude:.2f}°N, {u.longitude:.2f}°E",
+                        "Target Config Status": "Active Core" if (u.station_id in opt.active_station_ids) else "Standby",
+                        "Daily Flights": f"{u.daily_flights_using:,.1f}",
+                        "Hourly Flights": f"{u.hourly_flights_using:,.1f}",
+                        "Peak Hourly Flights": f"{u.peak_hourly_flights_using:,.1f}",
+                        "Airspace Fleet Share": f"{u.utilization_pct:.1f}%",
+                    }
+                    for u in analysis.station_utilization
+                ]
+                st.dataframe(pd.DataFrame(util_df_data), use_container_width=True)
+
+            # Maintenance & Planned Outages Reliability Assessment (0.5% Outage Rate)
+            if getattr(analysis, "maintenance_impact", None):
+                st.markdown("#### 🛠️ Planned Outages & Maintenance Reliability (0.5% Station Outage Rate)")
+                m = analysis.maintenance_impact
+                mc1, mc2, mc3, mc4 = st.columns(4)
+                mc1.metric("Single Head (SPOF) Cells", f"{m.spof_cells_count} / {m.total_cells} cells")
+                mc2.metric("Dual-Overlapped Cells", f"{m.redundant_cells_count} cells")
+                mc3.metric("Annual Reduced Hours", f"{m.annual_cell_hours_reduced_rnav:,.1f} h/yr")
+                mc4.metric("Annual Outage Cost", f"€{m.annual_outage_cost_eur:,.0f} / yr", f"€{m.monthly_outage_cost_eur:,.0f}/mo")
+
+        # ----------------- PAN-EUROPEAN ECAC RADAR NETWORK OUTCOMES -----------------
+        st.markdown("---")
+        st.subheader("🇪🇺 Pan-European ECAC Radar Surveillance Outcomes Dataset & Multi-Period Analysis")
+        st.caption(
+            "Empirical results from the sequenced Pan-European ECAC Radar pipeline (executed via CLI `flightml radar-ecac-pipeline`), "
+            "evaluating sovereign FIRs with disclosed radar infrastructure in descending order of traffic density with active cross-border line-of-sight cascading."
+        )
+
+        net_df = load_radar_network_evaluations()
+        if not net_df.empty:
+            avail_periods = sorted(net_df["period"].unique().tolist())
+            avail_standards = sorted(net_df["target_standard"].unique().tolist())
+
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                filter_period = st.selectbox(
+                    "Filter Evaluation Period",
+                    options=avail_periods,
+                    index=avail_periods.index(selected_period) if selected_period in avail_periods else 0,
+                    key=f"ecac_radar_net_filter_period_{selected_period}",
+                )
+            with col_f2:
+                filter_std = st.selectbox(
+                    "Filter Target Standard",
+                    options=avail_standards,
+                    index=0,
+                    key=f"ecac_radar_net_filter_std_{selected_period}",
+                )
+
+            filtered_df = net_df[(net_df["period"] == filter_period) & (net_df["target_standard"] == filter_std)]
+            if not filtered_df.empty:
+                tot_base = filtered_df["baseline_radars"].sum()
+                tot_act = filtered_df["optimal_active_radars"].sum()
+                tot_cut = filtered_df["decommissioned_radars"].sum()
+                cut_pct = round((tot_cut / max(1, tot_base)) * 100.0, 1)
+                tot_ann_sav = filtered_df["annual_savings_eur"].sum()
+                tot_pri_del = filtered_df["primary_delay_minutes"].sum()
+                tot_rot_del = filtered_df["reactionary_delay_minutes"].sum()
+                tot_canc = filtered_df["cancellation_risks_count"].sum()
+
+                ec1, ec2, ec3, ec4 = st.columns(4)
+                ec1.metric("ECAC Radars Rationalized", f"{tot_cut} / {tot_base} Radars", f"-{cut_pct}% equipment reduction")
+                ec2.metric("Annualized ANSP OPEX Savings", f"€{tot_ann_sav/1e6:,.2f}M / yr", f"Across {len(filtered_df)} sovereign FIRs")
+                ec3.metric("Tactical & Rotational Delay", f"+{tot_pri_del:,.0f}m pri | +{tot_rot_del:,.0f}m rot", f"{filtered_df['flights_simulated'].sum():,} flights simulated")
+                ec4.metric("Rotational Cancellations", f"{tot_canc} flights", f"{filtered_df['curfew_breaches_count'].sum()} curfew breaches")
+
+                # Chart: Radar Equipment Rationalization by FIR
+                chart_df = filtered_df.sort_values(by="traffic_monthly_moves", ascending=False).copy()
+                st.markdown("##### 📊 Radar Surveillance Equipment Posture by FIR (Ranked by Traffic Density)")
+                chart_data = []
+                for _, r in chart_df.iterrows():
+                    chart_data.append({"FIR": r["fir_id"], "Count": r["optimal_active_radars"], "Status": "Active Core Radars"})
+                    chart_data.append({"FIR": r["fir_id"], "Count": r["decommissioned_radars"], "Status": "Standby / Decommissioned"})
+                c_df = pd.DataFrame(chart_data)
+                bar_chart = alt.Chart(c_df).mark_bar().encode(
+                    x=alt.X("FIR:N", sort=None, title="Sovereign ECAC FIR with Disclosed Radars (Descending Traffic)"),
+                    y=alt.Y("Count:Q", title="Number of Primary/Secondary Radars"),
+                    color=alt.Color("Status:N", scale=alt.Scale(domain=["Active Core Radars", "Standby / Decommissioned"], range=["#10b981", "#ef4444"])),
+                    tooltip=["FIR", "Status", "Count"],
+                ).properties(height=320)
+                st.altair_chart(bar_chart, use_container_width=True)
+
+                # Filtered Data Table
+                st.markdown("##### 📋 FIR-by-FIR Evaluation Outcomes Table")
+                disp_cols = [
+                    "rank_by_traffic", "fir_id", "fir_name", "traffic_monthly_moves", "baseline_radars",
+                    "optimal_active_radars", "equipment_reduction_pct", "coverage_compliance_pct",
+                    "annual_savings_eur", "primary_delay_minutes", "reactionary_delay_minutes",
+                    "cancellation_risks_count", "fir_report_path"
+                ]
+                st.dataframe(
+                    filtered_df[disp_cols].rename(columns={
+                        "rank_by_traffic": "Rank",
+                        "fir_id": "FIR Code",
+                        "fir_name": "FIR Name",
+                        "traffic_monthly_moves": "Monthly Moves",
+                        "baseline_radars": "Base Radars",
+                        "optimal_active_radars": "Active Radars",
+                        "equipment_reduction_pct": "Cut %",
+                        "coverage_compliance_pct": "Coverage %",
+                        "annual_savings_eur": "Annual Savings (€)",
+                        "primary_delay_minutes": "Primary Delay (min)",
+                        "reactionary_delay_minutes": "React. Delay (min)",
+                        "cancellation_risks_count": "Canc. Risk",
+                        "fir_report_path": "HTML Report",
+                    }),
+                    use_container_width=True,
+                )
+
+                # Download dataset button
+                if RADAR_OUTCOMES_JSONL_PATH.exists():
+                    with open(RADAR_OUTCOMES_JSONL_PATH, "r", encoding="utf-8") as jf:
+                        jsonl_bytes = jf.read().encode("utf-8")
+                    st.download_button(
+                        label="⬇️ Download Complete Radar Outcomes Dataset (JSONL)",
+                        data=jsonl_bytes,
+                        file_name="ecac_radar_network_evaluations.jsonl",
+                        mime="application/jsonlines",
+                        key=f"dl_radar_outcomes_jsonl_{selected_period}",
+                    )
+            else:
+                st.info(f"No radar evaluation outcomes found for Period {filter_period} ({filter_std}). Run CLI command `flightml radar-ecac-pipeline --period {filter_period}`.")
+        else:
+            st.info("No Pan-European radar outcomes recorded yet. Run `flightml radar-ecac-pipeline` via the CLI to populate this dataset.")
+
+        # ----------------- STORED RADAR REPORTS ARCHIVE & DOWNLOAD SECTION -----------------
+        st.markdown("---")
+        st.subheader("📁 Stored Radar Resilience & Rationalization HTML Reports")
+        st.caption("All radar resilience simulation runs generate standalone, interactive HTML reports with embedded Leaflet maps, KPI scorecards, and mathematical appendices. Browse and download any report below:")
+
+        report_dir = Path("data/reports/radar_resilience")
+        saved_reports = sorted(list(report_dir.glob("*.html")), key=lambda f: f.stat().st_mtime, reverse=True) if report_dir.exists() else []
+
+        if saved_reports:
+            arch_col1, arch_col2 = st.columns([3, 2])
+            with arch_col1:
+                rep_records = []
+                for rf in saved_reports:
+                    mtime_dt = datetime.datetime.fromtimestamp(rf.stat().st_mtime, tz=datetime.timezone.utc)
+                    size_kb = round(rf.stat().st_size / 1024.0, 1)
+                    rep_records.append({
+                        "Filename": rf.name,
+                        "Generated Time (UTC)": mtime_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                        "Size (KB)": f"{size_kb} KB",
+                    })
+                st.dataframe(pd.DataFrame(rep_records), use_container_width=True)
+
+            with arch_col2:
+                st.markdown("**Download a Stored Radar Report:**")
+                sel_file_name = st.selectbox(
+                    "Choose Radar Report to Download",
+                    options=[rf.name for rf in saved_reports],
+                    key=f"sel_download_radar_rep_{selected_period}",
+                )
+                selected_rf = report_dir / sel_file_name
+                if selected_rf.exists():
+                    with open(selected_rf, "r", encoding="utf-8") as f:
+                        file_data = f.read()
+                    st.download_button(
+                        label=f"⬇️ Download {sel_file_name}",
+                        data=file_data,
+                        file_name=sel_file_name,
+                        mime="text/html",
+                        key=f"btn_dl_archive_radar_{sel_file_name}",
+                        type="primary",
+                    )
+        else:
+            st.info("No stored HTML radar resilience reports found in `data/reports/radar_resilience/`. Run a simulation above or via CLI command `flightml radar-resilience` to generate reports.")
+
     def render_ecac_rationalization_section(station_type: str, selected_period: str):
         icon = "📻" if station_type == "DME" else "🛰️"
         name = "DME-DME RNAV" if station_type == "DME" else "Primary & Secondary Radar Surveillance (SSR / Mode S)"
@@ -5684,7 +6044,14 @@ The rationalization engine evaluates DME ground station geometry against officia
         render_ecac_rationalization_section("RADAR", selected_period)
 
     with map_sub_resilience:
-        render_dme_resilience_section(selected_period)
+        res_tab_dme, res_tab_radar = st.tabs([
+            "📻 Terrestrial DME Navigation Resilience",
+            "🛰️ Primary & Secondary Radar Surveillance Resilience",
+        ])
+        with res_tab_dme:
+            render_dme_resilience_section(selected_period)
+        with res_tab_radar:
+            render_radar_resilience_section(selected_period)
 
         # ----------------- TAB 3: Recurring Series & Diurnal Trends -----------------
 
