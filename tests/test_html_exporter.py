@@ -113,3 +113,42 @@ def test_single_flight_page_key_delegation():
     assert "<iframe" in html
     assert "openstreetmap.fr" in html
     assert "Appendix: Comprehensive Mathematical &amp; Atmospheric Physics Methodology" in html
+
+
+def test_ecac_rationalization_html_exports(dataset: FlightDataset):
+    """
+    Verify full HTML exports for ECAC DME and Radar rationalization subtabs:
+    - Preserves interactive Leaflet OpenStreetMap tiles in an isolated iframe srcdoc.
+    - Excludes the deprecated 'Minimum Active Equipment Target' column from the RNAV/RNP table.
+    - Includes KPIs, executive charts, gap-filler/infill tables, and cost/power engineering breakdowns.
+    """
+    # 1. DME Rationalization HTML export
+    html_dme = generate_static_html_report(
+        dataset,
+        page_key="ecac_dme_rationalization",
+        dme_fir="EGTTFIR",
+        dme_view="RNAV_5",
+        dme_fl=200,
+    )
+    assert len(html_dme) > 50000, f"DME HTML export unexpectedly small: {len(html_dme)} bytes"
+    assert "<iframe" in html_dme, "Missing Leaflet map iframe container in DME export"
+    assert "srcdoc=" in html_dme, "Missing srcdoc for preserving interactive map tiles"
+    assert "DME-DME RNAV" in html_dme
+    assert "Minimum Active Equipment Target" not in html_dme, "Found deprecated column in RNAV/RNP description table!"
+    assert "Navigation Performance Standards (RNAV / RNP) Criteria" in html_dme
+    assert "Eurocontrol &amp; ICAO Cost and Power Savings" in html_dme
+
+    # 2. Radar Rationalization HTML export
+    html_radar = generate_static_html_report(
+        dataset,
+        page_key="ecac_radar_rationalization",
+        radar_fir="EGTTFIR",
+        radar_view="VIEW_1",
+        radar_fl=200,
+    )
+    assert len(html_radar) > 50000, f"Radar HTML export unexpectedly small: {len(html_radar)} bytes"
+    assert "<iframe" in html_radar, "Missing Leaflet map iframe container in Radar export"
+    assert "srcdoc=" in html_radar, "Missing srcdoc for preserving interactive map tiles"
+    assert "Radar" in html_radar
+    assert "Eurocontrol &amp; ICAO Cost and Power Savings" in html_radar
+

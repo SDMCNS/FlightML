@@ -481,14 +481,28 @@ def render_page_export_bar(page_key: str, widget_suffix: str) -> None:
                     fra_fuel_opt=float(st.session_state.get("fra_fc_fuel_opt_slider", 1.5)) / 100.0,
                     fra_fuel_med=float(st.session_state.get("fra_fc_fuel_med_slider", 3.5)) / 100.0,
                     fra_fuel_shock=float(st.session_state.get("fra_fc_fuel_shock_slider", 6.5)) / 100.0,
+                    dme_view=str(st.session_state.get(f"dme_ecac_view_{selected_period}", "VIEW_1")),
+                    dme_fir=str(st.session_state.get(f"dme_ecac_fir_{selected_period}", "ALL")),
+                    dme_fl=int(st.session_state.get(f"dme_ecac_fl_{selected_period}", 200)),
+                    dme_inactive_ids=tuple(sorted(st.session_state.get(f"dme_ecac_inact_{selected_period}", []))),
+                    dme_active_ids=tuple(sorted(st.session_state.get(f"dme_ecac_act_{selected_period}", []))),
+                    radar_view=str(st.session_state.get(f"radar_ecac_view_{selected_period}", "VIEW_1")),
+                    radar_fir=str(st.session_state.get(f"radar_ecac_fir_{selected_period}", "ALL")),
+                    radar_fl=int(st.session_state.get(f"radar_ecac_fl_{selected_period}", 200)),
+                    radar_inactive_ids=tuple(sorted(st.session_state.get(f"radar_ecac_inact_{selected_period}", []))),
+                    radar_active_ids=tuple(sorted(st.session_state.get(f"radar_ecac_act_{selected_period}", []))),
                 )
     with c_exp2:
         if state_key in st.session_state:
-            fname = f"flightml_{page_key}_{selected_period}_{active_flight_id}.html"
+            fname = (
+                f"flightml_{page_key}_{selected_period}.html"
+                if "rationalization" in page_key
+                else f"flightml_{page_key}_{selected_period}_{active_flight_id}.html"
+            )
             dl_text = (
                 f"⬇️ Download Comprehensive 4D Flight Report (with Map Tiles & Appendix)"
                 if page_key == "single_flight"
-                else f"⬇️ Download {fname} (Self-Contained HTML + PNGs)"
+                else f"⬇️ Download {fname} (Self-Contained HTML + Interactive Maps)"
             )
             st.download_button(
                 label=dl_text,
@@ -541,10 +555,24 @@ with st.sidebar.expander("📄 Export Static HTML Report (with Images)", expande
                 fra_fuel_opt=float(st.session_state.get("fra_fc_fuel_opt_slider", 1.5)) / 100.0,
                 fra_fuel_med=float(st.session_state.get("fra_fc_fuel_med_slider", 3.5)) / 100.0,
                 fra_fuel_shock=float(st.session_state.get("fra_fc_fuel_shock_slider", 6.5)) / 100.0,
+                dme_view=str(st.session_state.get(f"dme_ecac_view_{selected_period}", "VIEW_1")),
+                dme_fir=str(st.session_state.get(f"dme_ecac_fir_{selected_period}", "ALL")),
+                dme_fl=int(st.session_state.get(f"dme_ecac_fl_{selected_period}", 200)),
+                dme_inactive_ids=tuple(sorted(st.session_state.get(f"dme_ecac_inact_{selected_period}", []))),
+                dme_active_ids=tuple(sorted(st.session_state.get(f"dme_ecac_act_{selected_period}", []))),
+                radar_view=str(st.session_state.get(f"radar_ecac_view_{selected_period}", "VIEW_1")),
+                radar_fir=str(st.session_state.get(f"radar_ecac_fir_{selected_period}", "ALL")),
+                radar_fl=int(st.session_state.get(f"radar_ecac_fl_{selected_period}", 200)),
+                radar_inactive_ids=tuple(sorted(st.session_state.get(f"radar_ecac_inact_{selected_period}", []))),
+                radar_active_ids=tuple(sorted(st.session_state.get(f"radar_ecac_act_{selected_period}", []))),
             )
             st.success("Report ready to download!")
     if sb_state_key in st.session_state:
-        sb_fname = f"flightml_{sb_page_choice}_{selected_period}_{active_flight_id}.html"
+        sb_fname = (
+            f"flightml_{sb_page_choice}_{selected_period}.html"
+            if "rationalization" in sb_page_choice
+            else f"flightml_{sb_page_choice}_{selected_period}_{active_flight_id}.html"
+        )
         st.download_button(
             label=f"⬇️ Download {sb_fname}",
             data=st.session_state[sb_state_key],
@@ -4921,6 +4949,9 @@ with tab_cat_maps:
         )
 
         prefix = station_type.lower()
+        page_key = "ecac_dme_rationalization" if station_type == "DME" else "ecac_radar_rationalization"
+        render_page_export_bar(page_key, f"tab_{prefix}")
+
         view_key = f"{prefix}_ecac_view_{selected_period}"
         fir_key = f"{prefix}_ecac_fir_{selected_period}"
         fl_key = f"{prefix}_ecac_fl_{selected_period}"
@@ -5209,7 +5240,7 @@ with tab_cat_maps:
         st.markdown("---")
         with st.expander("📚 Methodology, Calculations & Cost/Power Savings Rationale", expanded=False):
             st.markdown(
-                """
+                r"""
 #### 💶 Cost & Power Savings Engineering Breakdown
 
 All operational expenditure (OPEX) and electrical energy calculations are grounded in official **Eurocontrol** CNS rationalization specifications and **ICAO Doc 9750** (Global Air Navigation Plan) economic benchmarks.
@@ -5234,12 +5265,12 @@ All operational expenditure (OPEX) and electrical energy calculations are ground
 
 The rationalization engine evaluates DME ground station geometry against official **ICAO Doc 9613** (*PBN Manual*) and **FAA AC 90-100A** standards:
 
-| Navigation Standard | Required Accuracy (TSE 95%) | Siting & Geometry Criteria | Minimum Active Equipment Target |
-| :--- | :--- | :--- | :--- |
-| **RNAV 5** *(B-RNAV)* | $\pm 5.0\text{ NM}$ (En-Route) | $\ge 2$ DMEs with inclusion cut angle $30^\circ \le \Delta\theta \le 150^\circ$, slant range $\le 160\text{ NM}$, $\text{GDOP} \le 2.83$ | En-route upper airspace baseline; $\ge 1$ DME at airports at FL10. |
-| **RNAV 2** | $\pm 2.0\text{ NM}$ (Continental) | $\ge 2$ DMEs with valid pair geometry within $\le 130\text{ NM}$; tighter slant-range threshold | Continental transition; $\ge 2$ DMEs at busy hubs ($\ge 500$ mv/d) at FL10. |
-| **RNAV 1** *(P-RNAV)* | $\pm 1.0\text{ NM}$ (Terminal TMA) | $\mathbf{N-1}$ **Redundancy**: $\ge 3$ DMEs with valid pair geometry within $\le 60\text{ NM}$ (no "Critical DME" single point of failure) | Terminal SIDs/STARs; $\ge 2$ DMEs at all airports at FL10. |
-| **RNP 1** *(Reversionary)* | $\pm 1.0\text{ NM}$ + Alerting | High-integrity multi-DME ($\ge 3\text{--}4$ DMEs with dual independent pairs $\le 40\text{ NM}$) | Multi-sensor FMS reversionary mode when GNSS is lost or jammed. |
+| Navigation Standard | Required Accuracy (TSE 95%) | Siting & Geometry Criteria |
+| :--- | :--- | :--- |
+| **RNAV 5** *(B-RNAV)* | $\pm 5.0\text{ NM}$ (En-Route) | $\ge 2$ DMEs with inclusion cut angle $30^\circ \le \Delta\theta \le 150^\circ$, slant range $\le 160\text{ NM}$, $\text{GDOP} \le 2.83$ |
+| **RNAV 2** | $\pm 2.0\text{ NM}$ (Continental) | $\ge 2$ DMEs with valid pair geometry within $\le 130\text{ NM}$; tighter slant-range threshold |
+| **RNAV 1** *(P-RNAV)* | $\pm 1.0\text{ NM}$ (Terminal TMA) | $\mathbf{N-1}$ **Redundancy**: $\ge 3$ DMEs with valid pair geometry within $\le 60\text{ NM}$ (no "Critical DME" single point of failure) |
+| **RNP 1** *(Reversionary)* | $\pm 1.0\text{ NM}$ + Alerting | High-integrity multi-DME ($\ge 3\text{--}4$ DMEs with dual independent pairs $\le 40\text{ NM}$) |
 
 **Map Performance Grid Color Scheme (10 NM Squares)**:
 - 🟢 **Green (Performance Met)**: All technical criteria (inclusion angle $30^\circ\text{--}150^\circ$, slant range limit, $N-1$ redundancy for RNAV 1) are fully satisfied by active stations.

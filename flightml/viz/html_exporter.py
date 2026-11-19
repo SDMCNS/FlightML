@@ -56,8 +56,10 @@ from flightml.models.airline_stress import stress_test_airline
 from flightml.sim.gdp_optimizer import optimize_ground_delay_program
 from flightml.sim.tail_swap_optimizer import optimize_hub_tail_swaps
 from flightml.sim.what_if import simulate_turnaround_mitigation
+from flightml.eval.ecac_station_rationalization import get_ecac_rationalization_report
 from flightml.viz.map_builder import (
     create_contrail_horizontal_map,
+    create_ecac_coverage_map,
     create_flight_fir_charge_map,
     create_trajectory_map,
 )
@@ -76,6 +78,8 @@ REPORT_PAGE_KEYS = [
     "fra_boundaries",
     "trajectory_rnp",
     "global_navaids",
+    "ecac_dme_rationalization",
+    "ecac_radar_rationalization",
     "flight_performance_eco",
     "vertical_cdo_cco",
     "delay_diagnostics",
@@ -99,6 +103,8 @@ REPORT_PAGE_TITLES: dict[str, str] = {
     "fra_boundaries": "🌐 Free Route Airspace (FRA) Boundary Analysis & Forecaster Report",
     "trajectory_rnp": "🗺️ 4D Trajectory, Active Navaids & RNP Report",
     "global_navaids": "📡 Global Radio Navaids World Map Report",
+    "ecac_dme_rationalization": "📻 ECAC DME-DME RNAV Backup & Rationalization Report",
+    "ecac_radar_rationalization": "🛰️ ECAC Radar Surveillance (SSR/Mode S) Rationalization Report",
     "flight_performance_eco": "📐 Flight Performance, Delay & Eco (€) Report",
     "vertical_cdo_cco": "📉 Vertical Profile & CDO/CCO Analysis Report",
     "delay_diagnostics": "🩺 Delay Diagnostics & Runway Safety Report",
@@ -650,6 +656,276 @@ def _build_global_navaids_section(
         {chart_html}
         <h3>Filtered Global Navaids Station Sample (Top 35 of {len(df):,} Stations)</h3>
         {_df_to_html_table(df, max_rows=35)}
+    </section>
+    """
+
+
+# ---------------------------------------------------------------------------
+# Section 3B: ECAC CNS Infrastructure Rationalization (DME & Radar)
+# ---------------------------------------------------------------------------
+def _build_ecac_rationalization_section(
+    ds: FlightDataset,
+    station_type: str = "DME",
+    active_view: str = "VIEW_1",
+    target_fir: str = "ALL",
+    selected_fl: int = 200,
+    custom_inactive_ids: tuple[str, ...] | None = None,
+    custom_active_ids: tuple[str, ...] | None = None,
+) -> str:
+    try:
+        rep = get_ecac_rationalization_report(
+            ds,
+            station_type=station_type,
+            active_view=active_view,
+            target_fir=target_fir,
+            custom_inactive_ids=custom_inactive_ids,
+            custom_active_ids=custom_active_ids,
+        )
+    except Exception as exc:
+        return f'<section class="report-section"><h2>ECAC {html.escape(station_type)} Rationalization Report</h2><p class="muted-note">Failed to generate report: {html.escape(str(exc))}</p></section>'
+
+    fir_name = rep.get("fir_name", "ECAC Airspace")
+    icon = "📻" if station_type == "DME" else "🛰️"
+    title_tech = "DME-DME RNAV / PBN Coverage Lab" if station_type == "DME" else "Primary & Secondary Radar (SSR/Mode S) Surveillance Lab"
+
+    fl_data = rep["coverage_by_fl"].get(f"fl{selected_fl}", {})
+    total_sta = max(1, rep["total_stations_count"])
+    inact_pct = (rep["deactivated_stations_count"] / total_sta) * 100.0
+
+    if station_type == "DME":
+        met_p = fl_data.get("met_pct", fl_data.get("dual_coverage_pct", 0.0))
+        risk_p = fl_data.get("at_risk_pct", fl_data.get("single_coverage_pct", 0.0))
+        out_p = fl_data.get("outage_pct", 0.0)
+        kpis = [
+            (f"Active {station_type}s", f"{rep['active_stations_count']} / {rep['total_stations_count']}", f"{rep['deactivated_stations_count']} Standby ({inact_pct:.1f}%)"),
+            ("Annual OPEX Savings", f"€{rep['annual_cost_savings_eur']:,.0f}/yr", "O&M Rationalization"),
+            ("Annual Power Savings", f"{rep['annual_power_savings_mwh']:,.0f} MWh/yr", "Grid & Standby Reduction"),
+            (f"FL{selected_fl} Standard Met", f"{met_p:.1f}% (Green)", f"At Risk: {risk_p:.1f}% | Outage: {out_p:.1f}%"),
+            ("Hubs Dual Ground Integrity", f"{rep['high_density_dual_pct']:.1f}%", f"{rep['high_density_dual_target_met_count']} of {rep['high_density_airports_count']} Busy Hubs (≥500 mv/d)"),
+        ]
+    else:
+        dual_p = fl_data.get("dual_coverage_pct", 0.0)
+        sing_p = fl_data.get("single_coverage_pct", 0.0)
+        kpis = [
+            (f"Active {station_type}s", f"{rep['active_stations_count']} / {rep['total_stations_count']}", f"{rep['deactivated_stations_count']} Standby ({inact_pct:.1f}%)"),
+            ("Annual OPEX Savings", f"€{rep['annual_cost_savings_eur']:,.0f}/yr", "O&M Rationalization"),
+            ("Annual Power Savings", f"{rep['annual_power_savings_mwh']:,.0f} MWh/yr", "Grid & Standby Reduction"),
+            (f"FL{selected_fl} Dual Coverage", f"{dual_p:.1f}%", f"Single: {sing_p:.1f}%"),
+            ("Hubs Dual Ground Integrity", f"{rep['high_density_dual_pct']:.1f}%", f"{rep['high_density_dual_target_met_count']} of {rep['high_density_airports_count']} Busy Hubs (≥500 mv/d)"),
+        ]
+
+    # 1. Interactive Folium Map with Leaflet OpenStreetMap Tiles (Preserved)
+    cov_map = create_ecac_coverage_map(
+        rep,
+        selected_fl=selected_fl,
+        show_cells=True,
+        show_stations=True,
+        show_gap_fillers=True,
+        show_hubs=True,
+    )
+    map_html = _folium_map_to_iframe(
+        cov_map,
+        height=560,
+        title=f"{fir_name} {station_type} Coverage & Redundancy Map (FL{selected_fl})"
+    )
+
+    # 2. Executive Matplotlib Overview Chart
+    fig, (ax_cov, ax_sta) = plt.subplots(1, 2, figsize=(14, 5.0), gridspec_kw={"width_ratios": [1.2, 1.0]})
+    fl_levels = [50, 100, 200, 300]
+    fl_labels = [f"FL{fl}" for fl in fl_levels]
+
+    if station_type == "DME":
+        met_vals = [rep["coverage_by_fl"].get(f"fl{fl}", {}).get("met_pct", 0.0) for fl in fl_levels]
+        risk_vals = [rep["coverage_by_fl"].get(f"fl{fl}", {}).get("at_risk_pct", 0.0) for fl in fl_levels]
+        out_vals = [rep["coverage_by_fl"].get(f"fl{fl}", {}).get("outage_pct", 0.0) for fl in fl_levels]
+        ax_cov.bar(fl_labels, met_vals, label="Standard Met (Green)", color="#2ecc71", edgecolor="#27ae60")
+        ax_cov.bar(fl_labels, risk_vals, bottom=met_vals, label="At Risk / Marginal (Orange)", color="#e67e22", edgecolor="#d35400")
+        bottom_out = [m + r for m, r in zip(met_vals, risk_vals)]
+        ax_cov.bar(fl_labels, out_vals, bottom=bottom_out, label="Outage / Gaps (Red)", color="#e74c3c", edgecolor="#c0392b")
+        ax_cov.set_ylabel("Airspace Compliance (% of Grid Cells)")
+        ax_cov.set_title(f"Navigation Performance ({active_view}) by Flight Level", fontweight="bold")
+    else:
+        dual_vals = [rep["coverage_by_fl"].get(f"fl{fl}", {}).get("dual_coverage_pct", 0.0) for fl in fl_levels]
+        sing_vals = [rep["coverage_by_fl"].get(f"fl{fl}", {}).get("single_coverage_pct", 0.0) for fl in fl_levels]
+        ax_cov.bar(fl_labels, dual_vals, label="Dual Coverage (Green)", color="#2ecc71", edgecolor="#27ae60")
+        ax_cov.bar(fl_labels, sing_vals, bottom=dual_vals, label="Single Coverage (Orange)", color="#f39c12", edgecolor="#d68910")
+        ax_cov.set_ylabel("Airspace Coverage (% of Grid Cells)")
+        ax_cov.set_title("Radar Surveillance Coverage by Flight Level", fontweight="bold")
+
+    ax_cov.set_ylim(0, 105)
+    ax_cov.grid(True, axis="y", linestyle="--", alpha=0.4)
+    ax_cov.legend(loc="lower right", fontsize=8.5)
+
+    # Station Inventory Bar Chart
+    sta_cats = ["Active", "Standby", "Total"]
+    sta_vals = [rep["active_stations_count"], rep["deactivated_stations_count"], rep["total_stations_count"]]
+    ax_sta.bar(sta_cats, sta_vals, color=["#3498db", "#95a5a6", "#2c3e50"], edgecolor="#1e272e")
+    for i, v in enumerate(sta_vals):
+        ax_sta.text(i, v + max(1, v * 0.02), f"{v:,}", ha="center", fontweight="bold", fontsize=9.5)
+    ax_sta.set_ylabel("Number of Stations")
+    ax_sta.set_title(f"Station Allocation ({rep['active_stations_count']}/{rep['total_stations_count']} Active)", fontweight="bold")
+    ax_sta.grid(True, axis="y", linestyle="--", alpha=0.4)
+
+    fig.tight_layout()
+    chart_html = _fig_to_base64_img(fig, f"Figure: {station_type} Coverage Compliance & Inventory Allocation Overview")
+
+    # 3. Tables for Infill Facilities & Station Sample
+    adj_html = ""
+    if rep.get("adjacent_fir_infill_suggestions"):
+        adj_df = pd.DataFrame([
+            {
+                "Adjacent Station ID": s["id"],
+                "Station Name": s["name"],
+                "Country": s["country"],
+                "Co-located Airport": s.get("nearest_airport") or "En-Route",
+                "Internal Gap Cells Covered": s.get("cells_covered_count", 0),
+                "Capital Equipment Cost": "€0 (Cross-Border Sharing)",
+            }
+            for s in rep["adjacent_fir_infill_suggestions"]
+        ])
+        adj_html = f"""
+        <h3>🌐 Step 1: Recommended Adjacent FIR Cross-Border Infill Stations (€0 Capital Outlay)</h3>
+        <p class="muted-note">Existing cross-border facilities in line-of-sight capable of bridging internal coverage shortfalls without new hardware purchases.</p>
+        {_df_to_html_table(adj_df, max_rows=25)}
+        """
+
+    gap_html = ""
+    if rep.get("synthetic_gap_fillers"):
+        gap_df = pd.DataFrame([
+            {
+                "Proposed Facility ID": g["id"],
+                "Name / Reference": g["name"],
+                "Latitude": f"{g['latitude']:.3f}°N",
+                "Longitude": f"{g['longitude']:.3f}°E",
+                "Elevation": f"{g['elevation_ft']:.0f} ft",
+                "Target Altitude": f"FL{g['target_flight_level']}",
+                "Nominal Range": f"{g['service_range_nm']:.0f} NM",
+                "Gap Cells Filled": g["cells_covered_count"],
+                "Tactical Siting Rationale": g["region_note"],
+            }
+            for g in rep["synthetic_gap_fillers"]
+        ])
+        gap_html = f"""
+        <h3>💡 Step 2: Proposed New Ground Stations (Strictly Land-Sited)</h3>
+        <p class="muted-note">Optimal facility locations strictly verified on terrestrial land coordinates. Uncoverable deep oceanic airspace cells are not assigned impossible offshore stations.</p>
+        {_df_to_html_table(gap_df, max_rows=25)}
+        """
+
+    sta_sample_df = pd.DataFrame([
+        {
+            "Station ID": s["id"],
+            "Name": s["name"],
+            "Country": s["country"],
+            "Co-located Airport": s["nearest_airport"] if s["is_airport_station"] else "En-Route",
+            "Status": "ACTIVE" if s["is_active"] else "STANDBY (Deactivated)",
+            "Annual Savings (€)": f"€{s['annual_savings_eur']:,}/yr" if not s["is_active"] else "€0 (Active)",
+        }
+        for s in rep["stations"][:35]
+    ])
+    sta_table_html = f"""
+    <h3>📋 {station_type} Station Inventory Sample (Top 35 of {rep['total_stations_count']} Facilities)</h3>
+    {_df_to_html_table(sta_sample_df, max_rows=35)}
+    """
+
+    # 4. Methodology, Standards & Economics
+    standards_rows = ""
+    if station_type == "DME":
+        standards_rows = """
+        <h4>📡 Navigation Performance Standards (RNAV / RNP) Criteria</h4>
+        <div class="table-wrap">
+        <table class="styled-table">
+            <thead>
+                <tr>
+                    <th>Navigation Standard</th>
+                    <th>Required Accuracy (TSE 95%)</th>
+                    <th>Siting &amp; Geometry Criteria</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><b>RNAV 5</b> <i>(B-RNAV)</i></td>
+                    <td>&plusmn;5.0 NM (En-Route)</td>
+                    <td>&ge; 2 DMEs with inclusion cut angle 30&deg; &le; &Delta;&theta; &le; 150&deg;, slant range &le; 160 NM, GDOP &le; 2.83</td>
+                </tr>
+                <tr>
+                    <td><b>RNAV 2</b></td>
+                    <td>&plusmn;2.0 NM (Continental)</td>
+                    <td>&ge; 2 DMEs with valid pair geometry within &le; 130 NM; tighter slant-range threshold</td>
+                </tr>
+                <tr>
+                    <td><b>RNAV 1</b> <i>(P-RNAV)</i></td>
+                    <td>&plusmn;1.0 NM (Terminal TMA)</td>
+                    <td><b>N-1 Redundancy</b>: &ge; 3 DMEs with valid pair geometry within &le; 60 NM (no "Critical DME" single point of failure)</td>
+                </tr>
+                <tr>
+                    <td><b>RNP 1</b> <i>(Reversionary)</i></td>
+                    <td>&plusmn;1.0 NM + Alerting</td>
+                    <td>High-integrity multi-DME (&ge; 3&ndash;4 DMEs with dual independent pairs &le; 40 NM)</td>
+                </tr>
+            </tbody>
+        </table>
+        </div>
+        """
+
+    econ_html = """
+    <h4>💶 Eurocontrol &amp; ICAO Cost and Power Savings Engineering Rationale</h4>
+    <div class="table-wrap">
+    <table class="styled-table">
+        <thead>
+            <tr>
+                <th>Cost / Energy Component</th>
+                <th>Surveillance Radar (PSR/MSSR)</th>
+                <th>Distance Measuring Equipment (DME)</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><b>Annual OPEX Savings</b></td>
+                <td><b>€85,000 / yr per head</b></td>
+                <td><b>€45,000 / yr per station</b></td>
+            </tr>
+            <tr>
+                <td>↳ Preventative &amp; Corrective Maintenance</td>
+                <td>€42,000 / yr</td>
+                <td>€16,000 / yr</td>
+            </tr>
+            <tr>
+                <td>↳ Periodic Airborne Flight Calibration</td>
+                <td>€22,000 / yr</td>
+                <td>€18,000 / yr</td>
+            </tr>
+            <tr>
+                <td>↳ Telecommunications &amp; Site Lease</td>
+                <td>€13,000 / yr</td>
+                <td>€8,000 / yr</td>
+            </tr>
+            <tr>
+                <td>↳ Electrical Energy Utility Cost</td>
+                <td>€8,000 / yr</td>
+                <td>€3,000 / yr</td>
+            </tr>
+            <tr>
+                <td><b>Continuous Power Draw / Annual Energy</b></td>
+                <td><b>15.41 kW (135 MWh/year)</b></td>
+                <td><b>2.85 kW (25 MWh/year)</b></td>
+            </tr>
+        </tbody>
+    </table>
+    </div>
+    """
+
+    return f"""
+    <section class="report-section">
+        <h2>{icon} ECAC {html.escape(title_tech)} — {html.escape(fir_name)}</h2>
+        <p class="muted-note">Evaluated Airspace Domain: <b>{html.escape(fir_name)}</b> | Scenario / View: <b>{html.escape(active_view)}</b> | Altitude: <b>FL{selected_fl} ({selected_fl*100:,} ft)</b></p>
+        {_kpi_grid_html(kpis)}
+        {map_html}
+        {chart_html}
+        {adj_html}
+        {gap_html}
+        {sta_table_html}
+        {standards_rows}
+        {econ_html}
     </section>
     """
 
@@ -2192,6 +2468,16 @@ def generate_static_html_report(
     fra_fuel_opt: float = 0.015,
     fra_fuel_med: float = 0.035,
     fra_fuel_shock: float = 0.065,
+    dme_view: str = "VIEW_1",
+    dme_fir: str = "ALL",
+    dme_fl: int = 200,
+    dme_inactive_ids: tuple[str, ...] | None = None,
+    dme_active_ids: tuple[str, ...] | None = None,
+    radar_view: str = "VIEW_1",
+    radar_fir: str = "ALL",
+    radar_fl: int = 200,
+    radar_inactive_ids: tuple[str, ...] | None = None,
+    radar_active_ids: tuple[str, ...] | None = None,
     output_path: Path | str | None = None,
 ) -> str:
     """
@@ -2296,6 +2582,33 @@ def generate_static_html_report(
                 rec_adep=rec_adep,
                 rec_ades=rec_ades,
                 rec_op=rec_op,
+            )
+        )
+
+    # 8. ECAC CNS Infrastructure Rationalization (DME & Radar)
+    if page_key in ("maps_navigation", "ecac_dme_rationalization", "full_executive_bundle"):
+        sections.append(
+            _build_ecac_rationalization_section(
+                ds,
+                station_type="DME",
+                active_view=dme_view,
+                target_fir=dme_fir,
+                selected_fl=dme_fl,
+                custom_inactive_ids=dme_inactive_ids,
+                custom_active_ids=dme_active_ids,
+            )
+        )
+
+    if page_key in ("maps_navigation", "ecac_radar_rationalization", "full_executive_bundle"):
+        sections.append(
+            _build_ecac_rationalization_section(
+                ds,
+                station_type="RADAR",
+                active_view=radar_view,
+                target_fir=radar_fir,
+                selected_fl=radar_fl,
+                custom_inactive_ids=radar_inactive_ids,
+                custom_active_ids=radar_active_ids,
             )
         )
 
