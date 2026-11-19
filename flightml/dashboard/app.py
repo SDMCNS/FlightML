@@ -154,6 +154,10 @@ from flightml.eval.dme_permutations import (
     generate_dme_resilience_html_report,
     create_dme_resilience_map,
 )
+from flightml.eval.dme_ecac_pipeline import (
+    load_network_evaluations,
+    OUTCOMES_JSONL_PATH,
+)
 from flightml.eval.longitudinal_airspace_modernization import (
     get_vertical_capping_analysis,
     get_fixed_airways_vs_fra_analysis,
@@ -5093,6 +5097,112 @@ with tab_cat_maps:
                     for cs in analysis.critical_stations
                 ]
                 st.dataframe(pd.DataFrame(crit_rows), use_container_width=True)
+
+        # ----------------- PAN-EUROPEAN ECAC NETWORK SUMMARY & MULTI-PERIOD OUTCOMES -----------------
+        st.markdown("---")
+        st.subheader("🇪🇺 Pan-European ECAC Network Outcomes Dataset & Multi-Period Analysis")
+        st.caption(
+            "Empirical results from the sequenced Pan-European ECAC pipeline (executed via CLI `flightml dme-ecac-pipeline`), "
+            "evaluating sovereign FIRs in descending order of traffic density with active machine learning self-reinforcement."
+        )
+
+        net_df = load_network_evaluations()
+        if not net_df.empty:
+            avail_periods = sorted(net_df["period"].unique().tolist())
+            avail_standards = sorted(net_df["target_standard"].unique().tolist())
+
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                filter_period = st.selectbox(
+                    "Filter Evaluation Period",
+                    options=avail_periods,
+                    index=avail_periods.index(selected_period) if selected_period in avail_periods else 0,
+                    key=f"ecac_net_filter_period_{selected_period}",
+                )
+            with col_f2:
+                filter_std = st.selectbox(
+                    "Filter Target Standard",
+                    options=avail_standards,
+                    index=0,
+                    key=f"ecac_net_filter_std_{selected_period}",
+                )
+
+            filtered_df = net_df[(net_df["period"] == filter_period) & (net_df["target_standard"] == filter_std)]
+            if not filtered_df.empty:
+                # Executive continental metrics
+                tot_base = filtered_df["baseline_dmes"].sum()
+                tot_act = filtered_df["optimal_active_dmes"].sum()
+                tot_cut = filtered_df["decommissioned_dmes"].sum()
+                cut_pct = round((tot_cut / max(1, tot_base)) * 100.0, 1)
+                tot_ann_sav = filtered_df["annual_savings_eur"].sum()
+                tot_pri_del = filtered_df["primary_delay_minutes"].sum()
+                tot_rot_del = filtered_df["reactionary_delay_minutes"].sum()
+                tot_canc = filtered_df["cancellation_risks_count"].sum()
+
+                ec1, ec2, ec3, ec4 = st.columns(4)
+                ec1.metric("ECAC DMEs Rationalized", f"{tot_cut} / {tot_base} DMEs", f"-{cut_pct}% equipment reduction")
+                ec2.metric("Annualized ANSP OPEX Savings", f"€{tot_ann_sav/1e6:,.2f}M / yr", f"Across {len(filtered_df)} sovereign FIRs")
+                ec3.metric("Tactical & Rotational Delay", f"+{tot_pri_del:,.0f}m pri | +{tot_rot_del:,.0f}m rot", f"{filtered_df['flights_simulated'].sum():,} flights simulated")
+                ec4.metric("Rotational Cancellations", f"{tot_canc} flights", f"{filtered_df['curfew_breaches_count'].sum()} curfew breaches")
+
+                # Interactive chart: Equipment Rationalization by FIR
+                chart_df = filtered_df.sort_values(by="traffic_monthly_moves", ascending=False).copy()
+                st.markdown("##### 📊 Ground Transponder Posture by FIR (Ranked by Traffic Density)")
+                chart_data = []
+                for _, r in chart_df.iterrows():
+                    chart_data.append({"FIR": r["fir_id"], "Count": r["optimal_active_dmes"], "Status": "Active Core DMEs"})
+                    chart_data.append({"FIR": r["fir_id"], "Count": r["decommissioned_dmes"], "Status": "Standby / Decommissioned"})
+                c_df = pd.DataFrame(chart_data)
+                bar_chart = alt.Chart(c_df).mark_bar().encode(
+                    x=alt.X("FIR:N", sort=None, title="Sovereign ECAC FIR (Descending Traffic)"),
+                    y=alt.Y("Count:Q", title="Number of High-Power DMEs"),
+                    color=alt.Color("Status:N", scale=alt.Scale(domain=["Active Core DMEs", "Standby / Decommissioned"], range=["#10b981", "#ef4444"])),
+                    tooltip=["FIR", "Status", "Count"],
+                ).properties(height=320)
+                st.altair_chart(bar_chart, use_container_width=True)
+
+                # Filtered Data Table
+                st.markdown("##### 📋 FIR-by-FIR Evaluation Outcomes Table")
+                disp_cols = [
+                    "rank_by_traffic", "fir_id", "fir_name", "traffic_monthly_moves", "baseline_dmes",
+                    "optimal_active_dmes", "equipment_reduction_pct", "coverage_compliance_pct",
+                    "annual_savings_eur", "primary_delay_minutes", "reactionary_delay_minutes",
+                    "cancellation_risks_count", "fir_report_path"
+                ]
+                st.dataframe(
+                    filtered_df[disp_cols].rename(columns={
+                        "rank_by_traffic": "Rank",
+                        "fir_id": "FIR Code",
+                        "fir_name": "FIR Name",
+                        "traffic_monthly_moves": "Monthly Moves",
+                        "baseline_dmes": "Base DMEs",
+                        "optimal_active_dmes": "Active DMEs",
+                        "equipment_reduction_pct": "Cut %",
+                        "coverage_compliance_pct": "Coverage %",
+                        "annual_savings_eur": "Annual Savings (€)",
+                        "primary_delay_minutes": "Primary Delay (min)",
+                        "reactionary_delay_minutes": "React. Delay (min)",
+                        "cancellation_risks_count": "Canc. Risk",
+                        "fir_report_path": "HTML Report",
+                    }),
+                    use_container_width=True,
+                )
+
+                # Download dataset button
+                if OUTCOMES_JSONL_PATH.exists():
+                    with open(OUTCOMES_JSONL_PATH, "r", encoding="utf-8") as jf:
+                        jsonl_bytes = jf.read().encode("utf-8")
+                    st.download_button(
+                        label="⬇️ Download Complete Outcomes Dataset (JSONL)",
+                        data=jsonl_bytes,
+                        file_name="ecac_network_evaluations.jsonl",
+                        mime="application/jsonlines",
+                        key=f"dl_outcomes_jsonl_{selected_period}",
+                    )
+            else:
+                st.info(f"No evaluation outcomes found for Period {filter_period} ({filter_std}). Run CLI command `flightml dme-ecac-pipeline --period {filter_period}`.")
+        else:
+            st.info("No Pan-European outcomes recorded yet. Run `flightml dme-ecac-pipeline` via the CLI to populate this dataset.")
 
         # ----------------- STORED REPORTS ARCHIVE & DOWNLOAD SECTION -----------------
         st.markdown("---")

@@ -3915,5 +3915,136 @@ def cli_dme_resilience(
     )
 
 
+@app.command(name="dme-ecac-pipeline")
+def dme_ecac_pipeline_cmd(
+    period: str = typer.Option("202510", help="Data cycle period to evaluate (e.g. 202510, 202402, 201611)"),
+    standard: str = typer.Option("RNAV_5", help="Target navigation specification (RNAV_5, RNAV_2, RNAV_1, RNP_1)"),
+    max_firs: Optional[int] = typer.Option(None, help="Limit number of top ECAC FIRs to evaluate in traffic-descending order"),
+    max_permutations: int = typer.Option(5, help="Number of permutations per FIR (default: 5)"),
+) -> None:
+    """
+    Execute the Pan-European ECAC DME resilience evaluation pipeline across sovereign FIRs
+    in descending order of traffic density, transferring learned knowledge across borders
+    and generating individual FIR reports plus a unified Pan-European summary report.
+    """
+    from flightml.eval.dme_ecac_pipeline import run_ecac_dme_pipeline, get_ranked_ecac_firs, OUTCOMES_JSONL_PATH
+
+    console.print(
+        Panel(
+            f"[bold blue]🇪🇺 FlightML Pan-European ECAC Resilience & Rationalization Pipeline[/bold blue]\n\n"
+            f"[dim]Target Standard:[/dim] [bold yellow]{standard}[/bold yellow]  |  "
+            f"[dim]Data Cycle:[/dim] [bold cyan]{period}[/bold cyan]  |  "
+            f"[dim]Max FIRs Limit:[/dim] [bold]{max_firs if max_firs else 'All Sovereign ECAC FIRs'}[/bold]\n"
+            f"[dim]Sequencing:[/dim] Busiest FIR &rarr; Descending Traffic Order with Active ML Self-Reinforcement",
+            title="🌐 [bold]Multi-FIR Continental Navigation Optimization[/bold]",
+            border_style="blue",
+        )
+    )
+
+    with console.status("[bold green]Loading Eurocontrol flight datasets and ranking ECAC FIRs by traffic...", spinner="dots"):
+        dataset = FlightDataset(period=period)
+        ranked = get_ranked_ecac_firs(dataset, period=period)
+
+    target_firs = ranked[:max_firs] if max_firs and max_firs > 0 else ranked
+
+    t_rank = Table(title="📋 ECAC Sovereign FIRs Sequenced by Traffic Density", border_style="cyan")
+    t_rank.add_column("Rank", justify="center", style="bold")
+    t_rank.add_column("FIR Code", style="bold cyan")
+    t_rank.add_column("FIR Name", style="white")
+    t_rank.add_column("Monthly Flight Moves", justify="right", style="green")
+    t_rank.add_column("High-Power DMEs", justify="right", style="yellow")
+
+    for idx, f_item in enumerate(target_firs, start=1):
+        t_rank.add_row(
+            f"#{idx}",
+            f_item["fir_id"],
+            f_item["fir_name"],
+            f"{f_item['traffic_moves']:,}",
+            f"{f_item['dme_count']} stations",
+        )
+    console.print(t_rank)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("[bold cyan]Evaluating ECAC FIRs...", total=len(target_firs))
+
+        def _on_progress(curr: int, tot: int, fir_label: str) -> None:
+            progress.update(task, completed=curr - 1, description=f"[bold cyan]Evaluating FIR #{curr}/{tot}: {fir_label}")
+
+        pipeline_res = run_ecac_dme_pipeline(
+            dataset=dataset,
+            period=period,
+            target_standard=standard,
+            max_firs=max_firs,
+            max_permutations_per_fir=max_permutations,
+            progress_callback=_on_progress,
+        )
+        progress.update(task, completed=len(target_firs), description="[bold green]✓ Pan-European Evaluation Complete!")
+
+    fir_analyses = pipeline_res["fir_analyses"]
+    summary_report = pipeline_res["summary_report_path"]
+
+    # Comparative Table
+    t_summary = Table(title=f"📊 Pan-European Rationalization & Resilience Summary ({standard} - Period {period})", border_style="green")
+    t_summary.add_column("Rank", justify="center")
+    t_summary.add_column("FIR", style="bold")
+    t_summary.add_column("Traffic", justify="right", style="dim")
+    t_summary.add_column("DME Count", justify="right")
+    t_summary.add_column("Reduction", justify="right", style="bold green")
+    t_summary.add_column("Compliance", justify="right")
+    t_summary.add_column("Annual Savings", justify="right", style="bold green")
+    t_summary.add_column("Primary Del.", justify="right", style="yellow")
+    t_summary.add_column("Knock-On Del.", justify="right", style="red")
+    t_summary.add_column("Canc. Risk", justify="center")
+
+    total_sav = 0.0
+    for idx, a in enumerate(fir_analyses, start=1):
+        opt = a.optimal_permutation
+        act_cnt = opt.active_count if opt else a.baseline_station_count
+        dis_cnt = a.baseline_station_count - act_cnt
+        red_pct = round((dis_cnt / max(1, a.baseline_station_count)) * 100.0, 1)
+        cov_pct = opt.coverage_coverable_pct if opt else 100.0
+        ann_sav = dis_cnt * 45000.0
+        total_sav += ann_sav
+        sim = a.traffic_simulation
+        pri_d = f"+{sim.total_primary_delay_min:,.0f}m" if sim else "0m"
+        react_d = f"+{sim.total_reactionary_delay_min:,.0f}m" if sim else "0m"
+        canc_str = f"[bold red]{sim.cancellation_risk_count}[/bold red]" if sim and sim.cancellation_risk_count > 0 else "[green]0[/green]"
+
+        t_summary.add_row(
+            f"#{idx}",
+            a.fir_id,
+            f"{a.traffic_month_total:,}",
+            f"{act_cnt}/{a.baseline_station_count}",
+            f"{red_pct:.1f}%",
+            f"{cov_pct:.1f}%",
+            f"€{ann_sav:,.0f}/yr",
+            pri_d,
+            react_d,
+            canc_str,
+        )
+
+    console.print(t_summary)
+
+    console.print(
+        Panel(
+            f"[bold green]✓ Pan-European ECAC Summary Report Successfully Stored:[/bold green]\n"
+            f"[link=file:///{summary_report.as_posix()}]{summary_report.as_posix()}[/link]\n\n"
+            f"[dim]Total Evaluated FIRs: [bold]{len(fir_analyses)}[/bold]  |  "
+            f"Aggregated Annualized ANSP Savings: [bold green]€{total_sav/1e6:,.2f}M / year[/bold green]\n"
+            f"Persistent Outcomes Dataset Updated: [bold]{OUTCOMES_JSONL_PATH.as_posix()}[/bold]\n"
+            f"Viewable and downloadable directly in the Streamlit Dashboard under Navigation > DME Resilience Reports.[/dim]",
+            title="🇪🇺 [bold]ECAC Resilience Pipeline Execution Complete[/bold]",
+            border_style="green",
+        )
+    )
+
+
 if __name__ == "__main__":
     app()
