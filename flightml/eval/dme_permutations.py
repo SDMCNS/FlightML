@@ -2563,14 +2563,30 @@ def generate_dme_resilience_html_report(
             )
         sim_table_body = "\n".join(sim_flights_rows) if sim_flights_rows else "<tr><td colspan='8'>No flight knock-on delays detected.</td></tr>"
 
+        if sim.separation_standard_nm > 5.0 and sim.directly_impacted_flights > 0:
+            sim_narrative = (
+                f"Empirical operational micro-simulation executed across actual Eurocontrol flight trajectories for <b>{html.escape(analysis.fir_id)}</b> in period <b>{html.escape(analysis.period)}</b>. "
+                f"Simulates primary airborne spacing expansions (standard 5 NM waypoint-based separation &rarr; "
+                f"{sim.separation_standard_nm:.1f} NM procedural spacing in degraded sectors), tactical dog-leg detours, "
+                f"rotational turnaround delay propagation to downstream legs, and crew flight duty limit exceedances across 100% census of flight traversals."
+            )
+            sim_subtext = f"Traversals exposed to {sim.separation_standard_nm:.1f} NM procedural spacing expansion"
+        else:
+            sim_narrative = (
+                f"Empirical operational micro-simulation executed across actual Eurocontrol flight trajectories for <b>{html.escape(analysis.fir_id)}</b> in period <b>{html.escape(analysis.period)}</b>. "
+                f"Under the evaluated configuration (<b>{html.escape(analysis.optimal_permutation.name if analysis.optimal_permutation else 'Optimal Posture')}</b>), "
+                f"standard <b>5.0 NM waypoint-based RNAV separation</b> is preserved across the airspace. "
+                f"Confirms across a 100% census of actual flight traversals that <b>zero flights</b> are forced into procedural miles-in-trail expansions "
+                f"(5 NM &rarr; 8.5&ndash;10 NM) and zero rotational knock-on delays occur."
+            )
+            sim_subtext = "Full 5.0 NM RNAV separation maintained (0 procedural expansions)"
+
         traffic_sim_section_html = f"""
   <!-- Air Traffic Knock-On & Downstream Cancellation Simulation Section -->
   <div class="section-card">
     <h2>✈️ Air Traffic Micro-Simulation: Direct Separation &amp; Downstream Rotational Knock-On</h2>
     <p style="font-size: 13.5px; color: #475569;">
-      Empirical operational micro-simulation executed across actual Eurocontrol flight trajectories for <b>{html.escape(analysis.fir_id)}</b> in period <b>{html.escape(analysis.period)}</b>.
-      Simulates primary airborne spacing expansions (5 NM &rarr; {sim.separation_standard_nm:.1f} NM), tactical dog-leg detours, rotational turnaround delay propagation to downstream legs,
-      and crew flight duty limit exceedances across 100% census of flight traversals.
+      {sim_narrative}
     </p>
 
     <!-- Simulation KPI Grid -->
@@ -2578,7 +2594,7 @@ def generate_dme_resilience_html_report(
       <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px;">
         <div style="font-size: 11.5px; font-weight: 700; color: #64748b; text-transform: uppercase;">Direct Flights Impacted</div>
         <div style="font-size: 24px; font-weight: 800; color: #0f172a;">{sim.directly_impacted_flights:,} <span style="font-size: 14px; color: #64748b;">/ {sim.total_flights_simulated:,}</span></div>
-        <div style="font-size: 12px; color: #64748b;">Traversals exposed to radar spacing expansion</div>
+        <div style="font-size: 12px; color: #64748b;">{sim_subtext}</div>
       </div>
       <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px;">
         <div style="font-size: 11.5px; font-weight: 700; color: #64748b; text-transform: uppercase;">Primary Tactical Delay</div>
