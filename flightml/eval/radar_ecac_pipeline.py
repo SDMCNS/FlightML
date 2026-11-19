@@ -128,19 +128,36 @@ def get_ranked_radar_firs(
 
 
 def record_radar_network_evaluation(record: dict[str, Any], path: Path = RADAR_OUTCOMES_JSONL_PATH) -> None:
-    """Append a completed Radar FIR evaluation outcome to the persistent JSONL dataset."""
+    """Upsert a completed Radar FIR evaluation outcome to the persistent JSONL dataset."""
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(record) + "\n")
+    existing: list[dict[str, Any]] = []
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        existing.append(json.loads(line))
+        except Exception:
+            pass
+
+    key = (record.get("period"), record.get("target_standard"), record.get("fir_id"))
+    updated = False
+    for i, r in enumerate(existing):
+        if (r.get("period"), r.get("target_standard"), r.get("fir_id")) == key:
+            existing[i] = record
+            updated = True
+            break
+    if not updated:
+        existing.append(record)
+
+    with open(path, "w", encoding="utf-8") as f:
+        for r in existing:
+            f.write(json.dumps(r) + "\n")
 
     try:
-        rows = []
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    rows.append(json.loads(line))
-        if rows:
-            df = pd.DataFrame(rows)
+        if existing:
+            df = pd.DataFrame(existing)
             df.to_parquet(RADAR_OUTCOMES_PARQUET_PATH, index=False)
     except Exception:
         pass

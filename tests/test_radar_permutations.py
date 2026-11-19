@@ -178,6 +178,7 @@ def test_cli_radar_ecac_pipeline():
     assert res.exit_code == 0
     assert "Pan-European Radar Surveillance Resilience Summary" in res.stdout
     assert "ECAC Radar Resilience Pipeline Execution Complete" in res.stdout
+    Path("data/reports/radar_resilience/ecac_radar_summary_report_202510_VIEW_1.html").unlink(missing_ok=True)
 
 
 def test_joint_cns_surveillance_compensation(dataset, tmp_path):

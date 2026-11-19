@@ -111,20 +111,37 @@ def get_ranked_ecac_firs(
 
 
 def record_network_evaluation(record: dict[str, Any], path: Path = OUTCOMES_JSONL_PATH) -> None:
-    """Append a completed FIR evaluation outcome to the persistent JSONL dataset."""
+    """Upsert a completed FIR evaluation outcome to the persistent JSONL dataset."""
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(record) + "\n")
+    existing: list[dict[str, Any]] = []
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        existing.append(json.loads(line))
+        except Exception:
+            pass
+
+    key = (record.get("period"), record.get("target_standard"), record.get("fir_id"))
+    updated = False
+    for i, r in enumerate(existing):
+        if (r.get("period"), r.get("target_standard"), r.get("fir_id")) == key:
+            existing[i] = record
+            updated = True
+            break
+    if not updated:
+        existing.append(record)
+
+    with open(path, "w", encoding="utf-8") as f:
+        for r in existing:
+            f.write(json.dumps(r) + "\n")
 
     # Optionally update parquet snapshot
     try:
-        rows = []
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    rows.append(json.loads(line))
-        if rows:
-            df = pd.DataFrame(rows)
+        if existing:
+            df = pd.DataFrame(existing)
             df.to_parquet(OUTCOMES_PARQUET_PATH, index=False)
     except Exception:
         pass
@@ -539,9 +556,9 @@ def generate_ecac_summary_report(
   <!-- Executive Continental KPIs -->
   <div class="kpi-grid">
     <div class="kpi-card">
-      <div class="kpi-label">Pan-European Rationalization</div>
-      <div class="kpi-value" style="color: #16a34a;">{total_standby_dmes} <span style="font-size: 16px; color: #64748b;">/ {total_baseline_dmes} FIR Allocations</span></div>
-      <div class="kpi-desc">Decommissions {overall_reduction_pct}% of sovereign FIR allocations with zero terminal degradation</div>
+      <div class="kpi-label">Pan-European Equipment Rationalization</div>
+      <div class="kpi-value" style="color: #16a34a;">{total_standby_dmes} <span style="font-size: 16px; color: #64748b;">/ {total_baseline_dmes} DME Beacons</span></div>
+      <div class="kpi-desc">Places {overall_reduction_pct}% of evaluated DME transponders on standby ({total_active_dmes} active core retained) with zero terminal degradation</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">Annualized ANSP OPEX Savings</div>
@@ -556,7 +573,7 @@ def generate_ecac_summary_report(
     <div class="kpi-card">
       <div class="kpi-label">Cross-Border Harmonized Beacons</div>
       <div class="kpi-value" style="color: #2563eb;">{len(harmonized_network_state):,} <span style="font-size: 16px; color: #64748b;">Unique DMEs</span></div>
-      <div class="kpi-desc">Synchronized across 38 FIRs (de-duplicating UIR/FIR vertical overlays) with zero cross-border conflicts</div>
+      <div class="kpi-desc">Synchronized across sovereign FIRs in the Pan-European network registry with zero cross-border conflicts</div>
     </div>
   </div>
 

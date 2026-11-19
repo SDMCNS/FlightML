@@ -63,9 +63,11 @@ def test_run_ecac_dme_pipeline_subset(dataset):
         max_permutations_per_fir=3,
     )
     assert res["total_firs_evaluated"] == 2
-    assert Path(res["summary_report_path"]).exists()
-    assert Path(res["summary_report_path"]).stat().st_size > 20_000
+    summary_path = Path(res["summary_report_path"])
+    assert summary_path.exists()
+    assert summary_path.stat().st_size > 20_000
     assert len(res["fir_report_paths"]) == 2
+    summary_path.unlink(missing_ok=True)
 
 
 def test_cli_dme_ecac_pipeline():
@@ -83,5 +85,6 @@ def test_cli_dme_ecac_pipeline():
     assert result.exit_code == 0
     assert "Pan-European ECAC Resilience & Rationalization Pipeline" in result.output
     assert "ECAC Sovereign FIRs Sequenced by Traffic Density" in result.output
+    Path("data/reports/dme_resilience/ecac_summary_report_202510_RNAV_5.html").unlink(missing_ok=True)
     assert "Pan-European Evaluation Complete" in result.output
     assert "ECAC Resilience Pipeline Execution Complete" in result.output
