@@ -29,6 +29,9 @@ from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostin
 EXPERIENCE_STORE_PATH = Path("data/reports/dme_resilience/experience_store.jsonl")
 CROSS_FIR_STATE_PATH = Path("data/reports/dme_resilience/cross_fir_network_state.json")
 
+RADAR_EXPERIENCE_STORE_PATH = Path("data/reports/radar_resilience/experience_store.jsonl")
+RADAR_CROSS_FIR_STATE_PATH = Path("data/reports/radar_resilience/cross_fir_network_state.json")
+
 
 @dataclass
 class DMEExperienceSample:
@@ -265,3 +268,17 @@ class DMESelfReinforcingLearner:
             "feature_set": self._feature_names,
             "learning_paradigm": "Self-Reinforcing Multi-Task Gradient Boosting (Classification + Disruption Regressor)",
         }
+
+
+class RadarSelfReinforcingLearner(DMESelfReinforcingLearner):
+    """
+    Self-reinforcing meta-learner for surveillance radar networks.
+    Stores and synchronizes radar experiences strictly under data/reports/radar_resilience/.
+    """
+
+    def __init__(
+        self,
+        experience_path: Path | str = RADAR_EXPERIENCE_STORE_PATH,
+        cross_fir_state_path: Path | str = RADAR_CROSS_FIR_STATE_PATH,
+    ) -> None:
+        super().__init__(experience_path=experience_path, cross_fir_state_path=cross_fir_state_path)

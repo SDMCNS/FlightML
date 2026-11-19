@@ -42,7 +42,7 @@ from flightml.eval.radar_permutations import (
     generate_radar_resilience_html_report,
     RadarFIRResilienceAnalysis,
 )
-from flightml.eval.dme_learning import DMESelfReinforcingLearner
+from flightml.eval.dme_learning import RadarSelfReinforcingLearner
 from flightml.viz.html_exporter import _folium_map_to_iframe
 
 RADAR_OUTCOMES_JSONL_PATH = Path("data/reports/radar_resilience/ecac_radar_network_evaluations.jsonl")

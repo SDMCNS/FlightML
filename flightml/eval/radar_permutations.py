@@ -46,7 +46,7 @@ from flightml.eval.ecac_station_rationalization import (
     RADAR_POWER_DRAW_KW,
     RADAR_ANNUAL_POWER_MWH,
 )
-from flightml.eval.dme_learning import DMESelfReinforcingLearner
+from flightml.eval.dme_learning import RadarSelfReinforcingLearner
 from flightml.eval.dme_permutations import (
     WindowCostBreakdown,
     SimulatedFlightKnockOn,
@@ -793,7 +793,7 @@ def simulate_radar_permutations(
         net_state: dict[str, Any] = {}
         if external_active_station_ids is None:
             try:
-                learner = DMESelfReinforcingLearner()
+                learner = RadarSelfReinforcingLearner()
                 net_state = learner.load_cross_fir_network_state()
                 active_ext_ids = {
                     sid for sid, info in net_state.items()
@@ -1332,7 +1332,7 @@ def simulate_radar_permutations(
     )
 
     try:
-        learner = DMESelfReinforcingLearner()
+        learner = RadarSelfReinforcingLearner()
         learner.record_assessment(
             fir_id=fir_id,
             target_standard=target_standard,

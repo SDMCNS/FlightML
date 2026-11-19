@@ -540,8 +540,8 @@ def generate_ecac_summary_report(
   <div class="kpi-grid">
     <div class="kpi-card">
       <div class="kpi-label">Pan-European Rationalization</div>
-      <div class="kpi-value" style="color: #16a34a;">{total_standby_dmes} <span style="font-size: 16px; color: #64748b;">/ {total_baseline_dmes} DMEs</span></div>
-      <div class="kpi-desc">Decommissions {overall_reduction_pct}% of evaluated transponders with zero terminal degradation</div>
+      <div class="kpi-value" style="color: #16a34a;">{total_standby_dmes} <span style="font-size: 16px; color: #64748b;">/ {total_baseline_dmes} FIR Allocations</span></div>
+      <div class="kpi-desc">Decommissions {overall_reduction_pct}% of sovereign FIR allocations with zero terminal degradation</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">Annualized ANSP OPEX Savings</div>
@@ -555,8 +555,8 @@ def generate_ecac_summary_report(
     </div>
     <div class="kpi-card">
       <div class="kpi-label">Cross-Border Harmonized Beacons</div>
-      <div class="kpi-value" style="color: #2563eb;">{len(harmonized_network_state):,}</div>
-      <div class="kpi-desc">Synchronized in Pan-European Network Registry with zero cross-border conflicts</div>
+      <div class="kpi-value" style="color: #2563eb;">{len(harmonized_network_state):,} <span style="font-size: 16px; color: #64748b;">Unique DMEs</span></div>
+      <div class="kpi-desc">Synchronized across 38 FIRs (de-duplicating UIR/FIR vertical overlays) with zero cross-border conflicts</div>
     </div>
   </div>
 
