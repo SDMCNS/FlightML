@@ -705,7 +705,10 @@ def run_ecac_radar_pipeline(
                 "fir_report_path": rep_path.name,
                 "evaluated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
             }
-            record_radar_network_evaluation(rec)
+            try:
+                record_radar_network_evaluation(rec)
+            except Exception:
+                pass
 
             # Persist structured FIR configuration dataset for experimentation & dashboard loading
             try:

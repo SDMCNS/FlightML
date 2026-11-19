@@ -174,7 +174,7 @@ def test_cli_radar_resilience_valid_and_invalid():
 
 def test_cli_radar_ecac_pipeline():
     """Verify CLI radar-ecac-pipeline command executes correctly with max-firs constraint."""
-    res = runner.invoke(app, ["radar-ecac-pipeline", "--max-firs", "2", "--max-permutations", "2"])
+    res = runner.invoke(app, ["radar-ecac-pipeline", "--period", "202510", "--standard", "VIEW_1", "--max-firs", "2", "--max-permutations", "2"])
     assert res.exit_code == 0
     assert "Pan-European Radar Surveillance Resilience Summary" in res.stdout
     assert "ECAC Radar Resilience Pipeline Execution Complete" in res.stdout
