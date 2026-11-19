@@ -1586,12 +1586,16 @@ def simulate_dme_permutations(
             is_valid = False
             reasons = []
             if cov_coverable_pct < 85.0:
-                reasons.append(f"Severe en-route coverage deficit ({cov_coverable_pct}% < 85%)")
+                reasons.append(f"severe en-route coverage deficit ({cov_coverable_pct}% < 85%)")
             if len(degraded_apts) > 0:
                 reasons.append(f"{len(degraded_apts)} airport(s) lose required dual-DME FL10 redundancy ({', '.join(degraded_apts[:3])})")
             if day_net > 0:
-                reasons.append(f"Net operational penalty of +€{day_net:,.0f}/day (+€{windows['1h'].net_economic_impact_eur:,.0f}/h)")
-            rationale = "Rejected: " + "; ".join(reasons) + "."
+                reasons.append(f"net operational penalty of +€{day_net:,.0f}/day (+€{windows['1h'].net_economic_impact_eur:,.0f}/h)")
+            if p_cat == "SINGLE_OUTAGE":
+                out_id = next(iter(dis_ids)) if len(dis_ids) == 1 else "station"
+                rationale = f"N-1 Outage Sensitivity Test: Proves [{out_id}] is an essential non-decommissionable station; its outage causes " + "; ".join(reasons) + "."
+            else:
+                rationale = "Rejected: " + "; ".join(reasons) + "."
 
         results.append(
             DMEPermutationResult(
@@ -2949,10 +2953,19 @@ def generate_dme_resilience_html_report(
   <!-- Permutations Comparison Table -->
   <div class="section-card">
     <h2>📊 Permutation Performance &amp; Operational Window Costs</h2>
-    <p style="font-size: 13.5px; color: #475569;">
+    <p style="font-size: 13.5px; color: #475569; margin-bottom: 8px;">
       Comprehensive evaluation of all tested station configurations. Economic figures show net cost impact
       (<b>green negative values indicate net airline &amp; ANSP financial savings</b>; red positive values indicate operational delay penalties).
     </p>
+
+    <!-- Context Explanation Callout -->
+    <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-left: 4px solid #2563eb; border-radius: 6px; padding: 10px 14px; margin: 10px 0 16px 0; font-size: 12.5px; color: #334155; line-height: 1.5;">
+      <b>Understanding Permutation Categories &amp; Location Criticality:</b>
+      <ul style="margin: 4px 0 0 18px; padding: 0;">
+        <li><b>Rationalized Core Configurations:</b> Strategic candidate postures designed to safely deactivate <i>only confirmed multi-station overlapping backups</i>, maintaining 100% PBN compliance and 0 degraded airports.</li>
+        <li><b>Single Outage (N-1) Stress Tests:</b> Deliberate sensitivity tests simulating the loss of <i>one specific ground beacon</i> from the baseline. If deactivating a single station causes airport deficits, this mathematically proves that station is an irreplaceable linchpin that <b>must be kept active</b> in the optimal core.</li>
+      </ul>
+    </div>
     <div style="overflow-x: auto;">
       <table>
         <thead>
