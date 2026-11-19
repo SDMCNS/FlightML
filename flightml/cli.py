@@ -3977,7 +3977,7 @@ def dme_ecac_pipeline_cmd(
             f"[dim]Target Standard:[/dim] [bold yellow]{standard}[/bold yellow]  |  "
             f"[dim]Data Cycle:[/dim] [bold cyan]{period}[/bold cyan]  |  "
             f"[dim]Max FIRs Limit:[/dim] [bold]{max_firs if max_firs else 'All Sovereign ECAC FIRs'}[/bold]\n"
-            f"[dim]Sequencing:[/dim] Busiest FIR &rarr; Descending Traffic Order with Active ML Self-Reinforcement",
+            f"[dim]Sequencing:[/dim] Busiest FIR &rarr; Descending Traffic Order with Cross-Border DME Cascading & ML Self-Reinforcement",
             title="🌐 [bold]Multi-FIR Continental Navigation Optimization[/bold]",
             border_style="blue",
         )
@@ -4038,6 +4038,7 @@ def dme_ecac_pipeline_cmd(
     t_summary.add_column("FIR", style="bold")
     t_summary.add_column("Traffic", justify="right", style="dim")
     t_summary.add_column("DME Count", justify="right")
+    t_summary.add_column("Cascaded Infill", justify="center", style="cyan")
     t_summary.add_column("Reduction", justify="right", style="bold green")
     t_summary.add_column("Compliance", justify="right")
     t_summary.add_column("Annual Savings", justify="right", style="bold green")
@@ -4058,12 +4059,15 @@ def dme_ecac_pipeline_cmd(
         pri_d = f"+{sim.total_primary_delay_min:,.0f}m" if sim else "0m"
         react_d = f"+{sim.total_reactionary_delay_min:,.0f}m" if sim else "0m"
         canc_str = f"[bold red]{sim.cancellation_risk_count}[/bold red]" if sim and sim.cancellation_risk_count > 0 else "[green]0[/green]"
+        casc_cnt = len(a.cascaded_adjacent_stations) if getattr(a, "cascaded_adjacent_stations", None) else 0
+        casc_str = f"[cyan]+{casc_cnt}[/cyan]" if casc_cnt > 0 else "[dim]0[/dim]"
 
         t_summary.add_row(
             f"#{idx}",
             a.fir_id,
             f"{a.traffic_month_total:,}",
             f"{act_cnt}/{a.baseline_station_count}",
+            casc_str,
             f"{red_pct:.1f}%",
             f"{cov_pct:.1f}%",
             f"€{ann_sav:,.0f}/yr",

@@ -340,6 +340,8 @@ def generate_ecac_summary_report(
 
     firs_table_html = "\n".join(table_rows)
 
+    total_cascaded_links = sum(len(a.cascaded_adjacent_stations) for a in fir_analyses if getattr(a, 'cascaded_adjacent_stations', None))
+
     full_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -614,6 +616,12 @@ def generate_ecac_summary_report(
           Meta-models pre-screen candidate subsets in subsequent FIRs, reducing permutation evaluation time by &gt;70% while improving Pareto frontier optimality.
         </div>
       </div>
+      <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px;">
+        <div style="font-weight: 700; color: #0f172a; margin-bottom: 4px;">4. Active Navaid Priority Cascading</div>
+        <div style="font-size: 12.5px; color: #475569;">
+          Cascaded <b>{total_cascaded_links:,} active border transponder compensations</b> from busier core FIRs into adjacent less busy airspaces, unlocking deeper local equipment rationalization.
+        </div>
+      </div>
     </div>
   </div>
 
@@ -653,6 +661,7 @@ def run_ecac_dme_pipeline(
     total_firs = len(ranked_firs)
     fir_analyses: list[DMEFIRResilienceAnalysis] = []
     fir_report_paths: dict[str, str] = {}
+    cascaded_active_station_ids: set[str] = set()
 
     for i, fir_item in enumerate(ranked_firs, start=1):
         fid = fir_item["fir_id"]
@@ -667,7 +676,16 @@ def run_ecac_dme_pipeline(
                 period=period,
                 target_standard=target_standard,
                 max_permutations=max_permutations_per_fir,
+                external_active_station_ids=cascaded_active_station_ids,
+                enable_cross_border_cascading=True,
             )
+            # Add confirmed active stations from this FIR into the cascaded pool for subsequent (less busy) FIRs
+            opt = analysis.optimal_permutation
+            if opt:
+                cascaded_active_station_ids.update(opt.active_station_ids)
+            elif analysis.permutations:
+                cascaded_active_station_ids.update(analysis.permutations[0].active_station_ids)
+
             # Generate standalone FIR report
             rep_path = generate_dme_resilience_html_report(analysis, dataset=dataset)
             fir_analyses.append(analysis)

@@ -62,7 +62,7 @@ def test_simulate_dme_permutations_egtt(dataset):
 
     # Verify DME Station Utilization table
     assert analysis.station_utilization is not None
-    assert len(analysis.station_utilization) == analysis.baseline_station_count
+    assert len(analysis.station_utilization) >= analysis.baseline_station_count
     top_u = analysis.station_utilization[0]
     assert top_u.daily_flights_using > 50.0
     assert top_u.hourly_flights_using > 2.0
@@ -131,3 +131,37 @@ def test_cli_dme_resilience_command(tmp_path):
     assert "Self-Reinforcing Multi-FIR Machine Learning Status" in result.output
     assert "Air Traffic Micro-Simulation: Separation Delays" in result.output
     assert "Standalone HTML Report Successfully Generated" in result.output
+
+
+def test_cross_border_dme_cascading(dataset, tmp_path):
+    """Verify that active DMEs from a busier FIR cascade outward to compensate coverage in adjacent FIR."""
+    from flightml.eval.ecac_station_rationalization import load_ecac_stations, get_fir_geometry
+
+    # Simulate active core German DMEs (EDUUUIR)
+    geom_de = get_fir_geometry(dataset, "EDUUUIR")
+    poly_de, _, bbox_de = geom_de
+    stas_de, _ = load_ecac_stations(dataset, station_type="DME", fir_poly=poly_de, fir_bbox=bbox_de, include_adjacent=False)
+    active_de_ids = {s.id for s in stas_de[:15]}
+
+    # Evaluate Austria (LOVVFIR) with active German stations cascading across the border
+    analysis = simulate_dme_permutations(
+        dataset=dataset,
+        fir_id="LOVVFIR",
+        period="202510",
+        target_standard="RNAV_5",
+        max_permutations=4,
+        external_active_station_ids=active_de_ids,
+        enable_cross_border_cascading=True,
+    )
+    assert analysis.cascaded_adjacent_stations is not None
+    assert len(analysis.cascaded_adjacent_stations) > 0
+    cascaded_ids = {cs["id"] for cs in analysis.cascaded_adjacent_stations}
+    assert cascaded_ids.issubset(active_de_ids)
+
+    # Verify report includes the cross-border cascading section and appendix
+    out_html = tmp_path / "test_cascaded_report.html"
+    rep_path = generate_dme_resilience_html_report(analysis, output_path=out_html, dataset=dataset)
+    html_text = rep_path.read_text(encoding="utf-8")
+    assert "Cross-Border Navaid Cascading &amp; Adjacent FIR Compensation" in html_text
+    assert "Cross-Border Active Navaid Cascading &amp; Regional Rationalization" in html_text
+    assert "Cascaded Active Neighbor DMEs (Cross-Border Infill)" in html_text

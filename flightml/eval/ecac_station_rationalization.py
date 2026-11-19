@@ -666,6 +666,7 @@ def _compute_dme_navigation_standards_views(
     stations: list[ECACStation],
     grid_cells: list[tuple[float, float]],
     airports: list[dict[str, Any]],
+    fixed_active_stations: list[ECACStation] | None = None,
 ) -> dict[str, set[str]]:
     """
     Computes minimum equipment sets for Navigation Performance Standards (ICAO Doc 9613 / FAA AC 90-100A):
@@ -673,15 +674,23 @@ def _compute_dme_navigation_standards_views(
     - RNAV_2: En-Route Continental (±2 NM). Valid pair within <=130 NM, busy hubs dual FL10.
     - RNAV_1: Terminal P-RNAV SIDs/STARs (±1 NM). N-1 redundancy (>=3 DMEs with valid pair <=60 NM), dual FL10 at airports.
     - RNP_1: Reversionary Multi-DME/IRU (±1 NM). High-integrity >=3-4 DMEs <=40 NM, dual FL10 at airports.
+
+    Cross-Border Cascading:
+    When fixed_active_stations (e.g. active core DMEs kept by busier adjacent FIRs) are provided,
+    they are pre-populated into the active coverage set. The greedy solver then identifies the minimum
+    number of INTERNAL stations needed to satisfy the standard in remaining cells, enabling deeper rationalization.
     """
+    n_internal = len(stations)
+    fixed_list = list(fixed_active_stations) if fixed_active_stations else []
+    all_stations = list(stations) + fixed_list
+    n_sta = len(all_stations)
     n_cells = len(grid_cells)
-    n_sta = len(stations)
-    sta_ids = [s.id for s in stations]
+    internal_sta_ids = [s.id for s in stations]
 
     c_lats = np.array([c[0] for c in grid_cells])
     c_lons = np.array([c[1] for c in grid_cells])
-    s_lats = np.array([s.latitude for s in stations])
-    s_lons = np.array([s.longitude for s in stations])
+    s_lats = np.array([s.latitude for s in all_stations])
+    s_lons = np.array([s.longitude for s in all_stations])
 
     dlat_c = (c_lats[:, None] - s_lats[None, :]) * 60.0
     mid_lat_c = np.radians((c_lats[:, None] + s_lats[None, :]) / 2.0)
@@ -689,19 +698,25 @@ def _compute_dme_navigation_standards_views(
     dist_cell = np.sqrt(dlat_c**2 + dlon_c**2)
     bearings_cell = (np.degrees(np.arctan2(dlon_c, dlat_c)) + 360.0) % 360.0
 
-    cell_mat, apt_mat = _compute_coverage_matrices(stations, grid_cells, airports, flight_levels=(10, 50, 100, 200))
+    cell_mat, apt_mat = _compute_coverage_matrices(all_stations, grid_cells, airports, flight_levels=(10, 50, 100, 200))
 
     coverable_a10 = apt_mat[10].sum(axis=1) > 0
     coverable_busy_a10 = apt_mat[10].sum(axis=1) >= 2
     busy_apt_indices = [i for i, a in enumerate(airports) if a["is_high_density"]]
 
+    # Fixed active station indices (from neighboring busier FIRs)
+    fixed_indices = set(range(n_internal, n_sta))
+    internal_indices = list(range(n_internal))
+
     # 1. RNAV 5: En-route Upper Airspace (±5 NM)
+    # Pre-populate with fixed active external stations
+    rnav5_set: set[int] = set(fixed_indices)
+
     # Priority 1: Cover all coverable airports at FL10 with >= 1 DME
-    rnav5_set: set[int] = set()
-    apt_mask = np.zeros(len(airports), dtype=bool)
+    apt_mask = (apt_mat[10][:, list(rnav5_set)].sum(axis=1) > 0) if rnav5_set else np.zeros(len(airports), dtype=bool)
     while (~apt_mask & coverable_a10).any():
         unc = ~apt_mask & coverable_a10
-        gains = np.array([(apt_mat[10][:, s] & unc).sum() if s not in rnav5_set else -1 for s in range(n_sta)])
+        gains = np.array([(apt_mat[10][:, s] & unc).sum() if s in internal_indices and s not in rnav5_set else -1 for s in range(n_sta)])
         best_s = int(np.argmax(gains))
         if gains[best_s] <= 0:
             break
@@ -720,9 +735,10 @@ def _compute_dme_navigation_standards_views(
             if ((diff >= 30.0) & (diff <= 150.0)).any():
                 rnav5_target[i] = True
 
-    # Seed station with highest coverage if set is empty
-    if not rnav5_set and n_sta > 0:
-        rnav5_set.add(int(np.argmax(vis_200.sum(axis=0))))
+    # Seed internal station with highest coverage if no internal stations added yet and needed
+    if not (rnav5_set - fixed_indices) and n_internal > 0:
+        internal_cov = vis_200[:, :n_internal].sum(axis=0)
+        rnav5_set.add(int(np.argmax(internal_cov)))
 
     cur_paired = np.zeros(n_cells, dtype=bool)
     if rnav5_set:
@@ -741,7 +757,7 @@ def _compute_dme_navigation_standards_views(
         act_brg = bearings_cell[rem_idx, :][:, act]
         best_s = -1
         best_gain = 0
-        cand_stations = np.where(vis_200[rem_idx, :].any(axis=0))[0]
+        cand_stations = [s for s in np.where(vis_200[rem_idx, :].any(axis=0))[0] if s in internal_indices]
         for s in cand_stations:
             if s in rnav5_set:
                 continue
@@ -755,10 +771,13 @@ def _compute_dme_navigation_standards_views(
                 best_gain = gain
                 best_s = s
         if best_gain == 0 or best_s == -1:
-            unc_counts = vis_200[rem_target, :].sum(axis=0)
-            unc_counts[list(rnav5_set)] = -1
-            best_s = int(np.argmax(unc_counts))
-            if unc_counts[best_s] <= 0:
+            unc_counts = vis_200[rem_target, :n_internal].sum(axis=0)
+            for taken_idx in rnav5_set:
+                if taken_idx < n_internal:
+                    unc_counts[taken_idx] = -1
+            if len(unc_counts) > 0 and unc_counts.max() > 0:
+                best_s = int(np.argmax(unc_counts))
+            else:
                 break
         rnav5_set.add(best_s)
         # Fast incremental update of cur_paired for remaining targets
@@ -775,7 +794,7 @@ def _compute_dme_navigation_standards_views(
         if not coverable_busy_a10[i]:
             continue
         while apt_mat[10][i, list(rnav2_set)].sum() < 2:
-            cand = [s for s in range(n_sta) if s not in rnav2_set and apt_mat[10][i, s]]
+            cand = [s for s in internal_indices if s not in rnav2_set and apt_mat[10][i, s]]
             if not cand:
                 break
             rnav2_set.add(cand[0])
@@ -786,7 +805,7 @@ def _compute_dme_navigation_standards_views(
         if not coverable_busy_a10[i]:
             continue
         while apt_mat[10][i, list(rnav1_set)].sum() < 2:
-            cand = [s for s in range(n_sta) if s not in rnav1_set and apt_mat[10][i, s]]
+            cand = [s for s in internal_indices if s not in rnav1_set and apt_mat[10][i, s]]
             if not cand:
                 break
             rnav1_set.add(cand[0])
@@ -796,7 +815,7 @@ def _compute_dme_navigation_standards_views(
     term_target = np.minimum(3, vis_100_term.sum(axis=1))
     while (term_counts < term_target).any():
         needed = term_counts < term_target
-        gains = np.array([(vis_100_term[:, s] & needed).sum() if s not in rnav1_set else -1 for s in range(n_sta)])
+        gains = np.array([(vis_100_term[:, s] & needed).sum() if s in internal_indices and s not in rnav1_set else -1 for s in range(n_sta)])
         best_s = int(np.argmax(gains))
         if gains[best_s] <= 0:
             break
@@ -810,21 +829,22 @@ def _compute_dme_navigation_standards_views(
     rnp_target = np.minimum(4, vis_100_rnp.sum(axis=1))
     while (rnp_counts < rnp_target).any():
         needed = rnp_counts < rnp_target
-        gains = np.array([(vis_100_rnp[:, s] & needed).sum() if s not in rnp1_set else -1 for s in range(n_sta)])
+        gains = np.array([(vis_100_rnp[:, s] & needed).sum() if s in internal_indices and s not in rnp1_set else -1 for s in range(n_sta)])
         best_s = int(np.argmax(gains))
         if gains[best_s] <= 0:
             break
         rnp1_set.add(best_s)
         rnp_counts += vis_100_rnp[:, best_s]
 
+    # Return only internal station IDs for the FIR under assessment
     return {
-        "RNAV_5": {sta_ids[idx] for idx in rnav5_set},
-        "RNAV_2": {sta_ids[idx] for idx in rnav2_set},
-        "RNAV_1": {sta_ids[idx] for idx in rnav1_set},
-        "RNP_1": {sta_ids[idx] for idx in rnp1_set},
-        "VIEW_1": {sta_ids[idx] for idx in rnav5_set},
-        "VIEW_2": {sta_ids[idx] for idx in rnav2_set},
-        "VIEW_3": {sta_ids[idx] for idx in rnav1_set},
+        "RNAV_5": {all_stations[idx].id for idx in rnav5_set if idx < n_internal},
+        "RNAV_2": {all_stations[idx].id for idx in rnav2_set if idx < n_internal},
+        "RNAV_1": {all_stations[idx].id for idx in rnav1_set if idx < n_internal},
+        "RNP_1": {all_stations[idx].id for idx in rnp1_set if idx < n_internal},
+        "VIEW_1": {all_stations[idx].id for idx in rnav5_set if idx < n_internal},
+        "VIEW_2": {all_stations[idx].id for idx in rnav2_set if idx < n_internal},
+        "VIEW_3": {all_stations[idx].id for idx in rnav1_set if idx < n_internal},
     }
 
 
@@ -833,14 +853,18 @@ def compute_static_rationalization_views(
     grid_cells: list[tuple[float, float]],
     airports: list[dict[str, Any]],
     station_type: Literal["RADAR", "DME"] = "RADAR",
+    fixed_active_stations: list[ECACStation] | None = None,
 ) -> dict[str, set[str]]:
     """
     Computes static rationalization views using greedy set-cover:
-    - For DME (Navigation): Solves for RNAV_5, RNAV_2, RNAV_1, and RNP_1 performance standards.
+    - For DME (Navigation): Solves for RNAV_5, RNAV_2, RNAV_1, and RNP_1 performance standards,
+      optionally pre-populating with fixed_active_stations (active core DMEs cascaded from busier neighbor FIRs).
     - For RADAR (Surveillance): Solves for View 1 (Minimum Baseline), View 2 (Dual En-Route), View 3 (Low-Level Infill & Busy Hubs).
     """
     if station_type == "DME":
-        return _compute_dme_navigation_standards_views(stations, grid_cells, airports)
+        return _compute_dme_navigation_standards_views(
+            stations, grid_cells, airports, fixed_active_stations=fixed_active_stations
+        )
 
     cell_mat, apt_mat = _compute_coverage_matrices(stations, grid_cells, airports, flight_levels=(10, 50, 200))
     n_sta = len(stations)
