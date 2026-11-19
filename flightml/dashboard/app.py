@@ -118,6 +118,7 @@ from flightml.viz.html_exporter import (
     generate_static_html_report,
     REPORT_PAGE_TITLES,
 )
+from flightml.dashboard.sandbox_view import render_fir_configuration_sandbox
 from flightml.eval.longitudinal import LongitudinalEngine
 from flightml.models.airspace_forecaster import AirspaceForecaster
 from flightml.eval.airline_economics import AirlineEconomicsEngine
@@ -6214,14 +6215,17 @@ The rationalization engine evaluates DME ground station geometry against officia
         render_ecac_rationalization_section("RADAR", selected_period)
 
     with map_sub_resilience:
-        res_tab_dme, res_tab_radar = st.tabs([
+        res_tab_dme, res_tab_radar, res_tab_sandbox = st.tabs([
             "📻 Terrestrial DME Navigation Resilience",
             "🛰️ Primary & Secondary Radar Surveillance Resilience",
+            "🎛️ FIR Configuration Sandbox (Interactive What-If)",
         ])
         with res_tab_dme:
             render_dme_resilience_section(selected_period)
         with res_tab_radar:
             render_radar_resilience_section(selected_period)
+        with res_tab_sandbox:
+            render_fir_configuration_sandbox(selected_period)
 
         # ----------------- TAB 3: Recurring Series & Diurnal Trends -----------------
 

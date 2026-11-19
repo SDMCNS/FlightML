@@ -680,6 +680,9 @@ def run_ecac_radar_pipeline(
                 "optimal_active_radars": act_cnt,
                 "decommissioned_radars": dis_cnt,
                 "equipment_reduction_pct": red_pct,
+                "optimal_active_station_ids": list(opt.active_station_ids) if opt else [],
+                "decommissioned_station_ids": list(opt.disabled_station_ids) if opt else [],
+                "all_station_ids": [u.station_id for u in analysis.station_utilization] if getattr(analysis, "station_utilization", None) else [],
                 "cascaded_neighbor_radars_count": len(analysis.cascaded_adjacent_stations) if analysis.cascaded_adjacent_stations else 0,
                 "coverage_compliance_pct": opt.coverage_coverable_pct if opt else 100.0,
                 "degraded_airports_count": opt.degraded_airports_count if opt else 0,
@@ -703,8 +706,49 @@ def run_ecac_radar_pipeline(
                 "evaluated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
             }
             record_radar_network_evaluation(rec)
-        except Exception:
-            pass
+
+            # Persist structured FIR configuration dataset for experimentation & dashboard loading
+            try:
+                cfg_dir = Path("data/reports/radar_resilience/configurations")
+                cfg_dir.mkdir(parents=True, exist_ok=True)
+                cfg_file = cfg_dir / f"{fid}_{target_standard}_{period}.json"
+                cfg_data = {
+                    "fir_id": fid,
+                    "fir_name": fname,
+                    "period": period,
+                    "system_type": "RADAR",
+                    "target_standard": target_standard,
+                    "baseline_station_count": analysis.baseline_station_count,
+                    "optimal_permutation_id": opt.permutation_id if opt else None,
+                    "optimal_permutation_name": opt.name if opt else None,
+                    "optimal_active_station_ids": list(opt.active_station_ids) if opt else [],
+                    "decommissioned_station_ids": list(opt.disabled_station_ids) if opt else [],
+                    "all_stations": [
+                        {
+                            "id": u.station_id,
+                            "name": u.station_name,
+                            "role": u.airspace_role,
+                            "lat": u.latitude,
+                            "lon": u.longitude,
+                            "elevation_ft": u.elevation_ft,
+                            "is_active_in_optimal": (u.station_id in opt.active_station_ids) if opt else True,
+                        }
+                        for u in (analysis.station_utilization or [])
+                    ],
+                    "coverage_compliance_pct": opt.coverage_coverable_pct if opt else 100.0,
+                    "degraded_airports_count": opt.degraded_airports_count if opt else 0,
+                    "degraded_airports_idents": opt.degraded_airports_idents if opt else [],
+                    "annual_savings_eur": dis_cnt * RADAR_ANNUAL_COST_SAVINGS_EUR,
+                    "daily_net_savings_eur": abs(opt.windows["24h"].net_economic_impact_eur) if opt and opt.windows["24h"].net_economic_impact_eur < 0 else 0.0,
+                    "critical_spofs": analysis.critical_stations or [],
+                }
+                with open(cfg_file, "w", encoding="utf-8") as cf:
+                    json.dump(cfg_data, cf, indent=2)
+            except Exception:
+                pass
+        except Exception as ex:
+            import traceback
+            traceback.print_exc()
 
     summary_report_path = generate_ecac_radar_summary_report(
         dataset=dataset,

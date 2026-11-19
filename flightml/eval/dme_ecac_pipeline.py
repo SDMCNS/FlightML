@@ -721,6 +721,9 @@ def run_ecac_dme_pipeline(
                 "degraded_airports_count": opt.degraded_airports_count if opt else 0,
                 "daily_net_savings_eur": abs(opt.windows["24h"].net_economic_impact_eur) if opt and opt.windows["24h"].net_economic_impact_eur < 0 else 0.0,
                 "annual_savings_eur": dis_cnt * DME_ANNUAL_COST_SAVINGS_EUR,
+                "optimal_active_station_ids": list(opt.active_station_ids) if opt else [],
+                "decommissioned_station_ids": list(opt.disabled_station_ids) if opt else [],
+                "all_station_ids": [u.station_id for u in analysis.station_utilization] if getattr(analysis, "station_utilization", None) else [],
                 "flights_simulated": sim.total_flights_simulated if sim else 0,
                 "flights_directly_impacted": sim.directly_impacted_flights if sim else 0,
                 "primary_delay_minutes": sim.total_primary_delay_min if sim else 0.0,
@@ -730,13 +733,53 @@ def run_ecac_dme_pipeline(
                 "reactionary_delay_minutes": sim.total_reactionary_delay_min if sim else 0.0,
                 "reactionary_multiplier": sim.reactionary_multiplier if sim else 0.0,
                 "cancellation_risks_count": sim.cancellation_risk_count if sim else 0,
-                "curfew_breaches_count": sim.curfew_breaches_count if sim else 0,
                 "fir_report_path": rep_path.name,
                 "evaluated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
             }
             record_network_evaluation(rec)
-        except Exception:
-            pass
+
+            # Persist structured FIR configuration dataset for experimentation & dashboard loading
+            try:
+                cfg_dir = Path("data/reports/dme_resilience/configurations")
+                cfg_dir.mkdir(parents=True, exist_ok=True)
+                cfg_file = cfg_dir / f"{fid}_{target_standard}_{period}.json"
+                cfg_data = {
+                    "fir_id": fid,
+                    "fir_name": fname,
+                    "period": period,
+                    "system_type": "DME",
+                    "target_standard": target_standard,
+                    "baseline_station_count": analysis.baseline_station_count,
+                    "optimal_permutation_id": opt.permutation_id if opt else None,
+                    "optimal_permutation_name": opt.name if opt else None,
+                    "optimal_active_station_ids": list(opt.active_station_ids) if opt else [],
+                    "decommissioned_station_ids": list(opt.disabled_station_ids) if opt else [],
+                    "all_stations": [
+                        {
+                            "id": u.station_id,
+                            "name": u.station_name,
+                            "role": u.airspace_role,
+                            "lat": u.latitude,
+                            "lon": u.longitude,
+                            "elevation_ft": u.elevation_ft,
+                            "is_active_in_optimal": (u.station_id in opt.active_station_ids) if opt else True,
+                        }
+                        for u in (analysis.station_utilization or [])
+                    ],
+                    "coverage_compliance_pct": opt.coverage_coverable_pct if opt else 100.0,
+                    "degraded_airports_count": opt.degraded_airports_count if opt else 0,
+                    "degraded_airports_idents": opt.degraded_airports_idents if opt else [],
+                    "annual_savings_eur": dis_cnt * DME_ANNUAL_COST_SAVINGS_EUR,
+                    "daily_net_savings_eur": abs(opt.windows["24h"].net_economic_impact_eur) if opt and opt.windows["24h"].net_economic_impact_eur < 0 else 0.0,
+                    "critical_spofs": analysis.critical_stations or [],
+                }
+                with open(cfg_file, "w", encoding="utf-8") as cf:
+                    json.dump(cfg_data, cf, indent=2)
+            except Exception:
+                pass
+        except Exception as ex:
+            import traceback
+            traceback.print_exc()
 
     # Compile Pan-European ECAC Summary Report
     summary_report_path = generate_ecac_summary_report(
