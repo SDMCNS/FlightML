@@ -155,15 +155,43 @@ def create_ecac_network_map(
     - All high-power DME stations color-coded by harmonized posture:
       Green: Active Core Transponders
       Red: Standby / Decommissioned Transponders
-    - Zero external API key dependencies (direct HTTPS OpenStreetMap tiles).
+    - Zero external API key dependencies (rock-solid public ESRI & Humanitarian OSM tile layers).
     """
     m = folium.Map(
         location=[50.5, 10.0],
         zoom_start=5,
-        tiles="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        attr='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        tiles=None,
         control_scale=True,
     )
+
+    # Base Tile Layers (No API keys required, works seamlessly in local file:/// and iframe contexts)
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+        attr="Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ",
+        name="Esri Light Gray Canvas (Continental Default)",
+        control=True,
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+        attr="Tiles &copy; Esri",
+        name="Esri World Street Map",
+        control=True,
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+        attr="Tiles &copy; Esri &mdash; National Geographic, Esri, DeLorme, NAVTEQ",
+        name="Esri Topographic",
+        control=True,
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+        attr="&copy; OpenStreetMap contributors, Humanitarian OpenStreetMap Team",
+        name="OpenStreetMap Humanitarian (HOT)",
+        control=True,
+    ).add_to(m)
 
     # 1. FIR Boundaries Layer
     fir_layer = folium.FeatureGroup(name="ECAC Sovereign FIR Boundaries", show=True)

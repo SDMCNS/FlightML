@@ -159,19 +159,44 @@ def _kpi_grid_html(metrics: list[tuple[str, str, str]]) -> str:
 def _folium_map_to_iframe(m: Any, height: int = 520, title: str = "Interactive Map") -> str:
     """
     Render a Folium Leaflet Map into an isolated, self-contained iframe srcdoc container.
-    Guarantees full OpenStreetMap Humanitarian / OSM France tiles render properly in standalone HTML
-    exports without CSS/JS DOM collisions between multiple maps.
+    Guarantees full Esri Light Gray / OpenStreetMap Humanitarian tiles render properly in standalone HTML
+    exports without CSS/JS DOM collisions, and prevents 'access blocked' referrer errors in local file:/// contexts.
     """
     if m is None:
         return f'<div class="chart-card"><p class="muted-note">Map visualization not available for {html.escape(title)}.</p></div>'
     try:
         rendered_html = m.get_root().render()
+
+        # Sanitize any legacy tile URLs that trigger 403 or 'access blocked' watermarks on local file:// or null referrer
+        rendered_html = (
+            rendered_html.replace(
+                "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+            )
+            .replace(
+                "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+            )
+            .replace(
+                "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+                "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+            )
+        )
+
+        # Inject referrer-friendly meta tag into iframe head
+        if "<head>" in rendered_html:
+            rendered_html = rendered_html.replace(
+                "<head>",
+                '<head>\n    <meta name="referrer" content="no-referrer-when-downgrade">',
+                1,
+            )
+
         escaped_srcdoc = html.escape(rendered_html)
         safe_title = html.escape(title)
         return (
             f'<div class="chart-card" style="padding: 8px; margin: 18px 0; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 10px;">\n'
             f'  <div class="chart-caption" style="text-align: left; padding: 6px 12px 10px 12px; font-size: 13.5px; font-weight: 700; color: #0c2461;">'
-            f'    🗺️ {safe_title} — Interactive OpenStreetMap Tiles (Pan, Zoom, Layer Control &amp; Hover Inspect)'
+            f'    🗺️ {safe_title} — Interactive Basemap (Pan, Zoom, Layer Control &amp; Hover Inspect)'
             f'  </div>\n'
             f'  <iframe srcdoc="{escaped_srcdoc}" '
             f'style="width: 100%; height: {height}px; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);" '

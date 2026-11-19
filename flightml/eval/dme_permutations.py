@@ -1444,10 +1444,38 @@ def create_dme_resilience_map(
     m = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=7,
-        tiles="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        attr='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        tiles=None,
         control_scale=True,
     )
+
+    # Base Tile Layers (No API keys required, works seamlessly in local file:/// and iframe contexts)
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+        attr="Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ",
+        name="Esri Light Gray Canvas (Aviation Default)",
+        control=True,
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+        attr="Tiles &copy; Esri",
+        name="Esri World Street Map",
+        control=True,
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+        attr="Tiles &copy; Esri &mdash; National Geographic, Esri, DeLorme, NAVTEQ",
+        name="Esri Topographic",
+        control=True,
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+        attr="&copy; OpenStreetMap contributors, Humanitarian OpenStreetMap Team",
+        name="OpenStreetMap Humanitarian (HOT)",
+        control=True,
+    ).add_to(m)
 
     # 1. FIR Boundary
     if fir_boundary_coords:
