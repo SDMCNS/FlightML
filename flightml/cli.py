@@ -3709,7 +3709,7 @@ def cli_generate_demo(
 @app.command(name="dme-resilience")
 def cli_dme_resilience(
     fir: str = typer.Option("EGTTFIR", "--fir", "-f", help="Target ECAC FIR identifier (e.g. EGTTFIR, LFFFFIR, EDGGFIR, etc.)"),
-    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol dataset traffic period (e.g. 202510, 201611)"),
+    period: str = typer.Option("202507", "--period", "-p", help="Eurocontrol dataset traffic period (default: 202507 peak summer stress test)"),
     standard: str = typer.Option("RNAV_5", "--standard", "-s", help="Target Navigation Standard: RNAV_5, RNAV_2, RNAV_1, or RNP_1"),
     max_permutations: int = typer.Option(15, "--max-permutations", "-n", help="Maximum permutations to evaluate"),
     output_dir: str = typer.Option("data/reports/dme_resilience", "--output-dir", "-o", help="Directory where HTML reports are saved"),
@@ -3959,7 +3959,7 @@ def cli_dme_resilience(
 
 @app.command(name="dme-ecac-pipeline")
 def dme_ecac_pipeline_cmd(
-    period: str = typer.Option("202510", help="Data cycle period to evaluate (e.g. 202510, 202402, 201611)"),
+    period: str = typer.Option("202507", help="Data cycle period to evaluate (default: 202507 peak summer stress test)"),
     standard: str = typer.Option("RNAV_5", help="Target navigation specification (RNAV_5, RNAV_2, RNAV_1, RNP_1)"),
     max_firs: Optional[int] = typer.Option(None, help="Limit number of top ECAC FIRs to evaluate in traffic-descending order"),
     max_permutations: int = typer.Option(5, help="Number of permutations per FIR (default: 5)"),
@@ -4095,7 +4095,7 @@ def dme_ecac_pipeline_cmd(
 @app.command(name="radar-resilience")
 def cli_radar_resilience(
     fir: str = typer.Option("EDUUUIR", "--fir", "-f", help="Target ECAC FIR identifier (e.g. EDUUUIR, LECMFIR, EDWWFIR, EGTTFIR, etc.)"),
-    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol dataset traffic period (e.g. 202510, 201611)"),
+    period: str = typer.Option("202507", "--period", "-p", help="Eurocontrol dataset traffic period (default: 202507 peak summer stress test)"),
     standard: str = typer.Option("VIEW_1", "--standard", "-s", help="Surveillance View Target: VIEW_1 (FL200 Baseline), VIEW_2 (FL200 Dual Redundant), VIEW_3 (FL50 Infill)"),
     max_permutations: int = typer.Option(15, "--max-permutations", "-n", help="Maximum permutations to evaluate"),
     output_dir: str = typer.Option("data/reports/radar_resilience", "--output-dir", "-o", help="Directory where HTML reports are saved"),
@@ -4347,7 +4347,7 @@ def cli_radar_resilience(
 
 @app.command(name="radar-ecac-pipeline")
 def radar_ecac_pipeline_cmd(
-    period: str = typer.Option("202510", help="Data cycle period to evaluate (e.g. 202510, 202402, 201611)"),
+    period: str = typer.Option("202507", help="Data cycle period to evaluate (default: 202507 peak summer stress test)"),
     standard: str = typer.Option("VIEW_1", help="Target surveillance specification (VIEW_1: FL200 Baseline, VIEW_2: FL200 Dual Redundant, VIEW_3: FL50 Infill)"),
     max_firs: Optional[int] = typer.Option(None, help="Limit number of top ECAC FIRs with disclosed radars to evaluate in traffic-descending order"),
     max_permutations: int = typer.Option(5, help="Number of permutations per FIR (default: 5)"),

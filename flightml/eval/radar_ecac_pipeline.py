@@ -51,7 +51,7 @@ RADAR_OUTCOMES_PARQUET_PATH = Path("data/reports/radar_resilience/ecac_radar_net
 
 def get_ranked_radar_firs(
     dataset: FlightDataset,
-    period: str = "202510",
+    period: str = "202507",
     radars_path: str = "data/radars.json",
 ) -> list[dict[str, Any]]:
     """
@@ -605,7 +605,7 @@ def generate_ecac_radar_summary_report(
 
 def run_ecac_radar_pipeline(
     dataset: FlightDataset,
-    period: str = "202510",
+    period: str = "202507",
     target_standard: str = "VIEW_1",
     max_firs: int | None = None,
     max_permutations_per_fir: int = 5,

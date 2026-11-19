@@ -48,7 +48,7 @@ OUTCOMES_PARQUET_PATH = Path("data/reports/dme_resilience/ecac_network_evaluatio
 
 def get_ranked_ecac_firs(
     dataset: FlightDataset,
-    period: str = "202510",
+    period: str = "202507",
 ) -> list[dict[str, Any]]:
     """
     Identify and rank all sovereign ECAC FIRs containing high-power DME stations
@@ -641,7 +641,7 @@ def generate_ecac_summary_report(
 
 def run_ecac_dme_pipeline(
     dataset: FlightDataset,
-    period: str = "202510",
+    period: str = "202507",
     target_standard: str = "RNAV_5",
     max_firs: int | None = None,
     max_permutations_per_fir: int = 5,

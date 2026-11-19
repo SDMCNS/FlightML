@@ -993,7 +993,7 @@ def compute_station_utilization_and_maintenance(
 def simulate_dme_permutations(
     dataset: FlightDataset,
     fir_id: str = "EGTTFIR",
-    period: str = "202510",
+    period: str = "202507",
     target_standard: str = "RNAV_5",
     max_permutations: int = 25,
     external_active_station_ids: set[str] | list[str] | None = None,

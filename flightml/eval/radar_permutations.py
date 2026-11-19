@@ -522,7 +522,7 @@ def compute_radar_utilization_and_maintenance(
 def simulate_radar_permutations(
     dataset: FlightDataset,
     fir_id: str = "EDUUUIR",
-    period: str = "202510",
+    period: str = "202507",
     target_standard: str = "VIEW_1",
     max_permutations: int = 25,
     external_active_station_ids: set[str] | list[str] | None = None,

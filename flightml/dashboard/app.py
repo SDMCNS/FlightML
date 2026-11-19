@@ -4566,7 +4566,8 @@ with tab_cat_whatif:
     st.subheader("Scenario C: Airline Fleet Operational Shock Stress Testing")
     st.markdown(
         "Inject operational delay shocks (+15m, +30m, +45m, +60m, +90m) into multiple airlines' rotation networks "
-        "to construct comparative fragility curves and benchmark fleet resilience thresholds on a single graph."
+        "to construct comparative fragility curves and benchmark fleet resilience thresholds on a single graph. "
+        "**Recommended Benchmark:** Use the **July 2025 (202507)** peak summer dataset for maximum schedule density and turnaround pressure."
     )
     selected_stress_ops = st.multiselect(
         "Select Operators to Stress Test",
@@ -4969,13 +4970,29 @@ with tab_cat_maps:
         )
         render_page_export_bar("dme_resilience", "tab_dme_resilience")
 
-        ds = get_dataset(selected_period)
+        eval_periods = ["202507", "202510", "202402", "201611"]
+        for p in available_periods:
+            if p not in eval_periods and not p.startswith("Full Year"):
+                eval_periods.append(p)
+        default_p_idx = eval_periods.index("202507") if "202507" in eval_periods else 0
+
+        col_c0, col_c1, col_c2, col_c3, col_c4 = st.columns([1.3, 1.3, 1.1, 0.9, 0.9])
+        with col_c0:
+            sim_period = st.selectbox(
+                "Traffic Cycle",
+                options=eval_periods,
+                index=default_p_idx,
+                format_func=lambda p: f"☀️ {p} (July Peak Stress)" if p == "202507" else f"{p} (Eurocontrol)",
+                key=f"dme_res_cycle_{selected_period}",
+                help="July 2025 (202507) represents peak European summer traffic (1.02M flights) for maximum stress test rigor.",
+            )
+
+        ds = get_dataset(sim_period)
         fir_list = [f for f in list_available_ecac_firs(ds) if f[0] != "ALL"]
         fir_dict = dict(fir_list)
         fir_ids = [f[0] for f in fir_list]
         default_fir_idx = fir_ids.index("EGTTFIR") if "EGTTFIR" in fir_ids else 0
 
-        col_c1, col_c2, col_c3, col_c4 = st.columns([1.5, 1.2, 1.0, 1.0])
         with col_c1:
             sel_fir = st.selectbox(
                 "Select European FIR to Analyze",
@@ -5003,26 +5020,26 @@ with tab_cat_maps:
             )
         with col_c4:
             st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-            run_sim = st.button("🚀 Run Resilience Simulation", key=f"btn_run_res_{selected_period}", type="primary")
+            run_sim = st.button("🚀 Run Simulation", key=f"btn_run_res_{selected_period}", type="primary")
 
-        res_state_key = f"dme_res_result_{sel_fir}_{sel_std}_{selected_period}"
+        res_state_key = f"dme_res_result_{sel_fir}_{sel_std}_{sim_period}"
 
         if run_sim:
-            with st.spinner(f"Simulating DME permutations & validating traffic for {sel_fir} ({sel_std})..."):
+            with st.spinner(f"Simulating DME permutations & validating traffic for {sel_fir} ({sel_std}) in {sim_period}..."):
                 analysis = simulate_dme_permutations(
                     dataset=ds,
                     fir_id=sel_fir,
-                    period=selected_period,
+                    period=sim_period,
                     target_standard=sel_std,
                     max_permutations=max_perms,
                 )
                 out_dir = Path("data/reports/dme_resilience")
                 out_dir.mkdir(parents=True, exist_ok=True)
                 ts_slug = analysis.generated_at.replace("-", "").replace(":", "").replace(" ", "_").replace("UTC", "").strip()
-                report_file = out_dir / f"dme_resilience_{sel_fir}_{sel_std}_{selected_period}_{ts_slug}.html"
+                report_file = out_dir / f"dme_resilience_{sel_fir}_{sel_std}_{sim_period}_{ts_slug}.html"
                 generate_dme_resilience_html_report(analysis, output_path=report_file, dataset=ds)
                 st.session_state[res_state_key] = (analysis, report_file)
-                st.success(f"Simulation completed! Evaluated {len(analysis.permutations)} configurations for {sel_fir}. Report generated.")
+                st.success(f"Simulation completed! Evaluated {len(analysis.permutations)} configurations for {sel_fir} ({sim_period}). Report generated.")
 
         if res_state_key in st.session_state:
             analysis, report_path = st.session_state[res_state_key]
@@ -5301,8 +5318,25 @@ with tab_cat_maps:
         )
         render_page_export_bar("radar_resilience", "tab_radar_resilience")
 
-        ds = get_dataset(selected_period)
-        ranked_radar_firs = get_ranked_radar_firs(ds, period=selected_period)
+        eval_periods = ["202507", "202510", "202402", "201611"]
+        for p in available_periods:
+            if p not in eval_periods and not p.startswith("Full Year"):
+                eval_periods.append(p)
+        default_p_idx = eval_periods.index("202507") if "202507" in eval_periods else 0
+
+        col_c0, col_c1, col_c2, col_c3, col_c4 = st.columns([1.3, 1.3, 1.1, 0.9, 0.9])
+        with col_c0:
+            sim_period = st.selectbox(
+                "Traffic Cycle",
+                options=eval_periods,
+                index=default_p_idx,
+                format_func=lambda p: f"☀️ {p} (July Peak Stress)" if p == "202507" else f"{p} (Eurocontrol)",
+                key=f"radar_res_cycle_{selected_period}",
+                help="July 2025 (202507) represents peak European summer traffic (1.02M flights) for maximum stress test rigor.",
+            )
+
+        ds = get_dataset(sim_period)
+        ranked_radar_firs = get_ranked_radar_firs(ds, period=sim_period)
         if not ranked_radar_firs:
             st.warning("No sovereign FIRs with disclosed radar infrastructure found in the current dataset.")
             return
@@ -5311,7 +5345,6 @@ with tab_cat_maps:
         fir_dict = {r["fir_id"]: f"{r['fir_id']} — {r['fir_name']} ({r['radar_count']} radars)" for r in ranked_radar_firs}
         default_fir_idx = fir_ids.index("EDUUUIR") if "EDUUUIR" in fir_ids else 0
 
-        col_c1, col_c2, col_c3, col_c4 = st.columns([1.5, 1.2, 1.0, 1.0])
         with col_c1:
             sel_fir = st.selectbox(
                 "Select FIR with Disclosed Radars",
@@ -5345,26 +5378,26 @@ with tab_cat_maps:
             )
         with col_c4:
             st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-            run_sim = st.button("🚀 Run Radar Resilience Simulation", key=f"btn_run_radar_res_{selected_period}", type="primary")
+            run_sim = st.button("🚀 Run Simulation", key=f"btn_run_radar_res_{selected_period}", type="primary")
 
-        res_state_key = f"radar_res_result_{sel_fir}_{sel_std}_{selected_period}"
+        res_state_key = f"radar_res_result_{sel_fir}_{sel_std}_{sim_period}"
 
         if run_sim:
-            with st.spinner(f"Simulating radar permutations & procedural separation delays for {sel_fir} ({sel_std})..."):
+            with st.spinner(f"Simulating radar permutations & procedural separation delays for {sel_fir} ({sel_std}) in {sim_period}..."):
                 analysis = simulate_radar_permutations(
                     dataset=ds,
                     fir_id=sel_fir,
-                    period=selected_period,
+                    period=sim_period,
                     target_standard=sel_std,
                     max_permutations=max_perms,
                 )
                 out_dir = Path("data/reports/radar_resilience")
                 out_dir.mkdir(parents=True, exist_ok=True)
                 ts_slug = analysis.generated_at.replace("-", "").replace(":", "").replace(" ", "_").replace("UTC", "").strip()
-                report_file = out_dir / f"radar_resilience_{sel_fir}_{sel_std}_{selected_period}_{ts_slug}.html"
+                report_file = out_dir / f"radar_resilience_{sel_fir}_{sel_std}_{sim_period}_{ts_slug}.html"
                 generate_radar_resilience_html_report(analysis, output_path=report_file, dataset=ds)
                 st.session_state[res_state_key] = (analysis, report_file)
-                st.success(f"Simulation completed! Evaluated {len(analysis.permutations)} configurations for {sel_fir}. Report generated.")
+                st.success(f"Simulation completed! Evaluated {len(analysis.permutations)} configurations for {sel_fir} ({sim_period}). Report generated.")
 
         if res_state_key in st.session_state:
             analysis, report_path = st.session_state[res_state_key]
