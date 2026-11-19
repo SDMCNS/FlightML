@@ -3706,5 +3706,180 @@ def cli_generate_demo(
     )
 
 
+@app.command(name="dme-resilience")
+def cli_dme_resilience(
+    fir: str = typer.Option("EGTTFIR", "--fir", "-f", help="Target ECAC FIR identifier (e.g. EGTTFIR, LFFFFIR, EDGGFIR, etc.)"),
+    period: str = typer.Option("202510", "--period", "-p", help="Eurocontrol dataset traffic period (e.g. 202510, 201611)"),
+    standard: str = typer.Option("RNAV_5", "--standard", "-s", help="Target Navigation Standard: RNAV_5, RNAV_2, RNAV_1, or RNP_1"),
+    max_permutations: int = typer.Option(15, "--max-permutations", "-n", help="Maximum permutations to evaluate"),
+    output_dir: str = typer.Option("data/reports/dme_resilience", "--output-dir", "-o", help="Directory where HTML reports are saved"),
+) -> None:
+    """
+    Simulate terrestrial DME navigation resilience across an FIR.
+    Evaluates permutations of active/disabled DMEs against RNAV/RNP performance standards,
+    validates against real traffic, quantifies delays & operational costs for 1h, 6h, and 1day windows,
+    and exports a robust standalone HTML report with interactive Leaflet maps.
+    """
+    from flightml.eval.dme_permutations import (
+        simulate_dme_permutations,
+        generate_dme_resilience_html_report,
+    )
+
+    std_clean = standard.upper().replace("-", "_").replace(" ", "_")
+    if std_clean not in ("RNAV_5", "RNAV_2", "RNAV_1", "RNP_1"):
+        console.print(f"[bold yellow]Standard '{standard}' normalized to RNAV_5. Valid options: RNAV_5, RNAV_2, RNAV_1, RNP_1.[/bold yellow]")
+        std_clean = "RNAV_5"
+
+    fir_clean = fir.strip().upper()
+
+    console.print(
+        Panel(
+            f"[bold cyan]FIR:[/bold cyan] {fir_clean}  |  "
+            f"[bold cyan]Performance Standard:[/bold cyan] {std_clean}  |  "
+            f"[bold cyan]Traffic Period:[/bold cyan] {period}\n"
+            f"[bold cyan]Max Permutations:[/bold cyan] {max_permutations}  |  "
+            f"[bold cyan]Target Storage:[/bold cyan] {output_dir}",
+            title="📡 [bold]FlightML DME Resilience & Navigation Permutations Engine[/bold]",
+            border_style="cyan",
+        )
+    )
+
+    with console.status("[bold green]Running DME permutation engine & validating historical traffic...[/bold green]"):
+        dataset = FlightDataset(period=period)
+        analysis = simulate_dme_permutations(
+            dataset=dataset,
+            fir_id=fir_clean,
+            period=period,
+            target_standard=std_clean,
+            max_permutations=max_permutations,
+        )
+
+        out_path = Path(output_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        ts_slug = analysis.generated_at.replace("-", "").replace(":", "").replace(" ", "_").replace("UTC", "").strip()
+        report_file = out_path / f"dme_resilience_{fir_clean}_{std_clean}_{period}_{ts_slug}.html"
+        generated_report = generate_dme_resilience_html_report(analysis, output_path=report_file, dataset=dataset)
+
+    opt = analysis.optimal_permutation or analysis.permutations[0]
+
+    # 1. Executive KPI Summary Table
+    t_summary = Table(title=f"🏆 Optimal Rationalization Posture — {analysis.fir_name}", border_style="green")
+    t_summary.add_column("Key Performance Indicator", style="bold cyan")
+    t_summary.add_column("Baseline Network", style="dim")
+    t_summary.add_column("Optimal Permutation Posture", style="bold green")
+    t_summary.add_column("Net Variance / Benefit", style="bold")
+
+    day_benefit = opt.windows["24h"].net_economic_impact_eur
+    day_str = f"-€{abs(day_benefit):,.0f} / day (Net Savings)" if day_benefit <= 0 else f"+€{day_benefit:,.0f} / day (Net Penalty)"
+    h1_benefit = opt.windows["1h"].net_economic_impact_eur
+    h1_str = f"-€{abs(h1_benefit):,.0f} / h (Net Savings)" if h1_benefit <= 0 else f"+€{h1_benefit:,.0f} / h (Net Penalty)"
+    h6_benefit = opt.windows["6h"].net_economic_impact_eur
+    h6_str = f"-€{abs(h6_benefit):,.0f} / 6h (Net Savings)" if h6_benefit <= 0 else f"+€{h6_benefit:,.0f} / 6h (Net Penalty)"
+
+    annual_savings = opt.disabled_count * 45000.0
+
+    t_summary.add_row(
+        "Active Ground Transponders",
+        f"{analysis.baseline_station_count} DMEs",
+        f"{opt.active_count} DMEs",
+        f"-{opt.disabled_count} DMEs decommissioned ({round(opt.disabled_count/max(1, analysis.baseline_station_count)*100)}% cut)",
+    )
+    t_summary.add_row(
+        f"{std_clean} Airspace Coverage Compliance",
+        f"{analysis.permutations[0].coverage_coverable_pct:.1f}% coverable cells",
+        f"{opt.coverage_coverable_pct:.1f}% coverable cells",
+        f"{opt.cells_met} of {opt.total_cells - opt.cells_uncoverable} cells satisfied",
+    )
+    t_summary.add_row(
+        "Airport Terminal FL10 Redundancy",
+        f"0 of {len(opt.degraded_airports_idents)} degraded",
+        f"{opt.degraded_airports_count} degraded airports",
+        "[green]Fully Maintained[/green]" if opt.degraded_airports_count == 0 else f"[red]{opt.degraded_airports_count} Degraded[/red]",
+    )
+    t_summary.add_row("1-Hour Peak Net Economic Balance", "€0 (Status Quo Datum)", f"€{opt.windows['1h'].equipment_opex_savings_eur:,.0f} savings", h1_str)
+    t_summary.add_row("6-Hour Shift Net Economic Balance", "€0 (Status Quo Datum)", f"€{opt.windows['6h'].equipment_opex_savings_eur:,.0f} savings", h6_str)
+    t_summary.add_row("1-Day (24h) Net Economic Balance", "€0 (Status Quo Datum)", f"€{opt.windows['24h'].equipment_opex_savings_eur:,.0f} savings", day_str)
+    t_summary.add_row("Annualized ANSP OPEX Savings", "€0", f"€{annual_savings:,.0f} / year", f"€{annual_savings:,.0f} / yr net")
+
+    console.print(t_summary)
+
+    # 2. Permutations Comparison Table
+    t_perms = Table(title="📊 Evaluated Permutations & Multi-Window Economic Balances", border_style="blue")
+    t_perms.add_column("ID", style="dim", width=14)
+    t_perms.add_column("Configuration Name", style="bold")
+    t_perms.add_column("Active", justify="right")
+    t_perms.add_column("Coverage Met", justify="right")
+    t_perms.add_column("Degraded Apt", justify="center")
+    t_perms.add_column("1h Net (€)", justify="right")
+    t_perms.add_column("6h Net (€)", justify="right")
+    t_perms.add_column("24h Net (€)", justify="right")
+    t_perms.add_column("Status", justify="center")
+
+    for p in analysis.permutations:
+        is_best = (opt and p.permutation_id == opt.permutation_id)
+        name_styled = f"[bold green]★ {p.name}[/bold green]" if is_best else p.name
+
+        def _fmt_net_cli(val: float) -> str:
+            if val < 0:
+                return f"[green]-€{abs(val):,.0f}[/green]"
+            elif val > 0:
+                return f"[red]+€{val:,.0f}[/red]"
+            return "[dim]€0[/dim]"
+
+        if p.classification == "OPTIMAL_RATIONALIZATION":
+            st_badge = "[green]OPTIMAL[/green]"
+        elif p.classification == "ACCEPTABLE_DEGRADATION":
+            st_badge = "[yellow]ACCEPTABLE[/yellow]"
+        else:
+            st_badge = "[red]DEFICIT[/red]"
+
+        deg_str = f"[red]{p.degraded_airports_count}[/red]" if p.degraded_airports_count > 0 else "[green]0[/green]"
+
+        t_perms.add_row(
+            p.permutation_id,
+            name_styled,
+            f"{p.active_count}/{analysis.baseline_station_count}",
+            f"{p.coverage_coverable_pct:.1f}%",
+            deg_str,
+            _fmt_net_cli(p.windows["1h"].net_economic_impact_eur),
+            _fmt_net_cli(p.windows["6h"].net_economic_impact_eur),
+            _fmt_net_cli(p.windows["24h"].net_economic_impact_eur),
+            st_badge,
+        )
+
+    console.print(t_perms)
+
+    # 3. Critical Stations Table (if any)
+    if analysis.critical_stations:
+        t_crit = Table(title="🚨 Top Critical Single Point of Failure DMEs (Highest N-1 Outage Disruption)", border_style="red")
+        t_crit.add_column("Station Ident & Name", style="bold red")
+        t_crit.add_column("Vicinity / Terminal", style="dim")
+        t_crit.add_column("Location", style="dim")
+        t_crit.add_column("Hourly Delay Penalty", justify="right", style="bold red")
+        t_crit.add_column("Daily Delay Impact", justify="right", style="bold red")
+
+        for cs in analysis.critical_stations:
+            t_crit.add_row(
+                f"{cs['name']} [{cs['id']}]",
+                cs["near_airport"],
+                f"{cs['latitude']:.2f}°N, {cs['longitude']:.2f}°E",
+                f"+€{cs['outage_hourly_delay_cost_eur']:,.0f} / h",
+                f"+€{cs['outage_daily_delay_cost_eur']:,.0f} / day",
+            )
+        console.print(t_crit)
+
+    console.print(
+        Panel(
+            f"[bold green]✓ Standalone HTML Report Successfully Generated:[/bold green]\n"
+            f"[link=file:///{generated_report.as_posix()}]{generated_report.as_posix()}[/link]\n\n"
+            f"[dim]The report contains full interactive Leaflet map layers, Pareto frontier diagnostics,\n"
+            f"and Eurocontrol CBA mathematical appendices. Accessible in the Streamlit Dashboard under\n"
+            f"Navigation > DME Resilience Reports.[/dim]",
+            title="📄 [bold]Resilience Report Artifact Stored[/bold]",
+            border_style="green",
+        )
+    )
+
+
 if __name__ == "__main__":
     app()

@@ -149,6 +149,11 @@ from flightml.eval.ecac_station_rationalization import (
     get_ecac_rationalization_report,
     list_available_ecac_firs,
 )
+from flightml.eval.dme_permutations import (
+    simulate_dme_permutations,
+    generate_dme_resilience_html_report,
+    create_dme_resilience_map,
+)
 from flightml.eval.longitudinal_airspace_modernization import (
     get_vertical_capping_analysis,
     get_fixed_airways_vs_fra_analysis,
@@ -4816,11 +4821,12 @@ with tab_cat_maps:
         "4D co-altitude aircraft conflict radar, global radio navaids world directory, and regulatory KPI references."
     )
     render_page_export_bar("maps_navigation", "cat_maps")
-    map_sub1, map_sub_dme, map_sub_radar, map_sub2 = st.tabs(
+    map_sub1, map_sub_dme, map_sub_radar, map_sub_resilience, map_sub2 = st.tabs(
         [
             "📡 Global Radio Navaids World Map",
             "📻 DME-DME RNAV Backup & Rationalization Lab",
             "🛰️ Primary & Secondary Radar Surveillance (SSR/Mode S) Lab",
+            "📉 DME Resilience Permutations & Reports",
             "📖 Methodology & KPI Reference",
         ]
     )
@@ -4937,6 +4943,200 @@ with tab_cat_maps:
                 st.dataframe(disp_nav_df, use_container_width=True)
             else:
                 st.info("No navaids match the current filter selection.")
+
+    def render_dme_resilience_section(selected_period: str):
+        st.header("📉 DME Network Resilience, Outage Permutations & Operational Cost Engine")
+        st.caption(
+            "Stress test terrestrial DME navigation resilience across European FIRs against ICAO Doc 9613 standards (RNAV 5, RNAV 2, RNAV 1, RNP 1). "
+            "Evaluates permutations of enabled/disabled DMEs against historical traffic in the selected archive period, computing en-route radar spacing delays, "
+            "tactical reroutes, and airport terminal holding, presented as average operational costs across 1-hour, 6-hour, and 1-day (24-hour) operational windows. "
+            "Download generated HTML reports directly from the archive below."
+        )
+        render_page_export_bar("dme_resilience", "tab_dme_resilience")
+
+        ds = get_dataset(selected_period)
+        fir_list = [f for f in list_available_ecac_firs(ds) if f[0] != "ALL"]
+        fir_dict = dict(fir_list)
+        fir_ids = [f[0] for f in fir_list]
+        default_fir_idx = fir_ids.index("EGTTFIR") if "EGTTFIR" in fir_ids else 0
+
+        col_c1, col_c2, col_c3, col_c4 = st.columns([1.5, 1.2, 1.0, 1.0])
+        with col_c1:
+            sel_fir = st.selectbox(
+                "Select European FIR to Analyze",
+                options=fir_ids,
+                index=default_fir_idx,
+                format_func=lambda x: fir_dict.get(x, x),
+                key=f"dme_res_fir_{selected_period}",
+            )
+        with col_c2:
+            sel_std = st.selectbox(
+                "Target Navigation Standard",
+                options=["RNAV_5", "RNAV_2", "RNAV_1", "RNP_1"],
+                index=0,
+                key=f"dme_res_std_{selected_period}",
+                help="ICAO Doc 9613 Performance-Based Navigation (PBN) performance target.",
+            )
+        with col_c3:
+            max_perms = st.slider(
+                "Max Permutations",
+                min_value=5,
+                max_value=30,
+                value=15,
+                step=1,
+                key=f"dme_res_maxperms_{selected_period}",
+            )
+        with col_c4:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            run_sim = st.button("🚀 Run Resilience Simulation", key=f"btn_run_res_{selected_period}", type="primary")
+
+        res_state_key = f"dme_res_result_{sel_fir}_{sel_std}_{selected_period}"
+
+        if run_sim:
+            with st.spinner(f"Simulating DME permutations & validating traffic for {sel_fir} ({sel_std})..."):
+                analysis = simulate_dme_permutations(
+                    dataset=ds,
+                    fir_id=sel_fir,
+                    period=selected_period,
+                    target_standard=sel_std,
+                    max_permutations=max_perms,
+                )
+                out_dir = Path("data/reports/dme_resilience")
+                out_dir.mkdir(parents=True, exist_ok=True)
+                ts_slug = analysis.generated_at.replace("-", "").replace(":", "").replace(" ", "_").replace("UTC", "").strip()
+                report_file = out_dir / f"dme_resilience_{sel_fir}_{sel_std}_{selected_period}_{ts_slug}.html"
+                generate_dme_resilience_html_report(analysis, output_path=report_file, dataset=ds)
+                st.session_state[res_state_key] = (analysis, report_file)
+                st.success(f"Simulation completed! Evaluated {len(analysis.permutations)} configurations for {sel_fir}. Report generated.")
+
+        if res_state_key in st.session_state:
+            analysis, report_path = st.session_state[res_state_key]
+            opt = analysis.optimal_permutation or analysis.permutations[0]
+
+            st.markdown("---")
+            st.subheader(f"🏆 Optimal Rationalization Posture — {analysis.fir_name}")
+
+            mcol1, mcol2, mcol3, mcol4, mcol5 = st.columns(5)
+            mcol1.metric(
+                "Optimal Equipment",
+                f"{opt.active_count} / {analysis.baseline_station_count} DMEs",
+                f"-{opt.disabled_count} redundant",
+            )
+            mcol2.metric(
+                "1h Peak Net Impact",
+                f"-€{abs(opt.windows['1h'].net_economic_impact_eur):,.0f}/h" if opt.windows['1h'].net_economic_impact_eur <= 0 else f"+€{opt.windows['1h'].net_economic_impact_eur:,.0f}/h",
+                "Net Benefit" if opt.windows['1h'].net_economic_impact_eur <= 0 else "Net Cost",
+            )
+            mcol3.metric(
+                "6h Shift Net Impact",
+                f"-€{abs(opt.windows['6h'].net_economic_impact_eur):,.0f}/6h" if opt.windows['6h'].net_economic_impact_eur <= 0 else f"+€{opt.windows['6h'].net_economic_impact_eur:,.0f}/6h",
+                "Net Benefit" if opt.windows['6h'].net_economic_impact_eur <= 0 else "Net Cost",
+            )
+            mcol4.metric(
+                "24h Daily Savings",
+                f"€{abs(opt.windows['24h'].net_economic_impact_eur):,.0f} / day",
+                f"€{opt.disabled_count * 45000:,.0f} / yr OPEX",
+            )
+            mcol5.metric(
+                f"{sel_std} Compliance",
+                f"{opt.coverage_coverable_pct:.1f}%",
+                f"{opt.degraded_airports_count} degraded airports",
+            )
+
+            # Direct Download Button for this run's report
+            if report_path.exists():
+                with open(report_path, "r", encoding="utf-8") as rf:
+                    report_html_data = rf.read()
+                st.download_button(
+                    label=f"⬇️ Download HTML Resilience Report ({report_path.name})",
+                    data=report_html_data,
+                    file_name=report_path.name,
+                    mime="text/html",
+                    key=f"dl_btn_current_{selected_period}",
+                )
+
+            # Interactive Folium Map
+            st.markdown("#### 🗺️ Airspace Navigation Coverage & Equipment Posture Map")
+            res_map = create_dme_resilience_map(analysis, selected_permutation=opt, dataset=ds)
+            st_folium(res_map, width=1200, height=520, returned_objects=[])
+
+            # Permutations Comparison Table
+            st.markdown("#### 📊 Permutations Comparison & Multi-Window Economic Balances")
+            p_rows = []
+            for p in analysis.permutations:
+                def _fmt(val):
+                    return f"-€{abs(val):,.0f}" if val <= 0 else f"+€{val:,.0f}"
+                p_rows.append({
+                    "Permutation ID": p.permutation_id,
+                    "Configuration Name": ("★ " + p.name) if (opt and p.permutation_id == opt.permutation_id) else p.name,
+                    "Category": p.category,
+                    "Active DMEs": f"{p.active_count} / {analysis.baseline_station_count}",
+                    "Coverage Met (%)": f"{p.coverage_coverable_pct:.1f}%",
+                    "Degraded Airports": p.degraded_airports_count,
+                    "1-Hour Net Impact (€)": _fmt(p.windows["1h"].net_economic_impact_eur),
+                    "6-Hour Net Impact (€)": _fmt(p.windows["6h"].net_economic_impact_eur),
+                    "24-Hour Net Impact (€)": _fmt(p.windows["24h"].net_economic_impact_eur),
+                    "Classification": p.classification,
+                })
+            st.dataframe(pd.DataFrame(p_rows), use_container_width=True)
+
+            if analysis.critical_stations:
+                st.markdown("#### 🚨 Top Critical Single Point of Failure Stations")
+                crit_rows = [
+                    {
+                        "Station": f"{cs['name']} [{cs['id']}]",
+                        "Terminal / Sector": cs["near_airport"],
+                        "Coordinates": f"{cs['latitude']:.2f}°N, {cs['longitude']:.2f}°E",
+                        "Hourly Delay Penalty (€/h)": f"+€{cs['outage_hourly_delay_cost_eur']:,.0f}/h",
+                        "Daily Delay Impact (€/day)": f"+€{cs['outage_daily_delay_cost_eur']:,.0f}/day",
+                    }
+                    for cs in analysis.critical_stations
+                ]
+                st.dataframe(pd.DataFrame(crit_rows), use_container_width=True)
+
+        # ----------------- STORED REPORTS ARCHIVE & DOWNLOAD SECTION -----------------
+        st.markdown("---")
+        st.subheader("📁 Stored Resilience & Rationalization HTML Reports")
+        st.caption("All DME resilience simulation runs generate standalone, interactive HTML reports with embedded Leaflet maps, KPI scorecards, and mathematical appendices. Browse and download any report below:")
+
+        report_dir = Path("data/reports/dme_resilience")
+        saved_reports = sorted(list(report_dir.glob("*.html")), key=lambda f: f.stat().st_mtime, reverse=True) if report_dir.exists() else []
+
+        if saved_reports:
+            arch_col1, arch_col2 = st.columns([3, 2])
+            with arch_col1:
+                rep_records = []
+                for rf in saved_reports:
+                    mtime_dt = datetime.datetime.fromtimestamp(rf.stat().st_mtime, tz=datetime.timezone.utc)
+                    size_kb = round(rf.stat().st_size / 1024.0, 1)
+                    rep_records.append({
+                        "Filename": rf.name,
+                        "Generated Time (UTC)": mtime_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                        "Size (KB)": f"{size_kb} KB",
+                    })
+                st.dataframe(pd.DataFrame(rep_records), use_container_width=True)
+
+            with arch_col2:
+                st.markdown("**Download a Stored Report:**")
+                sel_file_name = st.selectbox(
+                    "Choose Report to Download",
+                    options=[rf.name for rf in saved_reports],
+                    key=f"sel_download_rep_{selected_period}",
+                )
+                selected_rf = report_dir / sel_file_name
+                if selected_rf.exists():
+                    with open(selected_rf, "r", encoding="utf-8") as f:
+                        file_data = f.read()
+                    st.download_button(
+                        label=f"⬇️ Download {sel_file_name}",
+                        data=file_data,
+                        file_name=sel_file_name,
+                        mime="text/html",
+                        key=f"btn_dl_archive_{sel_file_name}",
+                        type="primary",
+                    )
+        else:
+            st.info("No stored HTML resilience reports found in `data/reports/dme_resilience/`. Run a simulation above or via CLI command `flightml dme-resilience` to generate reports.")
 
     def render_ecac_rationalization_section(station_type: str, selected_period: str):
         icon = "📻" if station_type == "DME" else "🛰️"
@@ -5314,6 +5514,9 @@ The rationalization engine evaluates DME ground station geometry against officia
 
     with map_sub_radar:
         render_ecac_rationalization_section("RADAR", selected_period)
+
+    with map_sub_resilience:
+        render_dme_resilience_section(selected_period)
 
         # ----------------- TAB 3: Recurring Series & Diurnal Trends -----------------
 

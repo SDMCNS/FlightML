@@ -80,6 +80,7 @@ REPORT_PAGE_KEYS = [
     "global_navaids",
     "ecac_dme_rationalization",
     "ecac_radar_rationalization",
+    "dme_resilience",
     "flight_performance_eco",
     "vertical_cdo_cco",
     "delay_diagnostics",
@@ -105,6 +106,7 @@ REPORT_PAGE_TITLES: dict[str, str] = {
     "global_navaids": "📡 Global Radio Navaids World Map Report",
     "ecac_dme_rationalization": "📻 ECAC DME-DME RNAV Backup & Rationalization Report",
     "ecac_radar_rationalization": "🛰️ ECAC Radar Surveillance (SSR/Mode S) Rationalization Report",
+    "dme_resilience": "📉 DME Network Resilience, Outage Permutations & Operational Costs Report",
     "flight_performance_eco": "📐 Flight Performance, Delay & Eco (€) Report",
     "vertical_cdo_cco": "📉 Vertical Profile & CDO/CCO Analysis Report",
     "delay_diagnostics": "🩺 Delay Diagnostics & Runway Safety Report",
@@ -2610,6 +2612,51 @@ def generate_static_html_report(
                 custom_inactive_ids=radar_inactive_ids,
                 custom_active_ids=radar_active_ids,
             )
+        )
+
+    if page_key in ("dme_resilience",):
+        from flightml.eval.dme_permutations import simulate_dme_permutations, create_dme_resilience_map
+        fir_target = dme_fir if (dme_fir and dme_fir != "ALL") else "EGTTFIR"
+        std_target = dme_view if dme_view in ("RNAV_5", "RNAV_2", "RNAV_1", "RNP_1") else "RNAV_5"
+        sim_res = simulate_dme_permutations(ds, fir_id=fir_target, period=ds.period, target_standard=std_target, max_permutations=12)
+        opt = sim_res.optimal_permutation or sim_res.permutations[0]
+        res_map = create_dme_resilience_map(sim_res, dataset=ds)
+        map_iframe = _folium_map_to_iframe(res_map, height=520, title=f"{fir_target} DME Resilience Map")
+
+        perm_rows = []
+        for r in sim_res.permutations:
+            w24 = r.windows["24h"]
+            def _fnet(v: float) -> str:
+                return f"-€{abs(v):,.0f}" if v < 0 else (f"+€{v:,.0f}" if v > 0 else "€0")
+            perm_rows.append(
+                f"<tr><td><code>{html.escape(r.permutation_id)}</code></td>"
+                f"<td><b>{html.escape(r.name)}</b></td>"
+                f"<td>{r.active_count}/{sim_res.baseline_station_count}</td>"
+                f"<td>{r.coverage_coverable_pct:.1f}%</td>"
+                f"<td>{r.degraded_airports_count}</td>"
+                f"<td>{_fnet(r.windows['1h'].net_economic_impact_eur)}</td>"
+                f"<td>{_fnet(r.windows['6h'].net_economic_impact_eur)}</td>"
+                f"<td><b>{_fnet(w24.net_economic_impact_eur)}</b></td>"
+                f"<td>{html.escape(r.classification)}</td></tr>"
+            )
+        table_html = (
+            '<div class="table-wrap"><table class="styled-table">'
+            '<thead><tr><th>ID</th><th>Configuration</th><th>Active</th><th>Coverage</th><th>Degraded Apt</th><th>1h Net</th><th>6h Net</th><th>24h Net</th><th>Classification</th></tr></thead>'
+            '<tbody>' + "".join(perm_rows) + '</tbody></table></div>'
+        )
+
+        sections.append(
+            f'<section class="report-section">'
+            f'<h2>📉 DME Network Resilience, Permutations &amp; Operational Delay Economics</h2>'
+            f'<div class="kpi-grid">'
+            f'  <div class="kpi-card"><div class="kpi-label">Optimal Equipment Posture</div><div class="kpi-value">{opt.active_count} / {sim_res.baseline_station_count} DMEs</div><div class="kpi-sub">Decommissions {opt.disabled_count} redundant beacons</div></div>'
+            f'  <div class="kpi-card"><div class="kpi-label">Net Daily Benefit (24h)</div><div class="kpi-value" style="color: #16a34a;">€{abs(opt.windows["24h"].net_economic_impact_eur):,.0f}</div><div class="kpi-sub">Net savings after absorbing tactical delays</div></div>'
+            f'  <div class="kpi-card"><div class="kpi-label">Airspace Coverage Compliance</div><div class="kpi-value">{opt.coverage_coverable_pct:.1f}%</div><div class="kpi-sub">{opt.cells_met} coverable cells meeting {std_target}</div></div>'
+            f'</div>'
+            f'{map_iframe}'
+            f'<h3>📊 Evaluated Permutations &amp; Multi-Window Balances</h3>'
+            f'{table_html}'
+            f'</section>'
         )
 
     # Robust Safety Fallback: Never return an empty report body!
