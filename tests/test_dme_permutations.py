@@ -50,6 +50,11 @@ def test_simulate_dme_permutations_egtt(dataset):
     assert opt.windows["1h"].net_economic_impact_eur < 0.0
     assert opt.windows["6h"].net_economic_impact_eur < 0.0
 
+    # Verify self-reinforcing ML experience recording and diagnostics
+    assert analysis.ml_diagnostics is not None
+    assert analysis.ml_diagnostics["total_samples_learned"] > 0
+    assert "EGTTFIR" in analysis.ml_diagnostics["unique_firs_evaluated"]
+
 
 def test_generate_dme_resilience_html_report(dataset, tmp_path):
     """Verify standalone HTML report generation with Leaflet OpenStreetMap tiles & appendix."""
@@ -70,6 +75,10 @@ def test_generate_dme_resilience_html_report(dataset, tmp_path):
     assert "DME Network Resilience &amp; Navigation Rationalization" in html_content
     assert "EGTTFIR" in html_content
     assert "<iframe srcdoc=" in html_content
+    assert "Standardized European Assessment Altitude References" in html_content
+    assert "FL50" in html_content and "FL95" in html_content and "FL350" in html_content
+    assert "Strict High-Power DME En-Route Filtering" in html_content
+    assert "Self-Reinforcing Multi-FIR Machine Learning Engine" in html_content
     assert "Line-of-Sight &amp; DME-DME GDOP Geometry Formulation" in html_content
     assert "Eurocontrol Standard Inputs for Economic Cost-Benefit Analyses" in html_content
 
@@ -91,4 +100,5 @@ def test_cli_dme_resilience_command(tmp_path):
     assert "FlightML DME Resilience & Navigation Permutations Engine" in result.output
     assert "Optimal Rationalization Posture" in result.output
     assert "Evaluated Permutations" in result.output
+    assert "Self-Reinforcing Multi-FIR Machine Learning Status" in result.output
     assert "Standalone HTML Report Successfully Generated" in result.output

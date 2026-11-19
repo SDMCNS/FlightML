@@ -506,9 +506,10 @@ def load_ecac_stations(
     else:  # DME
         df_dme = dataset.cursor.execute(
             """
-            SELECT ident, name, type, latitude_deg, longitude_deg, elevation_ft, iso_country
+            SELECT ident, name, type, latitude_deg, longitude_deg, elevation_ft, iso_country, power
             FROM raw_navaids
             WHERE (type LIKE '%DME%' OR type = 'VOR-DME' OR type = 'TACAN')
+              AND UPPER(COALESCE(power, '')) = 'HIGH'
               AND latitude_deg BETWEEN ? AND ?
               AND longitude_deg BETWEEN ? AND ?
             ORDER BY ident ASC
@@ -594,11 +595,24 @@ def generate_ecac_grid(
     return cells
 
 
+ASSESSMENT_ALTITUDES: dict[int, str] = {
+    50: "Lower controlled airspace, terminal and lower ATS route coverage",
+    95: "Common European lower en-route reference",
+    150: "RNAV 5 implementation reference",
+    200: "Intermediate climb/descent and upper lower-airspace coverage",
+    250: "Upper en-route coverage",
+    310: "Free Route Airspace reference",
+    350: "Upper cruise coverage",
+}
+
+EVALUATION_FLIGHT_LEVELS: tuple[int, ...] = (50, 95, 150, 200, 250, 310, 350)
+
+
 def _compute_coverage_matrices(
     stations: list[ECACStation],
     grid_cells: list[tuple[float, float]],
     airports: list[dict[str, Any]],
-    flight_levels: tuple[int, ...] = (10, 50, 100, 200, 300),
+    flight_levels: tuple[int, ...] = (10, 50, 95, 150, 200, 250, 310, 350),
 ) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray]]:
     """
     Vectorized computation of boolean visibility matrix:
@@ -1131,8 +1145,8 @@ def get_ecac_rationalization_report(
     if custom_active_ids:
         base_active_set |= set(custom_active_ids)
 
-    # 3. Vectorized coverage evaluation across FL50, FL100, FL200, FL300
-    levels = (10, 50, 100, 200, 300)
+    # 3. Vectorized coverage evaluation across Assessment Flight Levels: FL50, FL95, FL150, FL200, FL250, FL310, FL350
+    levels = (10, 50, 95, 150, 200, 250, 310, 350)
     cell_matrices, apt_matrices = _compute_coverage_matrices(stations, grid_cells, airports, flight_levels=levels)
 
     sta_id_to_idx = {s.id: i for i, s in enumerate(stations)}
@@ -1151,14 +1165,14 @@ def get_ecac_rationalization_report(
 
     # Full network potential (for identifying uncoverable cells)
     uncoverable_cells_by_fl: dict[int, list[tuple[float, float]]] = {}
-    for fl in (50, 100, 200, 300):
+    for fl in EVALUATION_FLIGHT_LEVELS:
         max_potential = cell_matrices[fl].sum(axis=1)
         unc_mask = max_potential == 0
         uncoverable_cells_by_fl[fl] = [grid_cells[idx] for idx in np.where(unc_mask)[0]]
 
     # Active coverage evaluations per FL
     coverage_by_fl: dict[str, Any] = {}
-    for fl in (50, 100, 200, 300):
+    for fl in EVALUATION_FLIGHT_LEVELS:
         max_cov = cell_matrices[fl].sum(axis=1)
         total_cells = len(grid_cells)
 
@@ -1259,6 +1273,7 @@ def get_ecac_rationalization_report(
         coverage_by_fl[f"fl{fl}"] = {
             "flight_level": fl,
             "altitude_ft": fl * 100,
+            "assessment_reason": ASSESSMENT_ALTITUDES.get(fl, "En-route airspace tier"),
             "total_cells": total_cells,
             "coverable_cells": coverable_total,
             "uncoverable_cells": uncov_cov,

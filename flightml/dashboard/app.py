@@ -5225,15 +5225,24 @@ with tab_cat_maps:
                 st.rerun()
 
         with col_v2:
-            fl_options = [50, 100, 200, 300]
-            cur_fl_idx = fl_options.index(st.session_state[fl_key]) if st.session_state[fl_key] in fl_options else 2
+            fl_options = [50, 95, 150, 200, 250, 310, 350]
+            cur_fl_idx = fl_options.index(st.session_state[fl_key]) if st.session_state[fl_key] in fl_options else 3
+            fl_why_map = {
+                50: "Lower controlled airspace, terminal & lower ATS",
+                95: "Common European lower en-route reference",
+                150: "RNAV 5 implementation reference",
+                200: "Intermediate climb/descent & upper lower-airspace",
+                250: "Upper en-route coverage",
+                310: "Free Route Airspace (FRA) reference",
+                350: "Upper cruise coverage",
+            }
             chosen_fl = st.selectbox(
-                f"🗺️ Map FL ({station_type}):",
+                f"🗺️ Assessment Altitude FL ({station_type}):",
                 options=fl_options,
-                format_func=lambda fl: f"FL{fl} ({fl*100:,} ft)",
+                format_func=lambda fl: f"FL{fl} ({fl*100:,} ft) — {fl_why_map.get(fl, '')}",
                 index=cur_fl_idx,
                 key=f"{prefix}_sel_fl_{selected_period}",
-                help="View coverage and redundancy levels across the selected domain at FL50, FL100, FL200, or FL300."
+                help="ICAO / Eurocontrol Assessment Tiers: FL50, FL95, FL150, FL200, FL250, FL310 (FRA), FL350 (Cruise)."
             )
             if chosen_fl != st.session_state[fl_key]:
                 st.session_state[fl_key] = chosen_fl
@@ -5498,6 +5507,24 @@ The rationalization engine evaluates DME ground station geometry against officia
      Only for residual gap cells that cannot be bridged by existing internal or adjacent facilities does the algorithm propose a new synthetic station. All candidate locations are **strictly constrained to terrestrial land** (`is_point_on_land is True`).
    - **Oceanic Airspace Exclusion**:
      If gap cells are situated in open ocean beyond physical terrestrial line-of-sight range, the solver marks them as uncoverable oceanic airspace and **does not propose impossible offshore stations**.
+
+---
+
+#### 📐 Standard Assessment Altitude Reference Tiers
+
+| Assessment Altitude | Altitude (ft AMSL) | Operational & Regulatory Reason for Assessment |
+| :--- | :--- | :--- |
+| **FL50** | $5,000\text{ ft}$ | Lower controlled airspace, terminal arrival/departure sequencing, and lower ATS route coverage. |
+| **FL95** | $9,500\text{ ft}$ | Common European lower en-route reference datum (where B-RNAV / RNAV 5 positioning becomes legally mandatory in ECAC airspace). |
+| **FL150** | $15,000\text{ ft}$ | RNAV 5 implementation reference level; vertical boundary between lower airways and intermediate sectors. |
+| **FL200** | $20,000\text{ ft}$ | Intermediate climb/descent and upper lower-airspace coverage tier. |
+| **FL250** | $25,000\text{ ft}$ | Upper en-route continental ATS route coverage. |
+| **FL310** | $31,000\text{ ft}$ | Free Route Airspace (FRA) reference boundary across European Member States. |
+| **FL350** | $35,000\text{ ft}$ | Upper cruise coverage; primary cruising flight level for long-haul and commercial jet traffic. |
+
+#### ⚡ DME Transponder Power Class & ILS Siting Rule
+- **High-Power En-Route DMEs (`power = HIGH`)**: En-route terrestrial navigation transponders (typically 1 kW pulse power, standalone DME or VOR-DME / TACAN) designed for en-route and continental ATS airways with standard operational coverage up to 160–200 NM. **Only High-Power DMEs are considered for en-route RNAV/RNP assessments**.
+- **Low-Power Landing DMEs (`power = LOW`)**: Landing DMEs (typically 100W, collocated with ILS/LOC localizer or glideslope transmitters) designed exclusively for terminal final approach and runway alignment (service range ~18–25 NM). Because their antenna beam pattern is tilted down the runway final approach path, they cannot provide omnidirectional en-route RNAV/RNP positioning and are excluded from en-route rationalization.
 
 ---
 

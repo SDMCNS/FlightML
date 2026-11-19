@@ -35,12 +35,15 @@ from flightml.eval.ecac_station_rationalization import (
     generate_ecac_grid,
     get_fir_geometry,
     ECAC_FIR_REGISTRY,
+    ASSESSMENT_ALTITUDES,
+    EVALUATION_FLIGHT_LEVELS,
     _compute_coverage_matrices,
     compute_static_rationalization_views,
     DME_ANNUAL_COST_SAVINGS_EUR,
     DME_POWER_DRAW_KW,
     DME_ANNUAL_POWER_MWH,
 )
+from flightml.eval.dme_learning import DMESelfReinforcingLearner
 from flightml.viz.html_exporter import _folium_map_to_iframe
 
 # ==============================================================================
@@ -144,12 +147,14 @@ class DMEFIRResilienceAnalysis:
     pareto_frontier: list[DMEPermutationResult]
     critical_stations: list[dict[str, Any]]
     generated_at: str
+    ml_diagnostics: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["permutations"] = [p.to_dict() for p in self.permutations]
         d["optimal_permutation"] = self.optimal_permutation.to_dict() if self.optimal_permutation else None
         d["pareto_frontier"] = [p.to_dict() for p in self.pareto_frontier]
+        d["ml_diagnostics"] = self.ml_diagnostics
         return d
 
 
@@ -437,10 +442,10 @@ def simulate_dme_permutations(
     bearings_cell = (np.degrees(np.arctan2(dlon_c, dlat_c)) + 360.0) % 360.0
 
     cell_matrices, apt_matrices = _compute_coverage_matrices(
-        stations, grid_cells, airports, flight_levels=(10, 50, 100, 200)
+        stations, grid_cells, airports, flight_levels=(10, *EVALUATION_FLIGHT_LEVELS)
     )
     cell_mat_200 = cell_matrices[200]
-    cell_mat_100 = cell_matrices[100]
+    cell_mat_100 = cell_matrices.get(95, cell_matrices.get(100, cell_matrices[200]))
     apt_mat_10 = apt_matrices[10]
 
     # Mask of cells coverable when ALL stations are active
@@ -743,7 +748,7 @@ def simulate_dme_permutations(
                 "outage_hourly_delay_cost_eur": round(day_pen / 24.0, 2),
             })
 
-    return DMEFIRResilienceAnalysis(
+    analysis_obj = DMEFIRResilienceAnalysis(
         fir_id=fir_id,
         fir_name=fir_name,
         period=period,
@@ -759,7 +764,22 @@ def simulate_dme_permutations(
         pareto_frontier=pareto_frontier,
         critical_stations=critical_stations,
         generated_at=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        ml_diagnostics=None,
     )
+
+    try:
+        learner = DMESelfReinforcingLearner()
+        learner.record_assessment(
+            fir_id=fir_id,
+            target_standard=target_standard,
+            stations=stations,
+            analysis=analysis_obj,
+        )
+        analysis_obj.ml_diagnostics = learner.get_ml_diagnostics()
+    except Exception:
+        pass
+
+    return analysis_obj
 
 
 def create_dme_resilience_map(
@@ -961,6 +981,19 @@ def generate_dme_resilience_html_report(
             f'</tr>'
         )
     critical_table_html = "\n".join(critical_rows) if critical_rows else "<tr><td colspan='6'>No critical single point of failure stations detected.</td></tr>"
+
+    # Prepare ML Diagnostics HTML
+    ml_diag = analysis.ml_diagnostics or {}
+    ml_samples_cnt = ml_diag.get("total_samples_learned", 0)
+    ml_firs_list = ml_diag.get("unique_firs_evaluated", [])
+    ml_firs_str = ", ".join(ml_firs_list) if ml_firs_list else analysis.fir_id
+    ml_harmonized_cnt = ml_diag.get("cross_fir_harmonized_stations", 0)
+    ml_is_trained = ml_diag.get("is_trained", False)
+    ml_status_badge = (
+        '<span class="badge badge-success">Trained &amp; Active</span>'
+        if ml_is_trained
+        else '<span class="badge badge-warning">Collecting Experience Samples</span>'
+    )
 
     full_html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1274,6 +1307,118 @@ def generate_dme_resilience_html_report(
           {critical_table_html}
         </tbody>
       </table>
+    </div>
+  </div>
+
+  <!-- Assessment Altitudes Table -->
+  <div class="section-card">
+    <h2>📐 Standardized European Assessment Altitude References</h2>
+    <p style="font-size: 13.5px; color: #475569;">
+      Navigation and surveillance resilience is evaluated across seven standardized European flight levels plus terminal threshold:
+    </p>
+    <div style="overflow-x: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Assessment Altitude</th>
+            <th>Altitude (ft AMSL)</th>
+            <th>Why Assess It</th>
+            <th>ECAC Operational Purpose &amp; Regulatory Reference</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>FL50</code></td>
+            <td>5,000 ft</td>
+            <td><b>Lower controlled airspace, terminal and lower ATS route coverage</b></td>
+            <td>Transition from terminal maneuvering area (TMA) to en-route network; regional airline climb/descent profiles.</td>
+          </tr>
+          <tr>
+            <td><code>FL95</code></td>
+            <td>9,500 ft</td>
+            <td><b>Common European lower en-route reference</b></td>
+            <td>Mandatory B-RNAV carriage threshold in ECAC; base vertical boundary of controlled airspace in many States.</td>
+          </tr>
+          <tr>
+            <td><code>FL150</code></td>
+            <td>15,000 ft</td>
+            <td><b>RNAV 5 implementation reference</b></td>
+            <td>Core baseline reference for RNAV 5 navigation specification and lower/upper sector dividing interfaces.</td>
+          </tr>
+          <tr>
+            <td><code>FL200</code></td>
+            <td>20,000 ft</td>
+            <td><b>Intermediate climb/descent and upper lower-airspace coverage</b></td>
+            <td>Crucial vertical tier for intermediate climb/descent and transition between lower and upper sectors.</td>
+          </tr>
+          <tr>
+            <td><code>FL250</code></td>
+            <td>25,000 ft</td>
+            <td><b>Upper en-route coverage</b></td>
+            <td>Primary continental en-route transit cruising levels for domestic and medium-haul commercial flights.</td>
+          </tr>
+          <tr>
+            <td><code>FL310</code></td>
+            <td>31,000 ft</td>
+            <td><b>Free Route Airspace reference</b></td>
+            <td>Standard base level of Free Route Airspace (FRA) across continental Europe; direct cross-border routings.</td>
+          </tr>
+          <tr>
+            <td><code>FL350</code></td>
+            <td>35,000 ft</td>
+            <td><b>Upper cruise coverage</b></td>
+            <td>Upper long-haul cruise ceiling with maximum line-of-sight geometry and widest DME multi-station coverage.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Navaid Power Rating Filtering & Operational Certification Card -->
+  <div class="section-card">
+    <h2>⚡ Navaid Power Rating Filtering &amp; Operational Certification</h2>
+    <div style="background: #eff6ff; border-left: 4px solid #2563eb; border-radius: 6px; padding: 14px 18px; margin-bottom: 12px;">
+      <p style="margin: 0; font-size: 13.5px; color: #1e3a8a; line-height: 1.6;">
+        <b>Strict High-Power DME En-Route Filtering:</b> The Eurocontrol/ICAO navaid dataset records power ratings for all terrestrial beacons.
+        <b>Low-power DMEs are dedicated landing aids</b> colocated with Instrument Landing Systems (ILS/DME, typically 50–100 W ERP with a restricted 18–25 NM service volume aligned strictly with runway approaches).
+        These landing DMEs are <b>strictly non-certifiable for en-route RNAV/RNP multi-DME triangulation</b> under ICAO Doc 9613.
+        Consequently, this engine filters and evaluates <b>exclusively High-power DMEs (1 kW pulse transponders with omnidirectional coverage)</b> for en-route resilience.
+      </p>
+    </div>
+  </div>
+
+  <!-- Self-Reinforcing Multi-FIR Machine Learning Section -->
+  <div class="section-card">
+    <h2>🧠 Self-Reinforcing Multi-FIR Machine Learning Engine</h2>
+    <p style="font-size: 13.5px; color: #475569;">
+      FlightML incorporates an active self-reinforcing learning loop that transfers topological and operational disruption knowledge across sovereign FIRs:
+    </p>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin: 16px 0;">
+      <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px;">
+        <div style="font-weight: 700; color: #0f172a; margin-bottom: 4px;">1. Multi-FIR Experience Buffer</div>
+        <div style="font-size: 12.5px; color: #475569;">
+          Accumulates station topological feature vectors (elevation, Voronoi density, airport proximity, GDOP contributions, and multi-altitude coverage counts) and observed delay deltas into an append-only JSONL replay store.
+        </div>
+      </div>
+      <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px;">
+        <div style="font-weight: 700; color: #0f172a; margin-bottom: 4px;">2. Pan-European Harmonization Registry</div>
+        <div style="font-size: 12.5px; color: #475569;">
+          Synchronizes border-straddling station states in a centralized cross-FIR network registry, ensuring that a DME recommended for standby in one FIR is never assumed active or critically relied upon by an adjacent FIR.
+        </div>
+      </div>
+      <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px;">
+        <div style="font-weight: 700; color: #0f172a; margin-bottom: 4px;">3. Gradient-Boosted Meta-Predictor</div>
+        <div style="font-size: 12.5px; color: #475569;">
+          Dual HistGradientBoosting models (classifier for decommissionability and regressor for disruption penalty in €/day) prioritize candidate permutations and prune high-risk combinations upfront in subsequent FIR runs.
+        </div>
+      </div>
+    </div>
+    <div style="background: #f1f5f9; border-radius: 6px; padding: 12px 16px; font-size: 12.5px; color: #334155;">
+      <b>Active ML Learning Diagnostics:</b>
+      <span style="margin-left: 8px;">Total Experience Samples: <b>{ml_samples_cnt}</b></span> |
+      <span style="margin-left: 8px;">Unique FIRs Evaluated: <b>{ml_firs_str}</b></span> |
+      <span style="margin-left: 8px;">Cross-FIR Harmonized Beacons: <b>{ml_harmonized_cnt}</b></span> |
+      <span style="margin-left: 8px;">Model Status: {ml_status_badge}</span>
     </div>
   </div>
 

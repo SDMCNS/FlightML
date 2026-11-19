@@ -3868,6 +3868,24 @@ def cli_dme_resilience(
             )
         console.print(t_crit)
 
+    # 4. Self-Reinforcing Machine Learning Diagnostics
+    if getattr(analysis, "ml_diagnostics", None):
+        diag = analysis.ml_diagnostics
+        t_ml = Table(title="🧠 Self-Reinforcing Multi-FIR Machine Learning Status", border_style="cyan")
+        t_ml.add_column("Diagnostic Metric", style="bold cyan")
+        t_ml.add_column("Value / State", style="white")
+        t_ml.add_row("Experience Samples Learned", f"{diag.get('total_samples_learned', 0):,} station evaluations")
+        unique_firs = diag.get("unique_firs_evaluated", [])
+        t_ml.add_row("Unique Sovereign FIRs Evaluated", f"{len(unique_firs)} ({', '.join(unique_firs) if unique_firs else analysis.fir_id})")
+        t_ml.add_row("Cross-FIR Harmonized Beacons", f"{diag.get('cross_fir_harmonized_stations', 0):,} stations in network registry")
+        t_ml.add_row("Pan-European Standby Candidates", f"{diag.get('pan_european_standby_candidates', 0):,} candidates identified")
+        t_ml.add_row(
+            "Gradient-Boosted Meta-Model",
+            "[bold green]TRAINED & ACTIVE[/bold green]" if diag.get("is_trained") else "[yellow]INITIALIZING (COLLECTING SAMPLES)[/yellow]",
+        )
+        t_ml.add_row("Learning Architecture", str(diag.get("learning_paradigm", "Multi-Task Gradient Boosting")))
+        console.print(t_ml)
+
     console.print(
         Panel(
             f"[bold green]✓ Standalone HTML Report Successfully Generated:[/bold green]\n"

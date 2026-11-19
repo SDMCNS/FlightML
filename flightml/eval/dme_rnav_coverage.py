@@ -78,9 +78,10 @@ def _load_dme_stations(dataset: FlightDataset, bbox: tuple[float, float, float, 
     lat_min, lat_max, lon_min, lon_max = bbox
     df = dataset.cursor.execute(
         """
-        SELECT ident, name, type, latitude_deg, longitude_deg, elevation_ft, iso_country
+        SELECT ident, name, type, latitude_deg, longitude_deg, elevation_ft, iso_country, power
         FROM raw_navaids
         WHERE (type LIKE '%DME%' OR type = 'VOR-DME' OR type = 'TACAN')
+          AND UPPER(COALESCE(power, '')) = 'HIGH'
           AND latitude_deg BETWEEN ? AND ?
           AND longitude_deg BETWEEN ? AND ?
         ORDER BY ident ASC
