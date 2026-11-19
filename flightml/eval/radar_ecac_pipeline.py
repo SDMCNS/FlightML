@@ -606,7 +606,7 @@ def generate_ecac_radar_summary_report(
 def run_ecac_radar_pipeline(
     dataset: FlightDataset,
     period: str = "202507",
-    target_standard: str = "VIEW_1",
+    target_standard: str = "VIEW_3",
     max_firs: int | None = None,
     max_permutations_per_fir: int = 5,
     progress_callback: Callable[[int, int, str], None] | None = None,

@@ -4137,7 +4137,7 @@ def dme_ecac_pipeline_cmd(
 def cli_radar_resilience(
     fir: str = typer.Option("EDUUUIR", "--fir", "-f", help="Target ECAC FIR identifier (e.g. EDUUUIR, LECMFIR, EDWWFIR, EGTTFIR, etc.)"),
     period: str = typer.Option("202507", "--period", "-p", help="Eurocontrol dataset traffic period (default: 202507 peak summer stress test)"),
-    standard: str = typer.Option("VIEW_1", "--standard", "-s", help="Surveillance View Target: VIEW_1 (FL200 Baseline), VIEW_2 (FL200 Dual Redundant), VIEW_3 (FL50 Infill)"),
+    standard: str = typer.Option("VIEW_3", "--standard", "-s", help="Surveillance View Target: VIEW_3 (FL50 Infill & Terminal FL10), VIEW_1 (FL200 Baseline), VIEW_2 (FL200 Dual Redundant)"),
     max_permutations: int = typer.Option(15, "--max-permutations", "-n", help="Maximum permutations to evaluate"),
     output_dir: str = typer.Option("data/reports/radar_resilience", "--output-dir", "-o", help="Directory where HTML reports are saved"),
 ) -> None:
@@ -4158,8 +4158,8 @@ def cli_radar_resilience(
 
     std_clean = standard.upper().replace("-", "_").replace(" ", "_")
     if std_clean not in ("VIEW_1", "VIEW_2", "VIEW_3"):
-        console.print(f"[bold yellow]Standard '{standard}' normalized to VIEW_1. Valid options: VIEW_1, VIEW_2, VIEW_3.[/bold yellow]")
-        std_clean = "VIEW_1"
+        console.print(f"[bold yellow]Standard '{standard}' normalized to VIEW_3. Valid options: VIEW_3 (FL50), VIEW_1 (FL200), VIEW_2 (Dual FL200).[/bold yellow]")
+        std_clean = "VIEW_3"
 
     fir_clean = fir.strip().upper()
     dataset = FlightDataset(period=period)
@@ -4423,7 +4423,7 @@ def cli_radar_resilience(
 @app.command(name="radar-ecac-pipeline")
 def radar_ecac_pipeline_cmd(
     period: str = typer.Option("202507", help="Data cycle period to evaluate (default: 202507 peak summer stress test)"),
-    standard: str = typer.Option("VIEW_1", help="Target surveillance specification (VIEW_1: FL200 Baseline, VIEW_2: FL200 Dual Redundant, VIEW_3: FL50 Infill)"),
+    standard: str = typer.Option("VIEW_3", help="Target surveillance specification (VIEW_3: FL50 Infill & Terminal FL10, VIEW_1: FL200 Baseline, VIEW_2: FL200 Dual Redundant)"),
     max_firs: Optional[int] = typer.Option(None, help="Limit number of top ECAC FIRs with disclosed radars to evaluate in traffic-descending order"),
     max_permutations: int = typer.Option(5, help="Number of permutations per FIR (default: 5)"),
 ) -> None:

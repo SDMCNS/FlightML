@@ -211,3 +211,26 @@ def test_joint_cns_surveillance_compensation(dataset, tmp_path):
     assert "Joint CNS Integration: Radar Surveillance Compensation for Navaid Degradations" in html_text
     assert "Surveillance Compensated" in html_text
     assert "curfew breaches" not in html_text.lower()
+
+
+def test_simulate_radar_permutations_view3_fl50_fl10(dataset):
+    """Verify candidate configuration targeting FL50 coverage as opposed to FL200, with terminal FL10 at significant airports."""
+    # When target_standard is omitted, it should default to VIEW_3 (FL50 + FL10 hubs)
+    analysis = simulate_radar_permutations(
+        dataset=dataset,
+        fir_id="EDUUUIR",
+        period="202510",
+        max_permutations=4,
+    )
+    assert analysis.target_standard == "VIEW_3"
+    assert analysis.optimal_permutation is not None
+
+    # Verify candidates include FL50 low-level infill & terminal FL10 candidate
+    cand_ids = [p.permutation_id for p in analysis.permutations]
+    assert any("VIEW3" in cid or "FL50" in cid for cid in cand_ids)
+
+    # Verify coverage achieved at FL50
+    opt = analysis.optimal_permutation
+    assert opt.coverage_coverable_pct > 80.0
+    assert opt.terminal_airports_total > 0
+

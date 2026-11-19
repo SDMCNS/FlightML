@@ -749,7 +749,7 @@ def simulate_radar_permutations(
     dataset: FlightDataset,
     fir_id: str = "EDUUUIR",
     period: str = "202507",
-    target_standard: str = "VIEW_1",
+    target_standard: str = "VIEW_3",
     max_permutations: int = 25,
     external_active_station_ids: set[str] | list[str] | None = None,
     enable_cross_border_cascading: bool = True,
@@ -760,6 +760,7 @@ def simulate_radar_permutations(
     Generates structured permutations (Baseline N-0, Rationalized Core, Single N-1 Outages,
     Strategic Dual Outages, and Stress Cutbacks), validates against historical traffic,
     and quantifies operational impacts across 1h, 6h, and 24h operational windows.
+    Defaults to VIEW_3 (achieving en-route coverage at FL50 with terminal coverage down to FL10 at significant airports).
     """
     fir_geom = get_fir_geometry(dataset, fir_id)
     if not fir_geom:
@@ -767,6 +768,7 @@ def simulate_radar_permutations(
 
     fir_poly, fir_boundary_coords, fir_bbox = fir_geom
     fir_name = ECAC_FIR_REGISTRY.get(fir_id, fir_id)
+    std_norm = target_standard.upper()
 
     # 1. Load sovereign internal radar stations and line-of-sight adjacent neighbor candidates
     inside_stations, airports, adjacent_candidates = load_ecac_stations(
@@ -834,7 +836,10 @@ def simulate_radar_permutations(
 
     # Baseline active mask (all internal + cascaded neighbor active)
     base_all_active_indices = list(range(n_eval))
-    coverable_cells_mask = cell_mat_200[:, base_all_active_indices].sum(axis=1) > 0
+    if std_norm in ("VIEW_3", "SURV_3", "FL50", "LOW_LEVEL"):
+        coverable_cells_mask = cell_mat_50[:, base_all_active_indices].sum(axis=1) > 0
+    else:
+        coverable_cells_mask = cell_mat_200[:, base_all_active_indices].sum(axis=1) > 0
 
     # 2. Traffic Volume & Scale Factors
     total_moves, daily_moves, hourly_moves, peak_moves = _fetch_fir_traffic_stats(dataset, fir_id, period)
@@ -860,35 +865,65 @@ def simulate_radar_permutations(
     })
 
     # Permutations 2-4: Rationalized Core Views
-    v1_core = static_views.get("VIEW_1", set())
-    if v1_core and len(v1_core) < n_inside:
-        permutation_candidates.append({
-            "id": "P-CORE-VIEW1",
-            "name": f"Rationalized Core: Single Baseline ({len(v1_core)} Active Radars)",
-            "category": "RATIONALIZED_CORE",
-            "active_ids": v1_core,
-        })
+    # When evaluating VIEW_3 (FL50 + FL10 airports), prioritize the candidate configuration targeting FL50 & terminal FL10
+    if std_norm in ("VIEW_3", "SURV_3", "FL50", "LOW_LEVEL"):
+        v3_core = static_views.get("VIEW_3", set())
+        if v3_core and len(v3_core) < n_inside:
+            permutation_candidates.append({
+                "id": "P-CORE-VIEW3",
+                "name": f"Rationalized Core: Low-Level FL50 & Terminal FL10 ({len(v3_core)} Active Radars)",
+                "category": "RATIONALIZED_CORE",
+                "active_ids": v3_core,
+            })
 
-    v2_core = static_views.get("VIEW_2", set())
-    if v2_core and len(v2_core) < n_inside and v2_core != v1_core:
-        permutation_candidates.append({
-            "id": "P-CORE-VIEW2",
-            "name": f"Rationalized Core: Dual Redundancy ({len(v2_core)} Active Radars)",
-            "category": "RATIONALIZED_CORE",
-            "active_ids": v2_core,
-        })
+        v2_core = static_views.get("VIEW_2", set())
+        if v2_core and len(v2_core) < n_inside and v2_core != v3_core:
+            permutation_candidates.append({
+                "id": "P-CORE-VIEW2",
+                "name": f"Rationalized Core: Dual Redundancy ({len(v2_core)} Active Radars)",
+                "category": "RATIONALIZED_CORE",
+                "active_ids": v2_core,
+            })
 
-    v3_core = static_views.get("VIEW_3", set())
-    if v3_core and len(v3_core) < n_inside and v3_core not in (v1_core, v2_core):
-        permutation_candidates.append({
-            "id": "P-CORE-VIEW3",
-            "name": f"Rationalized Core: Low-Level Infill ({len(v3_core)} Active Radars)",
-            "category": "RATIONALIZED_CORE",
-            "active_ids": v3_core,
-        })
+        v1_core = static_views.get("VIEW_1", set())
+        if v1_core and len(v1_core) < n_inside and v1_core not in (v3_core, v2_core):
+            permutation_candidates.append({
+                "id": "P-CORE-VIEW1",
+                "name": f"Rationalized Core: Single Baseline ({len(v1_core)} Active Radars)",
+                "category": "RATIONALIZED_CORE",
+                "active_ids": v1_core,
+            })
+    else:
+        v1_core = static_views.get("VIEW_1", set())
+        if v1_core and len(v1_core) < n_inside:
+            permutation_candidates.append({
+                "id": "P-CORE-VIEW1",
+                "name": f"Rationalized Core: Single Baseline ({len(v1_core)} Active Radars)",
+                "category": "RATIONALIZED_CORE",
+                "active_ids": v1_core,
+            })
+
+        v2_core = static_views.get("VIEW_2", set())
+        if v2_core and len(v2_core) < n_inside and v2_core != v1_core:
+            permutation_candidates.append({
+                "id": "P-CORE-VIEW2",
+                "name": f"Rationalized Core: Dual Redundancy ({len(v2_core)} Active Radars)",
+                "category": "RATIONALIZED_CORE",
+                "active_ids": v2_core,
+            })
+
+        v3_core = static_views.get("VIEW_3", set())
+        if v3_core and len(v3_core) < n_inside and v3_core not in (v1_core, v2_core):
+            permutation_candidates.append({
+                "id": "P-CORE-VIEW3",
+                "name": f"Rationalized Core: Low-Level FL50 & Terminal FL10 ({len(v3_core)} Active Radars)",
+                "category": "RATIONALIZED_CORE",
+                "active_ids": v3_core,
+            })
 
     # Permutations 5+: Single Radar Outages (N-1) on internal stations
-    sta_cell_counts = cell_mat_200[:, :n_inside].sum(axis=0)
+    eval_cell_mat = cell_mat_50 if std_norm in ("VIEW_3", "SURV_3", "FL50", "LOW_LEVEL") else cell_mat_200
+    sta_cell_counts = eval_cell_mat[:, :n_inside].sum(axis=0)
     sta_apt_counts = apt_mat_10[:, :n_inside].sum(axis=0)
     sta_importance = sta_cell_counts + (sta_apt_counts * 10.0)
     sorted_station_indices = np.argsort(sta_importance)[::-1]
@@ -1487,7 +1522,13 @@ def create_radar_resilience_map(
         cell_mat_200 = cell_matrices[200]
         cell_mat_50 = cell_matrices[50]
 
-        coverable_cells_mask = cell_mat_200.sum(axis=1) > 0
+        std_label = getattr(analysis, "target_standard", "VIEW_3")
+        std_norm = std_label.upper()
+        if std_norm in ("VIEW_3", "SURV_3", "FL50", "LOW_LEVEL"):
+            coverable_cells_mask = cell_mat_50.sum(axis=1) > 0
+        else:
+            coverable_cells_mask = cell_mat_200.sum(axis=1) > 0
+
         n_cells = len(grid_cells)
 
         if len(act_idx_arr) > 0:
@@ -1497,8 +1538,6 @@ def create_radar_resilience_map(
             cnt_200 = np.zeros(n_cells, dtype=int)
             cnt_50 = np.zeros(n_cells, dtype=int)
 
-        std_label = getattr(analysis, "target_standard", "VIEW_1")
-        std_norm = std_label.upper()
         if std_norm in ("VIEW_1", "SURV_1", "FL200"):
             status_met = (cnt_200 >= 1) & coverable_cells_mask
             status_at_risk = np.zeros(n_cells, dtype=bool)
@@ -1512,33 +1551,53 @@ def create_radar_resilience_map(
             status_at_risk = (cnt_50 == 0) & (cnt_200 >= 1) & coverable_cells_mask
             status_cannot = (cnt_50 == 0) & (cnt_200 == 0) & coverable_cells_mask
         else:
-            status_met = (cnt_200 >= 1) & coverable_cells_mask
-            status_at_risk = np.zeros(n_cells, dtype=bool)
-            status_cannot = (cnt_200 == 0) & coverable_cells_mask
+            status_met = (cnt_50 >= 1) & coverable_cells_mask
+            status_at_risk = (cnt_50 == 0) & (cnt_200 >= 1) & coverable_cells_mask
+            status_cannot = (cnt_50 == 0) & (cnt_200 == 0) & coverable_cells_mask
 
         cell_group = folium.FeatureGroup(name=f"10 NM Airspace Coverage Cells ({std_label})", show=True)
         d_nm = 10.0
         for i, (lat, lon) in enumerate(grid_cells):
             dlat = (d_nm / 60.0) / 2.0
             dlon = (d_nm / (60.0 * max(0.1, math.cos(math.radians(lat))))) / 2.0
-            c_cnt = int(cnt_200[i])
 
-            if status_met[i]:
-                color = "#10b981"
-                tip = f"🟢 MET: Radar Surveillance Achieved | {c_cnt} active radars"
-                opac = 0.50
-            elif status_at_risk[i]:
-                color = "#f59e0b"
-                tip = f"🟠 AT RISK / MARGINAL: {c_cnt} active radar | Single point of failure"
-                opac = 0.60
-            elif status_cannot[i]:
-                color = "#ef4444"
-                tip = f"🔴 CANNOT BE MET: 0 active radars within line-of-sight"
-                opac = 0.70
+            if std_norm in ("VIEW_3", "SURV_3", "FL50", "LOW_LEVEL"):
+                c_cnt = int(cnt_50[i])
+                c_cnt_200 = int(cnt_200[i])
+                if status_met[i]:
+                    color = "#10b981"
+                    tip = f"🟢 MET: Low-Level FL50 Surveillance Achieved | {c_cnt} active radars at FL50 ({c_cnt_200} at FL200)"
+                    opac = 0.50
+                elif status_at_risk[i]:
+                    color = "#f59e0b"
+                    tip = f"🟠 AT RISK: Surveillance Gap below FL200 | 0 active radars at FL50 ({c_cnt_200} active at FL200)"
+                    opac = 0.60
+                elif status_cannot[i]:
+                    color = "#ef4444"
+                    tip = f"🔴 CANNOT BE MET: 0 active radars within line-of-sight"
+                    opac = 0.70
+                else:
+                    color = "#94a3b8"
+                    tip = f"⚪ Uncoverable Gap: Outside baseline radar line-of-sight at FL50"
+                    opac = 0.20
             else:
-                color = "#94a3b8"
-                tip = f"⚪ Uncoverable Gap: Outside baseline radar line-of-sight"
-                opac = 0.20
+                c_cnt = int(cnt_200[i])
+                if status_met[i]:
+                    color = "#10b981"
+                    tip = f"🟢 MET: Radar Surveillance Achieved | {c_cnt} active radars"
+                    opac = 0.50
+                elif status_at_risk[i]:
+                    color = "#f59e0b"
+                    tip = f"🟠 AT RISK / MARGINAL: {c_cnt} active radar | Single point of failure"
+                    opac = 0.60
+                elif status_cannot[i]:
+                    color = "#ef4444"
+                    tip = f"🔴 CANNOT BE MET: 0 active radars within line-of-sight"
+                    opac = 0.70
+                else:
+                    color = "#94a3b8"
+                    tip = f"⚪ Uncoverable Gap: Outside baseline radar line-of-sight"
+                    opac = 0.20
 
             folium.Rectangle(
                 bounds=[[lat - dlat, lon - dlon], [lat + dlat, lon + dlon]],

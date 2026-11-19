@@ -949,16 +949,36 @@ def compute_static_rationalization_views(
         view_2_set.add(best_sta)
         cell_cov_count_v2 += cell_mat[200][:, best_sta]
 
-    # ---------------- VIEW 3: Low-Level Infill & Busy Hub Dual ----------------
-    view_3_set: set[int] = set(view_2_set)
+    # ---------------- VIEW 3: Low-Level FL50 En-Route & Terminal FL10 at Significant Airports ----------------
+    # Directly targets coverage at FL50 as opposed to FL200, with coverage down to FL10 at significant airports
+    view_3_set: set[int] = set(fixed_indices)
 
-    # 1. Ensure dual FL10 coverage at busy hubs
+    # Priority 1: Cover all coverable airports at FL10 with >= 1 radar
+    apt_cov_mask_v3 = (apt_mat[10][:, list(view_3_set)].sum(axis=1) > 0) if view_3_set else np.zeros(len(airports), dtype=bool)
+    while (~apt_cov_mask_v3 & coverable_a_fl10).any():
+        uncovered = ~apt_cov_mask_v3 & coverable_a_fl10
+        best_sta = -1
+        best_gain = 0
+        for s in internal_indices:
+            if s in view_3_set:
+                continue
+            gain = (apt_mat[10][:, s] & uncovered).sum()
+            if gain > best_gain:
+                best_gain = gain
+                best_sta = s
+        if best_gain == 0 or best_sta == -1:
+            break
+        view_3_set.add(best_sta)
+        apt_cov_mask_v3 |= apt_mat[10][:, best_sta]
+
+    # Priority 2: Ensure dual FL10 coverage at significant / busy hub airports
     for i in busy_apt_indices:
         if not coverable_busy_fl10[i]:
             continue
         cur_apt_cov = apt_mat[10][i, list(view_3_set)].sum() if view_3_set else 0
         while cur_apt_cov < 2:
             best_s = -1
+            best_gain = 0
             for s in internal_indices:
                 if s not in view_3_set and apt_mat[10][i, s]:
                     best_s = s
@@ -968,7 +988,7 @@ def compute_static_rationalization_views(
             view_3_set.add(best_s)
             cur_apt_cov += 1
 
-    # 2. Infill FL50 cells to >= 1 station
+    # Priority 3: Cover all coverable FL50 airspace cells with >= 1 station (as opposed to FL200)
     cell_cov_fl50 = cell_mat[50][:, list(view_3_set)].sum(axis=1) if view_3_set else np.zeros(len(grid_cells))
     while ((cell_cov_fl50 < 1) & coverable_c_fl50).any():
         uncovered = (cell_cov_fl50 < 1) & coverable_c_fl50
