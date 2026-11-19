@@ -550,7 +550,7 @@ class DelayContagionGraphEngine:
         # Passenger misconnections (~8% of connecting passengers miss flights when delay > 45m)
         misconnections = int(total_impacted * AVERAGE_PASSENGERS_PER_FLIGHT * 0.08)
 
-        # Flights with delay > 120m risk crew duty timeout or curfew cancellation
+        # Flights with delay > 120m risk crew duty timeout or rotational cancellation
         cancellation_risk = int(total_impacted * 0.04)
 
         affected_airports = [

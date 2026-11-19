@@ -53,6 +53,7 @@ from flightml.eval.dme_permutations import (
     TrafficSimulationSummary,
     simulate_fir_traffic_knock_on,
     _fetch_fir_traffic_stats,
+    compute_cell_rnav_capabilities,
     EUROCONTROL_AIRBORNE_DELAY_EUR_PER_MIN,
     EUROCONTROL_GROUND_DELAY_EUR_PER_MIN,
     TACTICAL_DETOUR_NM,
@@ -186,6 +187,7 @@ class RadarFIRResilienceAnalysis:
     station_utilization: list[RadarStationUtilization] | None = None
     maintenance_impact: RadarMaintenanceImpactSummary | None = None
     cascaded_adjacent_stations: list[dict[str, Any]] | None = None
+    cns_joint_summary: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -197,6 +199,7 @@ class RadarFIRResilienceAnalysis:
         d["station_utilization"] = [u.to_dict() for u in self.station_utilization] if self.station_utilization else []
         d["maintenance_impact"] = self.maintenance_impact.to_dict() if self.maintenance_impact else None
         d["cascaded_adjacent_stations"] = self.cascaded_adjacent_stations or []
+        d["cns_joint_summary"] = self.cns_joint_summary
         return d
 
 
@@ -616,6 +619,132 @@ def _evaluate_critical_radars(
     return critical_candidates[:top_n]
 
 
+def compute_joint_cns_compensation(
+    radar_perm: RadarPermutationResult,
+    inside_radars: list[ECACStation],
+    cascaded_radars: list[ECACStation],
+    grid_cells: list[tuple[float, float]],
+    cell_mat_200: np.ndarray,
+    coverable_cells_mask: np.ndarray,
+    cell_rnav_caps: np.ndarray,
+    cell_traffic: np.ndarray,
+    total_fir_flights: int,
+) -> dict[str, Any]:
+    """
+    Evaluates Joint CNS Navigation-Surveillance Coupling:
+    Where RNAV capability is degraded (RNAV 5 or RNAV 10), active radar surveillance compensates
+    by providing tactical radar vectoring and standard 5 NM separation, mitigating procedural separation dependency.
+    Where both RNAV and Radar coverage are missing, classifies as Compound CNS Deficit (Double Deficit Hotspot).
+    """
+    n_cells = len(grid_cells)
+    all_radars = inside_radars + cascaded_radars
+    r_id_to_idx = {r.id: idx for idx, r in enumerate(all_radars)}
+
+    act_ids = set(radar_perm.active_station_ids) | {r.id for r in cascaded_radars}
+    act_indices = [r_id_to_idx[rid] for rid in act_ids if rid in r_id_to_idx]
+
+    act_idx_arr = np.array(act_indices, dtype=int)
+    if len(act_idx_arr) > 0:
+        radar_vis = cell_mat_200[:, act_idx_arr]
+        radar_cnt = radar_vis.sum(axis=1)
+    else:
+        radar_cnt = np.zeros(n_cells, dtype=int)
+
+    radar_covered = (radar_cnt >= 1) & coverable_cells_mask
+
+    rnav_is_degraded = np.isin(cell_rnav_caps, ["RNAV 5", "RNAV 10"]) & coverable_cells_mask
+    rnav_is_optimal = np.isin(cell_rnav_caps, ["RNAV 1", "RNAV 2"]) & coverable_cells_mask
+
+    regime_opt = rnav_is_optimal & radar_covered
+    regime_comp = rnav_is_degraded & radar_covered  # Surveillance Compensating!
+    regime_pbn = rnav_is_optimal & (~radar_covered) & coverable_cells_mask
+    regime_compound = rnav_is_degraded & (~radar_covered) & coverable_cells_mask  # Compound Deficit!
+
+    total_traversals = max(1.0, float(cell_traffic.sum()))
+    daily_total = total_fir_flights / 31.0
+
+    def _cell_traffic_daily(mask: np.ndarray) -> float:
+        frac = float(cell_traffic[mask].sum()) / total_traversals
+        return round(daily_total * frac, 1)
+
+    cov_total = max(1, int(coverable_cells_mask.sum()))
+
+    # Radar rankings: which radar stations protect the most RNAV-degraded cells?
+    radar_rankings = []
+    for s_idx, r in enumerate(inside_radars):
+        vis_c = cell_mat_200[:, s_idx]
+        degraded_covered = (vis_c & rnav_is_degraded)
+        cnt_deg = int(degraded_covered.sum())
+        fl_deg = _cell_traffic_daily(degraded_covered)
+        radar_rankings.append({
+            "radar_id": r.id,
+            "radar_name": r.name,
+            "rnav_degraded_cells_covered": cnt_deg,
+            "daily_flights_compensated": fl_deg,
+            "is_active_in_scenario": r.id in act_ids,
+            "compensation_priority": "CRITICAL COMPENSATOR" if cnt_deg > 10 else ("MODERATE COMPENSATOR" if cnt_deg > 0 else "SURVEILLANCE BACKBONE"),
+        })
+    radar_rankings.sort(key=lambda x: (x["rnav_degraded_cells_covered"], x["daily_flights_compensated"]), reverse=True)
+
+    # Build per-cell classification for map layer
+    cell_regimes = []
+    for c in range(n_cells):
+        if not coverable_cells_mask[c]:
+            reg_name = "OUTSIDE_AIRSPACE"
+        elif regime_opt[c]:
+            reg_name = "OPTIMAL_CNS"
+        elif regime_comp[c]:
+            reg_name = "SURVEILLANCE_COMPENSATED"
+        elif regime_pbn[c]:
+            reg_name = "AUTONOMOUS_PBN"
+        else:
+            reg_name = "COMPOUND_DEFICIT"
+
+        cell_regimes.append({
+            "index": c,
+            "lat": grid_cells[c][0],
+            "lon": grid_cells[c][1],
+            "rnav_capability": str(cell_rnav_caps[c]),
+            "radar_count": int(radar_cnt[c]),
+            "regime": reg_name,
+        })
+
+    return {
+        "regimes": {
+            "optimal_cns": {
+                "label": "Optimal CNS (PBN RNAV 1/2 + Radar Active)",
+                "cell_count": int(regime_opt.sum()),
+                "cell_pct": round(float(regime_opt.sum() / cov_total * 100.0), 1),
+                "daily_flights": _cell_traffic_daily(regime_opt),
+                "operational_status": "5 NM Standard Radar Separation",
+            },
+            "surveillance_compensated": {
+                "label": "Surveillance Compensated (RNAV 5/10 + Radar Active)",
+                "cell_count": int(regime_comp.sum()),
+                "cell_pct": round(float(regime_comp.sum() / cov_total * 100.0), 1),
+                "daily_flights": _cell_traffic_daily(regime_comp),
+                "operational_status": "Surveillance Compensates for RNAV Degradation (5 NM Vectoring)",
+            },
+            "autonomous_pbn": {
+                "label": "Autonomous PBN Resilience (RNAV 1/2 + Radar Gap)",
+                "cell_count": int(regime_pbn.sum()),
+                "cell_pct": round(float(regime_pbn.sum() / cov_total * 100.0), 1),
+                "daily_flights": _cell_traffic_daily(regime_pbn),
+                "operational_status": "Precision Onboard PBN Guidance across Radar Gap",
+            },
+            "compound_deficit": {
+                "label": "Compound CNS Deficit (RNAV 5/10 + Radar Gap)",
+                "cell_count": int(regime_compound.sum()),
+                "cell_pct": round(float(regime_compound.sum() / cov_total * 100.0), 1),
+                "daily_flights": _cell_traffic_daily(regime_compound),
+                "operational_status": "CRITICAL DEFICIT (Procedural Separation 10-20 NM)",
+            },
+        },
+        "compensating_radar_rankings": radar_rankings,
+        "cell_regimes": cell_regimes,
+    }
+
+
 def simulate_radar_permutations(
     dataset: FlightDataset,
     fir_id: str = "EDUUUIR",
@@ -624,6 +753,7 @@ def simulate_radar_permutations(
     max_permutations: int = 25,
     external_active_station_ids: set[str] | list[str] | None = None,
     enable_cross_border_cascading: bool = True,
+    dme_analysis: Any | None = None,
 ) -> RadarFIRResilienceAnalysis:
     """
     Run the Radar permutation resilience simulation for a selected FIR and surveillance standard.
@@ -1022,7 +1152,66 @@ def simulate_radar_permutations(
             if u.station_id in casc_ids:
                 u.airspace_role = "Cascaded Cross-Border Infill"
 
-    # 9. Micro-simulation of Air Traffic Knock-On Cascades (100% census)
+    # 9. Joint CNS Navigation-Surveillance Coupling & Compensation Analysis
+    # Determine RNAV capability across the grid (using DME analysis if supplied, else sovereign DME coverage)
+    cell_rnav_caps = np.full(n_cells, "RNAV 1", dtype=object)
+    try:
+        dme_stations_inside, _, dme_adjacent = load_ecac_stations(
+            dataset,
+            station_type="DME",
+            fir_poly=fir_poly,
+            fir_bbox=fir_bbox,
+            include_adjacent=True,
+        )
+        if dme_stations_inside:
+            all_dme = dme_stations_inside + dme_adjacent
+            dme_id_to_idx = {s.id: i for i, s in enumerate(all_dme)}
+
+            if dme_analysis and getattr(dme_analysis, "optimal_permutation", None):
+                dme_act_ids = set(dme_analysis.optimal_permutation.active_station_ids)
+            else:
+                dme_act_ids = {s.id for s in dme_stations_inside}
+
+            dme_casc_ids = {s.id for s in dme_adjacent}
+            dme_act_all_ids = dme_act_ids | dme_casc_ids
+            dme_act_indices = [dme_id_to_idx[sid] for sid in dme_act_all_ids if sid in dme_id_to_idx]
+
+            dme_cell_mat, _ = _compute_coverage_matrices(
+                grid_cells, all_dme, [200, 100], "DME"
+            )
+            dme_dist_cell = np.array([
+                [fmath.haversine_nm(c[0], c[1], s.latitude, s.longitude) for s in all_dme]
+                for c in grid_cells
+            ])
+            dme_bearings_cell = np.array([
+                [fmath.bearing_degrees(c[0], c[1], s.latitude, s.longitude) for s in all_dme]
+                for c in grid_cells
+            ])
+            cell_rnav_caps, _ = compute_cell_rnav_capabilities(
+                active_indices=dme_act_indices,
+                cell_mat_200=dme_cell_mat[200],
+                cell_mat_100=dme_cell_mat[100],
+                dist_cell=dme_dist_cell,
+                bearings_cell=dme_bearings_cell,
+                coverable_cells_mask=coverable_cells_mask,
+            )
+    except Exception:
+        cell_rnav_caps = np.full(n_cells, "RNAV 1", dtype=object)
+
+    cell_traffic_arr = np.full(n_cells, max(1.0, total_moves / max(1, n_cells) * 8.5))
+    cns_joint = compute_joint_cns_compensation(
+        radar_perm=target_perm,
+        inside_radars=inside_stations,
+        cascaded_radars=cascaded_adjacent_stations,
+        grid_cells=grid_cells,
+        cell_mat_200=cell_mat_200,
+        coverable_cells_mask=coverable_cells_mask,
+        cell_rnav_caps=cell_rnav_caps,
+        cell_traffic=cell_traffic_arr,
+        total_fir_flights=total_moves,
+    )
+
+    # 10. Micro-simulation of Air Traffic Knock-On Cascades (100% census)
     out_frac = target_perm.cells_cannot_be_met / max(1, target_perm.total_cells - target_perm.cells_uncoverable)
     risk_frac = target_perm.cells_at_risk / max(1, target_perm.total_cells - target_perm.cells_uncoverable)
     try:
@@ -1035,6 +1224,8 @@ def simulate_radar_permutations(
             degraded_airports=target_perm.degraded_airports_idents,
             scenario_name=target_perm.name,
             limit_flights=None,
+            separation_standard_nm=5.0 if out_frac == 0 else 10.0,
+            cell_rnav_caps=cell_rnav_caps,
         )
     except Exception:
         traffic_sim = None
@@ -1073,6 +1264,7 @@ def simulate_radar_permutations(
         station_utilization=sta_util,
         maintenance_impact=maint_summary,
         cascaded_adjacent_stations=cascaded_records,
+        cns_joint_summary=cns_joint,
     )
 
     try:
@@ -1436,6 +1628,45 @@ def create_radar_resilience_map(
         ).add_to(apt_group)
 
     apt_group.add_to(m)
+
+    # 4. Joint CNS Navigation-Surveillance Compensation Layer (Selectable)
+    if getattr(analysis, "cns_joint_summary", None) and "cell_regimes" in analysis.cns_joint_summary:
+        cns_group = folium.FeatureGroup(name="🛰️ Joint CNS: Radar Compensation & Compound Deficits (Selectable)", show=False)
+        regimes_info = analysis.cns_joint_summary["cell_regimes"]
+        for cr in regimes_info:
+            reg_type = cr["regime"]
+            if reg_type == "OUTSIDE_AIRSPACE":
+                continue
+            if reg_type == "OPTIMAL_CNS":
+                c_color = "#16a34a"
+                c_label = "Optimal CNS (PBN RNAV 1/2 + Radar Active)"
+            elif reg_type == "SURVEILLANCE_COMPENSATED":
+                c_color = "#2563eb"
+                c_label = "Surveillance Compensated (Radar Mitigates RNAV 5/10)"
+            elif reg_type == "AUTONOMOUS_PBN":
+                c_color = "#d97706"
+                c_label = "Autonomous PBN (RNAV 1/2 across Radar Gap)"
+            else:
+                c_color = "#dc2626"
+                c_label = "COMPOUND CNS DEFICIT (Navaid + Radar Gap)"
+
+            folium.CircleMarker(
+                location=[cr["lat"], cr["lon"]],
+                radius=4,
+                color=c_color,
+                weight=1,
+                fill=True,
+                fill_color=c_color,
+                fill_opacity=0.65,
+                tooltip=(
+                    f"🛰️ <b>Cell #{cr['index']}</b> [{cr['lat']:.2f}, {cr['lon']:.2f}]<br>"
+                    f"Joint Regime: <b>{c_label}</b><br>"
+                    f"RNAV Capability: <b>{cr['rnav_capability']}</b><br>"
+                    f"Visible Radar Heads: <b>{cr['radar_count']}</b>"
+                ),
+            ).add_to(cns_group)
+        cns_group.add_to(m)
+
     folium.LayerControl(collapsed=False).add_to(m)
     return m
 
@@ -1696,13 +1927,93 @@ def generate_radar_resilience_html_report(
     else:
         maintenance_section_html = ""
 
+    # Joint CNS Navigation-Surveillance Compensation HTML Section
+    cns_sum = getattr(analysis, "cns_joint_summary", None)
+    if cns_sum and "regimes" in cns_sum:
+        reg = cns_sum["regimes"]
+        opt_c = reg.get("optimal_cns", {})
+        comp_c = reg.get("surveillance_compensated", {})
+        pbn_c = reg.get("autonomous_pbn", {})
+        cmpd_c = reg.get("compound_deficit", {})
+
+        cns_rank_rows = []
+        for r_rank in cns_sum.get("compensating_radar_rankings", [])[:8]:
+            p_badge = "badge-danger" if "CRITICAL" in r_rank["compensation_priority"] else ("badge-warning" if "MODERATE" in r_rank["compensation_priority"] else "badge-success")
+            cns_rank_rows.append(
+                f'<tr>\n'
+                f'  <td><b>{html.escape(r_rank["radar_name"])}</b> (<code>{html.escape(r_rank["radar_id"])}</code>)</td>\n'
+                f'  <td style="text-align: right; font-weight: 700; color: #2563eb;">{r_rank["rnav_degraded_cells_covered"]:,} cells</td>\n'
+                f'  <td style="text-align: right; font-weight: 700; color: #0f172a;">{r_rank["daily_flights_compensated"]:,.1f} fl/day</td>\n'
+                f'  <td style="text-align: center;"><span class="badge {p_badge}">{r_rank["compensation_priority"]}</span></td>\n'
+                f'</tr>'
+            )
+        cns_rank_table_body = "\n".join(cns_rank_rows) if cns_rank_rows else "<tr><td colspan='4'>No compensating radars required.</td></tr>"
+
+        cns_joint_section_html = f"""
+  <!-- Joint CNS Navigation-Surveillance Integration Section -->
+  <div class="section-card">
+    <h2>🛰️ Joint CNS Integration: Radar Surveillance Compensation for Navaid Degradations</h2>
+    <p style="font-size: 13.5px; color: #475569;">
+      Evaluates the operational synergy between terrestrial DME navigation and radar surveillance. Where DME rationalization degrades area navigation capability to <b>RNAV 5 or RNAV 10</b>, active radar surveillance directly compensates by providing tactical radar vectoring and standard 5 NM separation, mitigating wide procedural separation buffers.
+    </p>
+
+    <!-- 4-Quadrant CNS Regime Grid -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin: 18px 0;">
+      <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 14px;">
+        <div style="font-size: 11.5px; font-weight: 700; color: #166534; text-transform: uppercase;">1. Optimal CNS</div>
+        <div style="font-size: 22px; font-weight: 800; color: #15803d;">{opt_c.get('cell_count', 0):,} <span style="font-size: 13px; font-weight: 600;">({opt_c.get('cell_pct', 0.0)}%)</span></div>
+        <div style="font-size: 12px; color: #166534; font-weight: 600;">{opt_c.get('daily_flights', 0.0):,.0f} daily flights</div>
+        <div style="font-size: 11.5px; color: #475569; margin-top: 4px;">PBN RNAV 1/2 + Radar Active. Standard 5 NM spacing.</div>
+      </div>
+      <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 14px;">
+        <div style="font-size: 11.5px; font-weight: 700; color: #1e40af; text-transform: uppercase;">2. Surveillance Compensated</div>
+        <div style="font-size: 22px; font-weight: 800; color: #1d4ed8;">{comp_c.get('cell_count', 0):,} <span style="font-size: 13px; font-weight: 600;">({comp_c.get('cell_pct', 0.0)}%)</span></div>
+        <div style="font-size: 12px; color: #1e40af; font-weight: 600;">{comp_c.get('daily_flights', 0.0):,.0f} daily flights</div>
+        <div style="font-size: 11.5px; color: #475569; margin-top: 4px;">Radar actively mitigates degraded RNAV 5/10!</div>
+      </div>
+      <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 14px;">
+        <div style="font-size: 11.5px; font-weight: 700; color: #92400e; text-transform: uppercase;">3. Autonomous PBN Resilience</div>
+        <div style="font-size: 22px; font-weight: 800; color: #b45309;">{pbn_c.get('cell_count', 0):,} <span style="font-size: 13px; font-weight: 600;">({pbn_c.get('cell_pct', 0.0)}%)</span></div>
+        <div style="font-size: 12px; color: #92400e; font-weight: 600;">{pbn_c.get('daily_flights', 0.0):,.0f} daily flights</div>
+        <div style="font-size: 11.5px; color: #475569; margin-top: 4px;">Precision RNAV 1/2 guidance across radar gap.</div>
+      </div>
+      <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 14px;">
+        <div style="font-size: 11.5px; font-weight: 700; color: #991b1b; text-transform: uppercase;">4. Compound CNS Deficit</div>
+        <div style="font-size: 22px; font-weight: 800; color: #b91c1c;">{cmpd_c.get('cell_count', 0):,} <span style="font-size: 13px; font-weight: 600;">({cmpd_c.get('cell_pct', 0.0)}%)</span></div>
+        <div style="font-size: 12px; color: #991b1b; font-weight: 600;">{cmpd_c.get('daily_flights', 0.0):,.0f} daily flights</div>
+        <div style="font-size: 11.5px; color: #475569; margin-top: 4px;">CRITICAL DOUBLE GAP (Forced procedural 10–20 NM).</div>
+      </div>
+    </div>
+
+    <!-- Compensating Radars Ranking Table -->
+    <h3 style="font-size: 15px; font-weight: 700; color: #0f172a; margin-top: 20px; margin-bottom: 8px;">🛡️ Compensating Radars: Protecting RNAV-Degraded Airspace</h3>
+    <div style="overflow-x: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Radar Head (ID)</th>
+            <th style="text-align: right;">RNAV Degraded Cells Rescued</th>
+            <th style="text-align: right;">Daily Flights Compensated</th>
+            <th style="text-align: center;">Resilience Criticality</th>
+          </tr>
+        </thead>
+        <tbody>
+          {cns_rank_table_body}
+        </tbody>
+      </table>
+    </div>
+  </div>
+"""
+    else:
+        cns_joint_section_html = ""
+
     # Air Traffic Knock-On Micro-Simulation HTML Section
     sim = analysis.traffic_simulation
     if sim and getattr(sim, "total_flights_simulated", 0) > 0:
         sim_flights_rows = []
         for f in getattr(sim, "sample_impacted_flights", [])[:15]:
-            r_badge = "badge-danger" if f.cancellation_risk != "LOW_RISK" else "badge-success"
-            downstream_delay_str = f"+{f.reactionary_delay_min:.0f} min" if f.reactionary_delay_min > 0 else "<span style='color: #16a34a;'>On-time (0m)</span>"
+            r_badge = "badge-danger" if "CRITICAL" in f.cancellation_risk else ("badge-warning" if "ELEVATED" in f.cancellation_risk else "badge-success")
+            downstream_delay_str = f"+{f.downstream_reactionary_delay_min:.0f} min" if f.downstream_reactionary_delay_min > 0 else "<span style='color: #16a34a;'>On-time (0m)</span>"
             sim_flights_rows.append(
                 f'<tr>\n'
                 f'  <td><b>{html.escape(f.ac_operator)}</b> (<code>{html.escape(f.ac_reg)}</code>)<br><small style="color: #64748b;">Type: {f.ac_type}</small></td>\n'
@@ -1724,7 +2035,7 @@ def generate_radar_resilience_html_report(
     <p style="font-size: 13.5px; color: #475569;">
       Empirical operational micro-simulation executed across actual Eurocontrol flight trajectories for <b>{html.escape(analysis.fir_id)}</b>.
       Simulates primary separation expansions (5 NM &rarr; {sim.separation_standard_nm:.1f} NM procedural separation),
-      rotational turnaround delay propagation, and rotational cancellation / curfew breach risks across 100% census of flights.
+      rotational turnaround delay propagation, and crew flight duty limit exceedances across 100% census of flights.
     </p>
 
     <!-- Simulation KPI Grid -->
@@ -1750,9 +2061,9 @@ def generate_radar_resilience_html_report(
         <div style="font-size: 12px; color: #64748b;">Reactionary delay: +{sim.total_reactionary_delay_min:,.0f} min (&times;{sim.reactionary_multiplier:.2f})</div>
       </div>
       <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px;">
-        <div style="font-size: 11.5px; font-weight: 700; color: #64748b; text-transform: uppercase;">Cancellation / Curfew Risks</div>
+        <div style="font-size: 11.5px; font-weight: 700; color: #64748b; text-transform: uppercase;">Downstream Disruption Risks</div>
         <div style="font-size: 24px; font-weight: 800; color: {'#dc2626' if sim.cancellation_risk_count > 0 else '#16a34a'};">{sim.cancellation_risk_count} flights</div>
-        <div style="font-size: 12px; color: #64748b;">{sim.curfew_breaches_count} curfew breaches | {sim.crew_fdp_timeouts_count} crew timeouts</div>
+        <div style="font-size: 12px; color: #64748b;">{sim.crew_fdp_timeouts_count} crew FDP timeouts | {sim.cancellation_risk_count - sim.crew_fdp_timeouts_count} slot forfeitures</div>
       </div>
     </div>
 
@@ -1769,7 +2080,7 @@ def generate_radar_resilience_html_report(
             <th>Downstream Leg (Rotation)</th>
             <th style="text-align: right;">Turn Buffer</th>
             <th style="text-align: right;">Downstream Delay</th>
-            <th>Cancellation / Curfew Risk</th>
+            <th>Cancellation / Disruption Risk</th>
           </tr>
         </thead>
         <tbody>
@@ -2103,6 +2414,8 @@ def generate_radar_resilience_html_report(
   </div>
 
   {maintenance_section_html}
+
+  {cns_joint_section_html}
 
   {traffic_sim_section_html}
 

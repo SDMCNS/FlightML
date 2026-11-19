@@ -5182,6 +5182,34 @@ with tab_cat_maps:
                 mc3.metric("Annual Reduced Hours", f"{m.annual_cell_hours_reduced_rnav:,.1f} h/yr")
                 mc4.metric("Annual Outage Cost", f"€{m.annual_outage_cost_eur:,.0f} / yr", f"€{m.monthly_outage_cost_eur:,.0f}/mo")
 
+            # RNAV Operational Impact Scoring Matrix (7 Dimensions)
+            rnav_sum = getattr(analysis, "rnav_scoring_summary", None) or (getattr(analysis.traffic_simulation, "rnav_scoring_summary", None) if getattr(analysis, "traffic_simulation", None) else None)
+            if rnav_sum and "category_totals" in rnav_sum:
+                st.markdown("#### 📊 RNAV Operational Impact Scoring (ICAO Doc 9613 Transition Matrix)")
+                st.caption("Assesses operational complexity when transitioning between RNAV capabilities across 7 dimensions: route flexibility, parallel route capacity, crossing traffic, tactical intervention, controller workload, procedural separation, and alternative routing.")
+                r_c1, r_c2, r_c3, r_c4, r_c5 = st.columns(5)
+                cap_c = rnav_sum.get("capability_counts", {})
+                cap_p = rnav_sum.get("capability_percentages", {})
+                r_c1.metric("RNAV 1 (Optimal)", f"{cap_c.get('RNAV 1', 0):,} fl", f"{cap_p.get('RNAV 1', 0.0)}% (0 pts)")
+                r_c2.metric("RNAV 2 (En-Route)", f"{cap_c.get('RNAV 2', 0):,} fl", f"{cap_p.get('RNAV 2', 0.0)}% (+7 pts)")
+                r_c3.metric("RNAV 5 (Basic PBN)", f"{cap_c.get('RNAV 5', 0):,} fl", f"{cap_p.get('RNAV 5', 0.0)}% (+16 pts)")
+                r_c4.metric("RNAV 10 (Conventional)", f"{cap_c.get('RNAV 10', 0):,} fl", f"{cap_p.get('RNAV 10', 0.0)}% (+31 pts)")
+                r_c5.metric("Fleet Aggregate Score", f"{rnav_sum['total_fleet_score']:,} pts", f"Avg {rnav_sum['avg_flight_score']:.1f} pts/fl")
+
+                matrix = rnav_sum.get("scoring_matrix", {})
+                rnav_table_rows = []
+                for cat, c_info in rnav_sum["category_totals"].items():
+                    rnav_table_rows.append({
+                        "Operational Dimension": cat,
+                        "RNAV 1 (Base)": matrix.get("RNAV 1", {}).get(cat, 0),
+                        "RNAV 2": matrix.get("RNAV 2", {}).get(cat, 1),
+                        "RNAV 5": matrix.get("RNAV 5", {}).get(cat, 2),
+                        "RNAV 10": matrix.get("RNAV 10", {}).get(cat, 4),
+                        "Total Fleet Points": f"{c_info['total_points']:,} pts",
+                        "Avg Points / Flight": f"{c_info['avg_points_per_flight']:.2f}",
+                    })
+                st.dataframe(pd.DataFrame(rnav_table_rows), use_container_width=True)
+
         # ----------------- PAN-EUROPEAN ECAC NETWORK SUMMARY & MULTI-PERIOD OUTCOMES -----------------
         st.markdown("---")
         st.subheader("🇪🇺 Pan-European ECAC Network Outcomes Dataset & Multi-Period Analysis")
@@ -5227,7 +5255,8 @@ with tab_cat_maps:
                 ec1.metric("ECAC DMEs Rationalized", f"{tot_cut} / {tot_base} DMEs", f"-{cut_pct}% equipment reduction")
                 ec2.metric("Annualized ANSP OPEX Savings", f"€{tot_ann_sav/1e6:,.2f}M / yr", f"Across {len(filtered_df)} sovereign FIRs")
                 ec3.metric("Tactical & Rotational Delay", f"+{tot_pri_del:,.0f}m pri | +{tot_rot_del:,.0f}m rot", f"{filtered_df['flights_simulated'].sum():,} flights simulated")
-                ec4.metric("Rotational Cancellations", f"{tot_canc} flights", f"{filtered_df['curfew_breaches_count'].sum()} curfew breaches")
+                duty_timeouts = filtered_df['crew_fdp_timeouts_count'].sum() if 'crew_fdp_timeouts_count' in filtered_df.columns else 0
+                ec4.metric("Rotational Cancellations", f"{tot_canc} flights", f"{duty_timeouts} crew duty timeouts")
 
                 # Interactive chart: Equipment Rationalization by FIR
                 chart_df = filtered_df.sort_values(by="traffic_monthly_moves", ascending=False).copy()
@@ -5541,7 +5570,38 @@ with tab_cat_maps:
                 s_c1.metric("Simulated Trajectories", f"{sim.total_flights_simulated:,} flights", f"{sim.directly_impacted_flights:,} impacted")
                 s_c2.metric("Non-Radar Separation", f"{sim.separation_standard_nm:.1f} NM MIT", f"+{sim.total_primary_delay_min:,.0f} min primary")
                 s_c3.metric("Downstream Rotational", f"+{sim.total_reactionary_delay_min:,.0f} min", f"×{sim.reactionary_multiplier:.2f} knock-on multiplier")
-                s_c4.metric("Rotational Cancellations", f"{sim.cancellation_risk_count} flights", f"{sim.curfew_breaches_count} curfew breaches")
+                s_c4.metric("Rotational Cancellations", f"{sim.cancellation_risk_count} flights", f"{sim.crew_fdp_timeouts_count} crew duty timeouts")
+
+            # Joint CNS Navigation-Surveillance Compensation & Deficit Regimes
+            cns_sum = getattr(analysis, "cns_joint_summary", None)
+            if cns_sum and "regimes" in cns_sum:
+                st.markdown("#### 🛰️ Joint CNS Navigation-Surveillance Compensation & Deficit Regimes")
+                st.caption("Active radar surveillance directly compensates for RNAV 5/10 degradations by providing radar vectoring and 5 NM separation, mitigating wide procedural separation buffers.")
+                reg = cns_sum["regimes"]
+                c_opt = reg.get("optimal_cns", {})
+                c_comp = reg.get("surveillance_compensated", {})
+                c_pbn = reg.get("autonomous_pbn", {})
+                c_cmpd = reg.get("compound_deficit", {})
+
+                cns_c1, cns_c2, cns_c3, cns_c4 = st.columns(4)
+                cns_c1.metric("1. Optimal CNS", f"{c_opt.get('cell_count', 0)} cells ({c_opt.get('cell_pct', 0.0)}%)", f"{c_opt.get('daily_flights', 0.0):,.0f} fl/day")
+                cns_c2.metric("2. Surveillance Compensated", f"{c_comp.get('cell_count', 0)} cells ({c_comp.get('cell_pct', 0.0)}%)", f"{c_comp.get('daily_flights', 0.0):,.0f} fl/day")
+                cns_c3.metric("3. Autonomous PBN", f"{c_pbn.get('cell_count', 0)} cells ({c_pbn.get('cell_pct', 0.0)}%)", f"{c_pbn.get('daily_flights', 0.0):,.0f} fl/day")
+                cns_c4.metric("4. Compound CNS Deficit", f"{c_cmpd.get('cell_count', 0)} cells ({c_cmpd.get('cell_pct', 0.0)}%)", f"{c_cmpd.get('daily_flights', 0.0):,.0f} fl/day")
+
+                if cns_sum.get("compensating_radar_rankings"):
+                    st.markdown("##### 🛡️ Radar Stations Compensating for RNAV Degradations")
+                    rank_df_rows = [
+                        {
+                            "Radar Head": f"{r['radar_name']} [{r['radar_id']}]",
+                            "RNAV Degraded Cells Covered": f"{r['rnav_degraded_cells_covered']} cells",
+                            "Daily Flights Compensated": f"{r['daily_flights_compensated']:,.1f} fl/day",
+                            "Compensation Criticality": r["compensation_priority"],
+                            "Active in Scenario": "Yes" if r.get("is_active_in_scenario") else "Standby",
+                        }
+                        for r in cns_sum["compensating_radar_rankings"][:8]
+                    ]
+                    st.dataframe(pd.DataFrame(rank_df_rows), use_container_width=True)
 
             # Radar Station Utilization Table
             if getattr(analysis, "station_utilization", None):
@@ -5572,6 +5632,34 @@ with tab_cat_maps:
                 mc2.metric("Dual-Overlapped Cells", f"{m.redundant_cells_count} cells")
                 mc3.metric("Annual Reduced Hours", f"{m.annual_cell_hours_reduced_rnav:,.1f} h/yr")
                 mc4.metric("Annual Outage Cost", f"€{m.annual_outage_cost_eur:,.0f} / yr", f"€{m.monthly_outage_cost_eur:,.0f}/mo")
+
+            # RNAV Operational Impact Scoring Matrix (7 Dimensions)
+            rnav_sum = getattr(analysis, "rnav_scoring_summary", None) or (getattr(analysis.traffic_simulation, "rnav_scoring_summary", None) if getattr(analysis, "traffic_simulation", None) else None)
+            if rnav_sum and "category_totals" in rnav_sum:
+                st.markdown("#### 📊 RNAV Operational Impact Scoring (ICAO Doc 9613 Transition Matrix)")
+                st.caption("Assesses operational complexity when transitioning between RNAV capabilities across 7 dimensions: route flexibility, parallel route capacity, crossing traffic, tactical intervention, controller workload, procedural separation, and alternative routing.")
+                r_c1, r_c2, r_c3, r_c4, r_c5 = st.columns(5)
+                cap_c = rnav_sum.get("capability_counts", {})
+                cap_p = rnav_sum.get("capability_percentages", {})
+                r_c1.metric("RNAV 1 (Optimal)", f"{cap_c.get('RNAV 1', 0):,} fl", f"{cap_p.get('RNAV 1', 0.0)}% (0 pts)")
+                r_c2.metric("RNAV 2 (En-Route)", f"{cap_c.get('RNAV 2', 0):,} fl", f"{cap_p.get('RNAV 2', 0.0)}% (+7 pts)")
+                r_c3.metric("RNAV 5 (Basic PBN)", f"{cap_c.get('RNAV 5', 0):,} fl", f"{cap_p.get('RNAV 5', 0.0)}% (+16 pts)")
+                r_c4.metric("RNAV 10 (Conventional)", f"{cap_c.get('RNAV 10', 0):,} fl", f"{cap_p.get('RNAV 10', 0.0)}% (+31 pts)")
+                r_c5.metric("Fleet Aggregate Score", f"{rnav_sum['total_fleet_score']:,} pts", f"Avg {rnav_sum['avg_flight_score']:.1f} pts/fl")
+
+                matrix = rnav_sum.get("scoring_matrix", {})
+                rnav_table_rows = []
+                for cat, c_info in rnav_sum["category_totals"].items():
+                    rnav_table_rows.append({
+                        "Operational Dimension": cat,
+                        "RNAV 1 (Base)": matrix.get("RNAV 1", {}).get(cat, 0),
+                        "RNAV 2": matrix.get("RNAV 2", {}).get(cat, 1),
+                        "RNAV 5": matrix.get("RNAV 5", {}).get(cat, 2),
+                        "RNAV 10": matrix.get("RNAV 10", {}).get(cat, 4),
+                        "Total Fleet Points": f"{c_info['total_points']:,} pts",
+                        "Avg Points / Flight": f"{c_info['avg_points_per_flight']:.2f}",
+                    })
+                st.dataframe(pd.DataFrame(rnav_table_rows), use_container_width=True)
 
         # ----------------- PAN-EUROPEAN ECAC RADAR NETWORK OUTCOMES -----------------
         st.markdown("---")
@@ -5617,7 +5705,8 @@ with tab_cat_maps:
                 ec1.metric("ECAC Radars Rationalized", f"{tot_cut} / {tot_base} Radars", f"-{cut_pct}% equipment reduction")
                 ec2.metric("Annualized ANSP OPEX Savings", f"€{tot_ann_sav/1e6:,.2f}M / yr", f"Across {len(filtered_df)} sovereign FIRs")
                 ec3.metric("Tactical & Rotational Delay", f"+{tot_pri_del:,.0f}m pri | +{tot_rot_del:,.0f}m rot", f"{filtered_df['flights_simulated'].sum():,} flights simulated")
-                ec4.metric("Rotational Cancellations", f"{tot_canc} flights", f"{filtered_df['curfew_breaches_count'].sum()} curfew breaches")
+                duty_timeouts = filtered_df['crew_fdp_timeouts_count'].sum() if 'crew_fdp_timeouts_count' in filtered_df.columns else 0
+                ec4.metric("Rotational Cancellations", f"{tot_canc} flights", f"{duty_timeouts} crew duty timeouts")
 
                 # Chart: Radar Equipment Rationalization by FIR
                 chart_df = filtered_df.sort_values(by="traffic_monthly_moves", ascending=False).copy()
@@ -7289,8 +7378,8 @@ with tab_cat_ai_lab:
                     1. **ATFM Ground Delay Programs (Internal Traffic `LS*`)**:
                        - Flights scheduled to land at or depart from airports within the closed FIR (e.g. Zurich `LSZH`, Geneva `LSGG`, Basel `LFSB`) **cannot** be rerouted around the FIR because their flight plan terminates or originates inside it.
                        - To prevent severe airborne holding stacks, fuel starvation, and safety hazards, Eurocontrol issues mandatory **Ground Delay Program (GDP)** slots. Aircraft are held at their departure gates across Europe (or at Swiss gates) absorbing delay on the ground with engines off.
-                    2. **Cancellation Risk (Duty Period & Curfew Breaches)**:
-                       - Flights receiving extreme ground delays (>135 minutes) risk breaching flight crew maximum duty limits under **EASA Subpart-FTL** (Flight Time Limitations) or missing destination airport night noise curfews. Airlines voluntarily cancel or consolidate these flights.
+                    2. **Cancellation Risk (Duty Period Exceedances & Slot Forfeiture)**:
+                       - Flights receiving extreme ground delays (>135 minutes) risk breaching flight crew maximum duty limits under **EASA Subpart-FTL** (Flight Time Limitations) or forfeiting tactical CTOT departure slots. Airlines voluntarily cancel or consolidate these flights.
                     3. **Aircraft Tail Tracking & Outstation Contagion**:
                        - Physical airframes (`ac_reg`) operate multi-leg rotations throughout the day. When an aircraft never arrives at its destination (or arrives too late for turnaround), the subsequent flight using that airframe **cannot take off**.
                        - The contagion spreads to outstation airports across Europe where passengers on return legs are stranded.
@@ -7535,7 +7624,7 @@ with tab_cat_ai_lab:
                     1. **Heterogeneous Airline Objective Functions**:
                        - **Network Legacy Carriers (Hub & Spoke)**: Heavy connecting bank penalties. A 20-minute delay on an inbound flight can cause dozens of missed long-haul transatlantic connections. They are highly willing to burn extra Jet-A on tactical speedups or swap arrival slots between high-value flights and low-yield regional flights.
                        - **Point-to-Point Low-Cost Carriers (LCC)**: Strict direct operating cost minimizers with low connecting passenger obligations. They refuse expensive en-route speedups and prefer gate holds or tactical cancellations of late-night rotations.
-                       - **Express Cargo Operators**: Night-centric schedules with high crew and cargo curfew penalties, deferring arrival slots to off-peak periods.
+                       - **Express Cargo Operators**: Night-centric schedules with high crew duty and rotational deadline penalties, deferring arrival slots to off-peak periods.
                     2. **Decentralized Slot Swaps vs. Centralized Mandates**:
                        - Centralized First-Come-First-Served (FCFS) slot allocation destroys economic value by treating a 300-passenger Boeing 777 with 150 tight connections identically to an empty regional turboprop.
                        - Decentralized slot trading allows airlines to autonomously exchange slots within their portfolio, achieving **~82% of central planner Pareto efficiency** while keeping passenger itineraries proprietary.

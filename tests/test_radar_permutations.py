@@ -168,3 +168,36 @@ def test_cli_radar_ecac_pipeline():
     assert res.exit_code == 0
     assert "Pan-European Radar Surveillance Resilience Summary" in res.stdout
     assert "ECAC Radar Resilience Pipeline Execution Complete" in res.stdout
+
+
+def test_joint_cns_surveillance_compensation(dataset, tmp_path):
+    """Verify Joint CNS Navigation-Surveillance Coupling: Radar compensation for degraded RNAV and absence of curfew declarations."""
+    analysis = simulate_radar_permutations(
+        dataset=dataset,
+        fir_id="EDUUUIR",
+        period="202510",
+        target_standard="VIEW_1",
+        max_permutations=3,
+    )
+    assert analysis.traffic_simulation is not None
+    assert analysis.traffic_simulation.curfew_breaches_count == 0
+
+    assert analysis.cns_joint_summary is not None
+    cns_sum = analysis.cns_joint_summary
+    assert "regimes" in cns_sum
+    regimes = cns_sum["regimes"]
+    assert "optimal_cns" in regimes
+    assert "surveillance_compensated" in regimes
+    assert "autonomous_pbn" in regimes
+    assert "compound_deficit" in regimes
+
+    assert regimes["optimal_cns"]["cell_count"] > 0
+    assert "compensating_radar_rankings" in cns_sum
+    assert len(cns_sum["compensating_radar_rankings"]) > 0
+
+    out_html = tmp_path / "test_cns_report.html"
+    rep_path = generate_radar_resilience_html_report(analysis, output_path=out_html, dataset=dataset)
+    html_text = rep_path.read_text(encoding="utf-8")
+    assert "Joint CNS Integration: Radar Surveillance Compensation for Navaid Degradations" in html_text
+    assert "Surveillance Compensated" in html_text
+    assert "curfew breaches" not in html_text.lower()

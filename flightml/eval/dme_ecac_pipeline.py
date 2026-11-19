@@ -543,7 +543,7 @@ def generate_ecac_summary_report(
     <div class="kpi-card">
       <div class="kpi-label">Direct &amp; Knock-On Delay Impact</div>
       <div class="kpi-value">+{total_primary_delay_min:,.0f}m <span style="font-size: 15px; color: #64748b;">pri</span> | +{total_react_delay_min:,.0f}m <span style="font-size: 15px; color: #64748b;">rot</span></div>
-      <div class="kpi-desc">Across {total_flights_simulated:,} simulated trajectories ({total_cancellations} rotational curfew/cancellation risks)</div>
+      <div class="kpi-desc">Across {total_flights_simulated:,} simulated trajectories ({total_cancellations} rotational cancellation &amp; duty timeout risks)</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">Cross-Border Harmonized Beacons</div>

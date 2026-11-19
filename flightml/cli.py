@@ -3905,8 +3905,43 @@ def cli_dme_resilience(
         t_sim.add_row("Downstream Rotational Legs Delayed", f"{sim.downstream_flights_delayed:,} flights (+{sim.total_reactionary_delay_min:,.0f} min reactionary delay)")
         t_sim.add_row("Reactionary Knock-On Multiplier", f"×{sim.reactionary_multiplier:.2f} (downstream minutes per primary tactical minute)")
         canc_style = "[bold red]" if sim.cancellation_risk_count > 0 else "[green]"
-        t_sim.add_row("Downstream Cancellation & Curfew Risks", f"{canc_style}{sim.cancellation_risk_count} flights[/] ({sim.curfew_breaches_count} night curfew breaches, {sim.crew_fdp_timeouts_count} crew FDP timeouts)")
+        t_sim.add_row("Downstream Flight Disruption Risks", f"{canc_style}{sim.cancellation_risk_count} flights[/] ({sim.crew_fdp_timeouts_count} crew FDP duty limits, {sim.cancellation_risk_count - sim.crew_fdp_timeouts_count} slot/rotational forfeitures)")
         console.print(t_sim)
+
+    # 5b. RNAV Operational Impact Scoring Breakdown
+    rnav_sum = getattr(analysis, "rnav_scoring_summary", None) or (getattr(analysis.traffic_simulation, "rnav_scoring_summary", None) if getattr(analysis, "traffic_simulation", None) else None)
+    if rnav_sum and "category_totals" in rnav_sum:
+        t_rnav = Table(title="📊 RNAV Operational Impact Scoring (ICAO Doc 9613 Transition Matrix)", border_style="cyan")
+        t_rnav.add_column("Operational Impact Dimension", style="bold cyan")
+        t_rnav.add_column("RNAV 1", justify="center", style="green")
+        t_rnav.add_column("RNAV 2", justify="center", style="blue")
+        t_rnav.add_column("RNAV 5", justify="center", style="yellow")
+        t_rnav.add_column("RNAV 10", justify="center", style="red")
+        t_rnav.add_column("Total Fleet Points", justify="right", style="bold white")
+        t_rnav.add_column("Avg / Traversal", justify="right", style="dim white")
+
+        matrix = rnav_sum.get("scoring_matrix", {})
+        for cat, c_info in rnav_sum["category_totals"].items():
+            t_rnav.add_row(
+                cat,
+                str(matrix.get("RNAV 1", {}).get(cat, 0)),
+                str(matrix.get("RNAV 2", {}).get(cat, 1)),
+                str(matrix.get("RNAV 5", {}).get(cat, 2)),
+                str(matrix.get("RNAV 10", {}).get(cat, 4)),
+                f"{c_info['total_points']:,} pts",
+                f"{c_info['avg_points_per_flight']:.2f} pts/fl",
+            )
+        console.print(t_rnav)
+        cap_cnts = rnav_sum.get("capability_counts", {})
+        cap_pcts = rnav_sum.get("capability_percentages", {})
+        console.print(
+            f"[dim]Fleet Transition Profile: "
+            f"[green]RNAV 1:[/] {cap_cnts.get('RNAV 1', 0):,} ({cap_pcts.get('RNAV 1', 0.0)}%) | "
+            f"[blue]RNAV 2:[/] {cap_cnts.get('RNAV 2', 0):,} ({cap_pcts.get('RNAV 2', 0.0)}%) | "
+            f"[yellow]RNAV 5:[/] {cap_cnts.get('RNAV 5', 0):,} ({cap_pcts.get('RNAV 5', 0.0)}%) | "
+            f"[red]RNAV 10:[/] {cap_cnts.get('RNAV 10', 0):,} ({cap_pcts.get('RNAV 10', 0.0)}%) — "
+            f"Aggregate Fleet Score: [bold]{rnav_sum['total_fleet_score']:,} pts[/bold] (Avg {rnav_sum['avg_flight_score']:.1f} pts/fl)[/dim]\n"
+        )
 
     # 6. DME Station Utilization Table
     if getattr(analysis, "station_utilization", None):
@@ -4299,8 +4334,36 @@ def cli_radar_resilience(
         t_sim.add_row("Downstream Rotational Legs Delayed", f"{sim.downstream_flights_delayed:,} flights (+{sim.total_reactionary_delay_min:,.0f} min reactionary delay)")
         t_sim.add_row("Reactionary Knock-On Multiplier", f"×{sim.reactionary_multiplier:.2f} (downstream minutes per primary tactical minute)")
         canc_style = "[bold red]" if sim.cancellation_risk_count > 0 else "[green]"
-        t_sim.add_row("Downstream Cancellation & Curfew Risks", f"{canc_style}{sim.cancellation_risk_count} flights[/] ({sim.curfew_breaches_count} night curfew breaches, {sim.crew_fdp_timeouts_count} crew FDP timeouts)")
+        t_sim.add_row("Downstream Flight Disruption Risks", f"{canc_style}{sim.cancellation_risk_count} flights[/] ({sim.crew_fdp_timeouts_count} crew FDP duty limits, {sim.cancellation_risk_count - sim.crew_fdp_timeouts_count} slot/rotational forfeitures)")
         console.print(t_sim)
+
+    # 5b. Joint CNS Navigation-Surveillance Compensation & Deficit Regimes
+    cns_sum = getattr(analysis, "cns_joint_summary", None)
+    if cns_sum and "regimes" in cns_sum:
+        t_cns = Table(title="🛰️ Joint CNS Navigation-Surveillance Compensation & Deficit Regimes", border_style="green")
+        t_cns.add_column("CNS Airspace Regime", style="bold green")
+        t_cns.add_column("10 NM Cells", justify="right", style="cyan")
+        t_cns.add_column("Airspace %", justify="right", style="bold white")
+        t_cns.add_column("Daily Flights", justify="right", style="bold yellow")
+        t_cns.add_column("Operational Airspace Status", style="white")
+
+        reg = cns_sum["regimes"]
+        reg_styles = {
+            "optimal_cns": "[green]Optimal CNS[/green] (RNAV 1/2 + Radar Active)",
+            "surveillance_compensated": "[bold blue]Surveillance Compensated[/bold blue] (Radar Mitigates RNAV 5/10)",
+            "autonomous_pbn": "[yellow]Autonomous PBN[/yellow] (RNAV 1/2 across Radar Gap)",
+            "compound_deficit": "[bold red]Compound CNS Deficit[/bold red] (Double Navaid + Radar Gap)",
+        }
+        for r_key, r_label in reg_styles.items():
+            r_info = reg.get(r_key, {})
+            t_cns.add_row(
+                r_label,
+                f"{r_info.get('cell_count', 0):,} cells",
+                f"{r_info.get('cell_pct', 0.0):.1f}%",
+                f"{r_info.get('daily_flights', 0.0):,.0f} fl/day",
+                r_info.get("operational_status", ""),
+            )
+        console.print(t_cns)
 
     # 5. Radar Station Utilization Table
     if getattr(analysis, "station_utilization", None):

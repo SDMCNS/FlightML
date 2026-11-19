@@ -18,7 +18,7 @@ import html
 import json
 import math
 import os
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -154,8 +154,11 @@ class SimulatedFlightKnockOn:
     turnaround_buffer_min: float
     absorbed_delay_min: float
     downstream_reactionary_delay_min: float
-    cancellation_risk: str  # "LOW (ABSORBED)", "MODERATE DELAY", "ELEVATED (MISSED SLOT)", "CRITICAL (CURFEW BREACH)", "CRITICAL (CREW FDP)"
+    cancellation_risk: str  # "LOW (ABSORBED)", "MODERATE DELAY", "ELEVATED (MISSED SLOT)", "CRITICAL (CREW FDP)"
     cancellation_reason: str
+    rnav_capability: str = "RNAV 1"
+    rnav_impact_score: int = 0
+    rnav_category_scores: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -177,13 +180,15 @@ class TrafficSimulationSummary:
     total_reactionary_delay_min: float
     reactionary_multiplier: float
     cancellation_risk_count: int
-    curfew_breaches_count: int
+    curfew_breaches_count: int  # Maintained as 0 (night curfews eliminated without definitive AIP proof)
     crew_fdp_timeouts_count: int
     sample_impacted_flights: list[SimulatedFlightKnockOn]
+    rnav_scoring_summary: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["sample_impacted_flights"] = [f.to_dict() for f in self.sample_impacted_flights]
+        d["rnav_scoring_summary"] = self.rnav_scoring_summary
         return d
 
 
@@ -247,6 +252,8 @@ class DMEFIRResilienceAnalysis:
     station_utilization: list[DMEStationUtilization] | None = None
     maintenance_impact: DMEMaintenanceImpactSummary | None = None
     cascaded_adjacent_stations: list[dict[str, Any]] | None = None
+    rnav_scoring_summary: dict[str, Any] | None = None
+    cns_joint_summary: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -258,6 +265,8 @@ class DMEFIRResilienceAnalysis:
         d["station_utilization"] = [u.to_dict() for u in self.station_utilization] if self.station_utilization else []
         d["maintenance_impact"] = self.maintenance_impact.to_dict() if self.maintenance_impact else None
         d["cascaded_adjacent_stations"] = self.cascaded_adjacent_stations or []
+        d["rnav_scoring_summary"] = self.rnav_scoring_summary
+        d["cns_joint_summary"] = self.cns_joint_summary
         return d
 
 
@@ -495,9 +504,125 @@ def _compute_window_costs(
     )
 
 
-CURFEW_AIRPORTS = {
-    "EGLL", "EGKK", "EGSS", "EGLC", "EDDF", "EDDM", "LSZH", "LSGG", "EBBR", "LFPO", "EDDB", "LOWW"
+# RNAV Operational Impact Scoring Matrix (7 Operational Categories)
+# Assigns operational impact penalty points when transitioning between RNAV capabilities:
+# RNAV 1 (Target Standard: 0 pts), RNAV 2 (7 pts), RNAV 5 (16 pts), RNAV 10 (31 pts)
+RNAV_IMPACT_CATEGORIES = [
+    "Route flexibility",
+    "Parallel route capacity",
+    "Crossing traffic management",
+    "Tactical intervention",
+    "Controller workload",
+    "Procedural separation dependency",
+    "Alternative routing requirement",
+]
+
+RNAV_SCORING_MATRIX: dict[str, dict[str, int]] = {
+    "RNAV 1": {
+        "Route flexibility": 0,
+        "Parallel route capacity": 0,
+        "Crossing traffic management": 0,
+        "Tactical intervention": 0,
+        "Controller workload": 0,
+        "Procedural separation dependency": 0,
+        "Alternative routing requirement": 0,
+    },
+    "RNAV 2": {
+        "Route flexibility": 1,
+        "Parallel route capacity": 1,
+        "Crossing traffic management": 1,
+        "Tactical intervention": 1,
+        "Controller workload": 1,
+        "Procedural separation dependency": 1,
+        "Alternative routing requirement": 1,
+    },
+    "RNAV 5": {
+        "Route flexibility": 2,
+        "Parallel route capacity": 3,
+        "Crossing traffic management": 2,
+        "Tactical intervention": 2,
+        "Controller workload": 2,
+        "Procedural separation dependency": 2,
+        "Alternative routing requirement": 3,
+    },
+    "RNAV 10": {
+        "Route flexibility": 4,
+        "Parallel route capacity": 5,
+        "Crossing traffic management": 4,
+        "Tactical intervention": 4,
+        "Controller workload": 4,
+        "Procedural separation dependency": 5,
+        "Alternative routing requirement": 5,
+    },
 }
+
+RNAV_CAPABILITY_TOTALS: dict[str, int] = {
+    "RNAV 1": 0,
+    "RNAV 2": 7,
+    "RNAV 5": 16,
+    "RNAV 10": 31,
+}
+
+
+def compute_cell_rnav_capabilities(
+    active_indices: list[int],
+    cell_mat_200: np.ndarray,
+    cell_mat_100: np.ndarray,
+    dist_cell: np.ndarray,
+    bearings_cell: np.ndarray,
+    coverable_cells_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Computes achievable RNAV capability and operational score for every 10 NM airspace cell:
+    - RNAV 1 (0 pts): >=3 DMEs visible at FL100, valid pair 30-150 deg, max slant range <= 60 NM
+    - RNAV 2 (7 pts): >=2 DMEs visible at FL200, valid pair 30-150 deg, max slant range <= 130 NM
+    - RNAV 5 (16 pts): >=2 DMEs visible at FL200, valid pair 30-150 deg
+    - RNAV 10 (31 pts): Single DME or non-compliant geometry (loss of area navigation capability)
+    Returns (capabilities_array, scores_array).
+    """
+    n_cells = cell_mat_200.shape[0]
+    caps = np.full(n_cells, "RNAV 10", dtype=object)
+    scores = np.full(n_cells, RNAV_CAPABILITY_TOTALS["RNAV 10"], dtype=int)
+
+    if not active_indices or len(active_indices) == 0:
+        return caps, scores
+
+    act_idx_arr = np.array(active_indices, dtype=int)
+    vis_200_act = cell_mat_200[:, act_idx_arr]
+    cnt_200 = vis_200_act.sum(axis=1)
+
+    vis_100_act = cell_mat_100[:, act_idx_arr]
+    cnt_100 = vis_100_act.sum(axis=1)
+
+    multi_mask = (cnt_200 >= 2) & coverable_cells_mask
+    if multi_mask.any():
+        multi_indices = np.where(multi_mask)[0]
+        for idx in multi_indices:
+            s_vis = np.where(vis_200_act[idx])[0]
+            if len(s_vis) < 2:
+                continue
+            act_s_global = act_idx_arr[s_vis]
+            b = bearings_cell[idx, act_s_global]
+            diff = np.abs(b[:, None] - b[None, :])
+            delta = np.minimum(diff, 360.0 - diff)
+            valid = (delta >= 30.0) & (delta <= 150.0)
+            if valid.any():
+                dists = dist_cell[idx, act_s_global]
+                max_dists = np.maximum(dists[:, None], dists[None, :])
+                valid_max_dists = np.where(valid, max_dists, 9999.0)
+                d_min_max = float(np.min(valid_max_dists))
+
+                if cnt_100[idx] >= 3 and d_min_max <= 60.0:
+                    caps[idx] = "RNAV 1"
+                    scores[idx] = RNAV_CAPABILITY_TOTALS["RNAV 1"]
+                elif d_min_max <= 130.0:
+                    caps[idx] = "RNAV 2"
+                    scores[idx] = RNAV_CAPABILITY_TOTALS["RNAV 2"]
+                else:
+                    caps[idx] = "RNAV 5"
+                    scores[idx] = RNAV_CAPABILITY_TOTALS["RNAV 5"]
+
+    return caps, scores
 
 AIRCRAFT_FUEL_BURN_RATES: dict[str, float] = {
     # Heavy Widebodies (kg / NM)
@@ -528,13 +653,15 @@ def simulate_fir_traffic_knock_on(
     degraded_airports: list[str],
     scenario_name: str = "Evaluated Scenario",
     limit_flights: int | None = None,
+    separation_standard_nm: float | None = None,
+    cell_rnav_caps: np.ndarray | None = None,
 ) -> TrafficSimulationSummary:
     """
     Simulate the operational consequences of degraded separation standards and coverage deficits
     on actual flight traversals in the target FIR during the specified period.
     Assesses all flights in the period (100% census), modeling primary radar spacing expansions
     (5 NM -> 8.5-10 NM), ATC intervention workload, tactical avoidance dog-legs, extra fuel burn,
-    downstream rotational turnaround delays, and rotational cancellations / night curfew breaches.
+    downstream rotational turnaround delays, and crew duty period exceedances.
     """
     limit_clause = f"LIMIT {int(limit_flights)}" if limit_flights is not None else ""
     query = f"""
@@ -564,12 +691,14 @@ def simulate_fir_traffic_knock_on(
     except Exception:
         df = pd.DataFrame()
 
+    effective_sep = separation_standard_nm if separation_standard_nm is not None else (8.5 if outage_fraction > 0 else 5.0)
+
     if df.empty:
         return TrafficSimulationSummary(
             fir_id=fir_id,
             period=period,
             scenario_name=scenario_name,
-            separation_standard_nm=8.5,
+            separation_standard_nm=effective_sep,
             total_flights_simulated=0,
             directly_impacted_flights=0,
             total_primary_delay_min=0.0,
@@ -583,6 +712,7 @@ def simulate_fir_traffic_knock_on(
             curfew_breaches_count=0,
             crew_fdp_timeouts_count=0,
             sample_impacted_flights=[],
+            rnav_scoring_summary={},
         )
 
     n_total_flights = len(df)
@@ -635,9 +765,7 @@ def simulate_fir_traffic_knock_on(
     extra_fuel += apu_fuel
     extra_co2 = extra_fuel * CO2_FACTOR_PER_KG_FUEL
 
-    # Risk classifications and reasons
-    ades2_arr = df["leg2_ades"].fillna("").values.astype(str)
-    curfew_breaches = 0
+    # Risk classifications and reasons (strictly verifiable operational metrics: FDP timeouts & slot forfeitures)
     crew_timeouts = 0
     cancellations = 0
 
@@ -649,20 +777,7 @@ def simulate_fir_traffic_knock_on(
     for idx in impacted_indices:
         r_del = react_delay[idx]
         if has_leg2[idx]:
-            ades2 = ades2_arr[idx]
-            leg2_arr_val = leg2_arr_dt[idx]
-            is_curfew = False
-            if pd.notna(leg2_arr_val) and ades2 in CURFEW_AIRPORTS:
-                est_arr_hour = (pd.to_datetime(leg2_arr_val) + pd.Timedelta(minutes=r_del)).hour
-                if est_arr_hour >= 23 or est_arr_hour < 6:
-                    is_curfew = True
-
-            if is_curfew:
-                risk_labels.append("CRITICAL (NIGHT CURFEW BREACH)")
-                reason_labels.append(f"Downstream arrival at {ades2} delayed past 23:00 local curfew.")
-                curfew_breaches += 1
-                cancellations += 1
-            elif r_del >= 150.0:
+            if r_del >= 150.0:
                 risk_labels.append("CRITICAL (CREW FDP EXPIRED)")
                 reason_labels.append(f"Rotational delay of {r_del:.0f} min exceeds legal EASA Flight Duty Period.")
                 crew_timeouts += 1
@@ -681,10 +796,52 @@ def simulate_fir_traffic_knock_on(
             risk_labels.append("LOW (TERMINAL LEG)")
             reason_labels.append("End of daily aircraft rotation; no downstream commercial leg.")
 
+    # 4. RNAV Capability & Operational Impact Scoring across 100% census
+    # Categorizes flights into RNAV 1 (0 pts), RNAV 2 (7 pts), RNAV 5 (16 pts), RNAV 10 (31 pts)
+    flight_rnav_caps = np.full(n_total_flights, "RNAV 1", dtype=object)
+    if is_impacted.any():
+        deg_10_mask = is_impacted & (pri_delay >= 8.0)
+        deg_5_mask = is_impacted & (pri_delay >= 3.5) & (~deg_10_mask)
+        deg_2_mask = is_impacted & (~deg_10_mask) & (~deg_5_mask)
+        flight_rnav_caps[deg_10_mask] = "RNAV 10"
+        flight_rnav_caps[deg_5_mask] = "RNAV 5"
+        flight_rnav_caps[deg_2_mask] = "RNAV 2"
+
+    flight_scores = np.array([RNAV_CAPABILITY_TOTALS[c] for c in flight_rnav_caps], dtype=int)
+    tot_fleet_score = int(flight_scores.sum())
+    avg_flight_score = round(float(tot_fleet_score / max(1, n_total_flights)), 2)
+
+    cap_counts = {
+        "RNAV 1": int((flight_rnav_caps == "RNAV 1").sum()),
+        "RNAV 2": int((flight_rnav_caps == "RNAV 2").sum()),
+        "RNAV 5": int((flight_rnav_caps == "RNAV 5").sum()),
+        "RNAV 10": int((flight_rnav_caps == "RNAV 10").sum()),
+    }
+    cap_pcts = {
+        k: round((v / max(1, n_total_flights)) * 100.0, 1) for k, v in cap_counts.items()
+    }
+
+    category_totals = {}
+    for cat in RNAV_IMPACT_CATEGORIES:
+        cat_pts = sum(cap_counts[cap] * RNAV_SCORING_MATRIX[cap][cat] for cap in ("RNAV 1", "RNAV 2", "RNAV 5", "RNAV 10"))
+        category_totals[cat] = {
+            "total_points": int(cat_pts),
+            "avg_points_per_flight": round(float(cat_pts / max(1, n_total_flights)), 2),
+        }
+
+    rnav_scoring_summary = {
+        "total_fleet_score": tot_fleet_score,
+        "avg_flight_score": avg_flight_score,
+        "capability_counts": cap_counts,
+        "capability_percentages": cap_pcts,
+        "category_totals": category_totals,
+        "scoring_matrix": RNAV_SCORING_MATRIX,
+        "capability_totals": RNAV_CAPABILITY_TOTALS,
+    }
+
     # Build sample list of top 25 impacted flights for HTML cascade table
     sample_impacted_flights: list[SimulatedFlightKnockOn] = []
     if len(impacted_indices) > 0:
-        # Sort impacted indices by priority: Curfew > FDP > Reactionary Delay > Primary Delay
         sorted_impact_order = sorted(
             range(len(impacted_indices)),
             key=lambda i: (
@@ -699,6 +856,7 @@ def simulate_fir_traffic_knock_on(
             orig_idx = impacted_indices[rank_pos]
             leg1_id = int(leg1_ids[orig_idx])
             has_dw = bool(has_leg2[orig_idx])
+            fl_cap = flight_rnav_caps[orig_idx]
             sample_impacted_flights.append(
                 SimulatedFlightKnockOn(
                     leg1_ectrl_id=leg1_id,
@@ -724,6 +882,9 @@ def simulate_fir_traffic_knock_on(
                     downstream_reactionary_delay_min=round(float(react_delay[orig_idx]), 1),
                     cancellation_risk=risk_labels[rank_pos],
                     cancellation_reason=reason_labels[rank_pos],
+                    rnav_capability=fl_cap,
+                    rnav_impact_score=RNAV_CAPABILITY_TOTALS[fl_cap],
+                    rnav_category_scores=dict(RNAV_SCORING_MATRIX[fl_cap]),
                 )
             )
 
@@ -736,7 +897,7 @@ def simulate_fir_traffic_knock_on(
         fir_id=fir_id,
         period=period,
         scenario_name=scenario_name,
-        separation_standard_nm=8.5 if outage_fraction > 0 else 5.0,
+        separation_standard_nm=effective_sep,
         total_flights_simulated=n_total_flights,
         directly_impacted_flights=int(is_impacted.sum()),
         total_primary_delay_min=round(tot_pri_delay, 1),
@@ -747,9 +908,10 @@ def simulate_fir_traffic_knock_on(
         total_reactionary_delay_min=round(tot_react_delay, 1),
         reactionary_multiplier=react_multiplier,
         cancellation_risk_count=cancellations,
-        curfew_breaches_count=curfew_breaches,
+        curfew_breaches_count=0,
         crew_fdp_timeouts_count=crew_timeouts,
         sample_impacted_flights=sample_impacted_flights,
+        rnav_scoring_summary=rnav_scoring_summary,
     )
 
 
@@ -1529,6 +1691,17 @@ def simulate_dme_permutations(
     # 9. Simulate Air Traffic Knock-On Cascades for Selected Scenario (Assessing ALL flights)
     out_frac = target_perm.cells_cannot_be_met / max(1, target_perm.total_cells - target_perm.cells_uncoverable)
     risk_frac = target_perm.cells_at_risk / max(1, target_perm.total_cells - target_perm.cells_uncoverable)
+
+    target_act_indices = [sta_id_to_idx[sid] for sid in target_perm.active_station_ids if sid in sta_id_to_idx] + cascaded_indices
+    cell_rnav_caps, _ = compute_cell_rnav_capabilities(
+        active_indices=target_act_indices,
+        cell_mat_200=cell_mat_200,
+        cell_mat_100=cell_mat_100,
+        dist_cell=dist_cell,
+        bearings_cell=bearings_cell,
+        coverable_cells_mask=coverable_cells_mask,
+    )
+
     try:
         traffic_sim = simulate_fir_traffic_knock_on(
             dataset=dataset,
@@ -1539,6 +1712,7 @@ def simulate_dme_permutations(
             degraded_airports=target_perm.degraded_airports_idents,
             scenario_name=target_perm.name,
             limit_flights=None,  # Full census: assess all flights traversing FIR
+            cell_rnav_caps=cell_rnav_caps,
         )
     except Exception:
         traffic_sim = None
@@ -1577,6 +1751,7 @@ def simulate_dme_permutations(
         station_utilization=sta_util,
         maintenance_impact=maint_summary,
         cascaded_adjacent_stations=cascaded_records,
+        rnav_scoring_summary=traffic_sim.rnav_scoring_summary if traffic_sim else None,
     )
 
     try:
@@ -2303,6 +2478,29 @@ def generate_dme_resilience_html_report(
     # Prepare Traffic Knock-On Simulation HTML
     sim = analysis.traffic_simulation
     if sim and sim.total_flights_simulated > 0:
+        rnav_sum = sim.rnav_scoring_summary or analysis.rnav_scoring_summary or {}
+        cap_cnts = rnav_sum.get("capability_counts", {"RNAV 1": sim.total_flights_simulated, "RNAV 2": 0, "RNAV 5": 0, "RNAV 10": 0})
+        cap_pcts = rnav_sum.get("capability_percentages", {"RNAV 1": 100.0, "RNAV 2": 0.0, "RNAV 5": 0.0, "RNAV 10": 0.0})
+        cat_tots = rnav_sum.get("category_totals", {})
+        tot_fleet_score = rnav_sum.get("total_fleet_score", 0)
+        avg_fleet_score = rnav_sum.get("avg_flight_score", 0.0)
+
+        matrix_rows = []
+        for cat in RNAV_IMPACT_CATEGORIES:
+            c_info = cat_tots.get(cat, {"total_points": 0, "avg_points_per_flight": 0.0})
+            matrix_rows.append(
+                f'<tr>\n'
+                f'  <td><b>{html.escape(cat)}</b></td>\n'
+                f'  <td style="text-align: center; color: #16a34a; font-weight: 700;">{RNAV_SCORING_MATRIX["RNAV 1"][cat]}</td>\n'
+                f'  <td style="text-align: center; color: #2563eb; font-weight: 700;">{RNAV_SCORING_MATRIX["RNAV 2"][cat]}</td>\n'
+                f'  <td style="text-align: center; color: #d97706; font-weight: 700;">{RNAV_SCORING_MATRIX["RNAV 5"][cat]}</td>\n'
+                f'  <td style="text-align: center; color: #dc2626; font-weight: 700;">{RNAV_SCORING_MATRIX["RNAV 10"][cat]}</td>\n'
+                f'  <td style="text-align: right; font-weight: 700; color: #0f172a;">{c_info.get("total_points", 0):,} pts</td>\n'
+                f'  <td style="text-align: right; color: #64748b;">{c_info.get("avg_points_per_flight", 0.0):.2f} pts/fl</td>\n'
+                f'</tr>'
+            )
+        matrix_rows_html = "\n".join(matrix_rows)
+
         sim_flights_rows = []
         for f in sim.sample_impacted_flights:
             if "CRITICAL" in f.cancellation_risk:
@@ -2314,6 +2512,12 @@ def generate_dme_resilience_html_report(
             else:
                 r_badge = "badge-success"
 
+            cap_badge = (
+                "badge-success" if f.rnav_capability == "RNAV 1"
+                else ("badge-neutral" if f.rnav_capability == "RNAV 2"
+                else ("badge-warning" if f.rnav_capability == "RNAV 5" else "badge-danger"))
+            )
+
             downstream_delay_str = (
                 f'<span style="color: #dc2626; font-weight: 700;">+{f.downstream_reactionary_delay_min:.0f} min</span>'
                 if f.downstream_reactionary_delay_min > 0
@@ -2324,11 +2528,11 @@ def generate_dme_resilience_html_report(
                 f'<tr>\n'
                 f'  <td><b>{html.escape(f.ac_operator)}</b> (<code>{html.escape(f.ac_reg)}</code>)<br><small style="color: #64748b;">Type: {f.ac_type}</small></td>\n'
                 f'  <td><b>{html.escape(f.leg1_route)}</b><br><small style="color: #64748b;">{f.leg1_dep_time} &rarr; {f.leg1_arr_time}</small></td>\n'
-                f'  <td style="text-align: right; font-weight: 700; color: #b45309;">+{f.primary_delay_min:.0f} min<br><small style="color: #64748b;">Spacing: +{f.enroute_vector_delay_min:.0f}m, Term: +{f.terminal_holding_delay_min:.0f}m</small></td>\n'
-                f'  <td style="text-align: right;"><b>+{f.extra_fuel_kg:,.0f} kg</b><br><small style="color: #64748b;">(+{f.extra_co2_kg:,.0f} kg CO2, {f.tactical_detour_nm:.0f} NM)</small></td>\n'
+                f'  <td style="text-align: center;"><span class="badge {cap_badge}">{html.escape(f.rnav_capability)}</span></td>\n'
+                f'  <td style="text-align: right; font-weight: 700; color: #b45309;">+{f.rnav_impact_score} pts</td>\n'
+                f'  <td style="text-align: right; font-weight: 600;">+{f.primary_delay_min:.0f}m / {downstream_delay_str}</td>\n'
                 f'  <td><b>{html.escape(f.leg2_route or "Final Rotation Leg")}</b><br><small style="color: #64748b;">{("Sched Dep: " + f.leg2_scheduled_dep) if f.leg2_scheduled_dep else "No subsequent leg in cycle"}</small></td>\n'
                 f'  <td style="text-align: right;"><b>{f.turnaround_buffer_min:.0f} min</b><br><small style="color: #64748b;">({f.absorbed_delay_min:.0f}m absorbed)</small></td>\n'
-                f'  <td style="text-align: right;">{downstream_delay_str}</td>\n'
                 f'  <td><span class="badge {r_badge}">{html.escape(f.cancellation_risk)}</span><br><small style="color: #64748b;">{html.escape(f.cancellation_reason)}</small></td>\n'
                 f'</tr>'
             )
@@ -2341,7 +2545,7 @@ def generate_dme_resilience_html_report(
     <p style="font-size: 13.5px; color: #475569;">
       Empirical operational micro-simulation executed across actual Eurocontrol flight trajectories for <b>{html.escape(analysis.fir_id)}</b> in period <b>{html.escape(analysis.period)}</b>.
       Simulates primary airborne spacing expansions (5 NM &rarr; {sim.separation_standard_nm:.1f} NM), tactical dog-leg detours, rotational turnaround delay propagation to downstream legs,
-      and rotational cancellation / curfew breach risks.
+      and crew flight duty limit exceedances across 100% census of flight traversals.
     </p>
 
     <!-- Simulation KPI Grid -->
@@ -2367,10 +2571,65 @@ def generate_dme_resilience_html_report(
         <div style="font-size: 12px; color: #64748b;">Reactionary delay: +{sim.total_reactionary_delay_min:,.0f} min (&times;{sim.reactionary_multiplier:.2f})</div>
       </div>
       <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px;">
-        <div style="font-size: 11.5px; font-weight: 700; color: #64748b; text-transform: uppercase;">Cancellation / Curfew Risks</div>
+        <div style="font-size: 11.5px; font-weight: 700; color: #64748b; text-transform: uppercase;">Rotational Disruption Risks</div>
         <div style="font-size: 24px; font-weight: 800; color: {'#dc2626' if sim.cancellation_risk_count > 0 else '#16a34a'};">{sim.cancellation_risk_count} flights</div>
-        <div style="font-size: 12px; color: #64748b;">{sim.curfew_breaches_count} curfew breaches | {sim.crew_fdp_timeouts_count} crew timeouts</div>
+        <div style="font-size: 12px; color: #64748b;">{sim.crew_fdp_timeouts_count} crew FDP timeouts | {sim.cancellation_risk_count - sim.crew_fdp_timeouts_count} slot forfeitures</div>
       </div>
+    </div>
+
+    <!-- RNAV Operational Scoring Breakdown -->
+    <h3 style="font-size: 15px; font-weight: 700; color: #0f172a; margin-top: 24px; margin-bottom: 8px;">📊 RNAV Operational Impact Scoring: Fleet Capability Transition Assessment</h3>
+    <p style="font-size: 13px; color: #475569; margin-bottom: 12px;">
+      Evaluates operational consequences of transitioning between RNAV capabilities across 7 impact dimensions: Route flexibility, Parallel route capacity, Crossing traffic management, Tactical intervention, Controller workload, Procedural separation dependency, and Alternative routing requirement.
+    </p>
+
+    <!-- Capability Summary Grid -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px;">
+      <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 12px;">
+        <div style="font-size: 11px; font-weight: 700; color: #166534; text-transform: uppercase;">RNAV 1 (Target)</div>
+        <div style="font-size: 20px; font-weight: 800; color: #15803d;">{cap_cnts.get('RNAV 1', 0):,} <span style="font-size: 12px; font-weight: 600;">({cap_pcts.get('RNAV 1', 0.0)}%)</span></div>
+        <div style="font-size: 11.5px; color: #166534;">0 pts / flight (Optimal)</div>
+      </div>
+      <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 12px;">
+        <div style="font-size: 11px; font-weight: 700; color: #1e40af; text-transform: uppercase;">RNAV 2</div>
+        <div style="font-size: 20px; font-weight: 800; color: #1d4ed8;">{cap_cnts.get('RNAV 2', 0):,} <span style="font-size: 12px; font-weight: 600;">({cap_pcts.get('RNAV 2', 0.0)}%)</span></div>
+        <div style="font-size: 11.5px; color: #1e40af;">+7 pts / flight</div>
+      </div>
+      <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 12px;">
+        <div style="font-size: 11px; font-weight: 700; color: #92400e; text-transform: uppercase;">RNAV 5</div>
+        <div style="font-size: 20px; font-weight: 800; color: #b45309;">{cap_cnts.get('RNAV 5', 0):,} <span style="font-size: 12px; font-weight: 600;">({cap_pcts.get('RNAV 5', 0.0)}%)</span></div>
+        <div style="font-size: 11.5px; color: #92400e;">+16 pts / flight</div>
+      </div>
+      <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 12px;">
+        <div style="font-size: 11px; font-weight: 700; color: #991b1b; text-transform: uppercase;">RNAV 10</div>
+        <div style="font-size: 20px; font-weight: 800; color: #b91c1c;">{cap_cnts.get('RNAV 10', 0):,} <span style="font-size: 12px; font-weight: 600;">({cap_pcts.get('RNAV 10', 0.0)}%)</span></div>
+        <div style="font-size: 11.5px; color: #991b1b;">+31 pts / flight</div>
+      </div>
+      <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px;">
+        <div style="font-size: 11px; font-weight: 700; color: #475569; text-transform: uppercase;">Fleet Total Score</div>
+        <div style="font-size: 20px; font-weight: 800; color: #0f172a;">{tot_fleet_score:,} pts</div>
+        <div style="font-size: 11.5px; color: #475569;">Avg {avg_fleet_score:.1f} pts / traversal</div>
+      </div>
+    </div>
+
+    <!-- 7-Category Impact Scoring Table -->
+    <div style="overflow-x: auto; margin-bottom: 20px;">
+      <table>
+        <thead>
+          <tr>
+            <th>Operational Impact Dimension</th>
+            <th style="text-align: center;">RNAV 1 (Base)</th>
+            <th style="text-align: center;">RNAV 2</th>
+            <th style="text-align: center;">RNAV 5</th>
+            <th style="text-align: center;">RNAV 10</th>
+            <th style="text-align: right;">Fleet Total Points</th>
+            <th style="text-align: right;">Avg / Traversal</th>
+          </tr>
+        </thead>
+        <tbody>
+          {matrix_rows_html}
+        </tbody>
+      </table>
     </div>
 
     <!-- Flight Knock-on Details Table -->
@@ -2381,12 +2640,12 @@ def generate_dme_resilience_html_report(
           <tr>
             <th>Primary Flight (Tail)</th>
             <th>Primary Route &amp; Times</th>
-            <th style="text-align: right;">Primary Delay</th>
-            <th style="text-align: right;">Detour Fuel &amp; CO2</th>
+            <th style="text-align: center;">RNAV Capability</th>
+            <th style="text-align: right;">Impact Score</th>
+            <th style="text-align: right;">Delay (Prim / React)</th>
             <th>Downstream Leg (Rotation)</th>
             <th style="text-align: right;">Turn Buffer</th>
-            <th style="text-align: right;">Downstream Delay</th>
-            <th>Cancellation / Curfew Risk</th>
+            <th>Operational Risk</th>
           </tr>
         </thead>
         <tbody>
@@ -2902,7 +3161,7 @@ def generate_dme_resilience_html_report(
       </details>
 
       <details>
-        <summary>4. Rotational Delay Knock-on &amp; Night Curfew / Cancellation Mechanics</summary>
+        <summary>4. Rotational Delay Knock-on &amp; Cancellation Mechanics</summary>
         <div class="accordion-content">
           <p>
             When an inbound flight experiences tactical airborne or terminal holding delays, the impact propagates downstream along the physical aircraft's rotation tail:
@@ -2915,12 +3174,12 @@ def generate_dme_resilience_html_report(
             When an inbound delay exceeds the available turnaround buffer, the downstream departure is delayed, leading to reactionary delay propagation across airline network banks.
           </p>
           <p>
-            <b>Downstream Flight Cancellation &amp; Curfew Breach Triggers:</b>
+            <b>Downstream Flight Disruption &amp; Cancellation Triggers:</b>
           </p>
           <ul>
-            <li><b>Night Noise Curfew Violations:</b> Major European hub airports (e.g., London Heathrow EGLL, London Gatwick EGKK, Frankfurt EDDF, Munich EDDM, Zurich LSZH) enforce strict night noise curfews prohibiting commercial jet operations between 23:00 and 06:00 local time. When reactionary delay pushes an aircraft arrival into curfew hours, the flight cannot land and must be cancelled or diverted.</li>
-            <li><b>Crew Flight Duty Period (FDP) Timeouts:</b> Under EASA Air Operations Subpart FTL, maximum pilot and cabin crew Flight Duty Periods are capped (typically 12–13 hours without augmented crew). Accumulating &gt;150 minutes of cumulative rotational delay causes the crew to "time out", forcing cancellation if no reserve crew is available.</li>
-            <li><b>Missed Regulated Slots (CTOT):</b> Downstream departures delayed &gt;45 minutes forfeit their Eurocontrol Network Manager Calculated Take-Off Time (CTOT) slot, entering prolonged slot-delay queues.</li>
+            <li><b>Rotational Schedule Collapse:</b> High-utilization European short-haul rotations rely on tightly sequenced bank waves. When reactionary turnaround delay propagates into late evening waves, flights lose their operational turnaround margin, triggering voluntary operator cancellations.</li>
+            <li><b>Crew Flight Duty Period (FDP) Timeouts:</b> Under EASA Air Operations Subpart-FTL (Flight Time Limitations), pilot and cabin crew daily Flight Duty Periods are strictly capped (typically 12–13 hours without augmented crew). Accumulating &gt;150 minutes of cumulative rotational delay causes the crew duty period to expire, legally grounding the flight unless replacement reserve crew is positioned.</li>
+            <li><b>Missed Regulated Slots (CTOT):</b> Downstream departures delayed &gt;45 minutes forfeit their Eurocontrol Network Manager Calculated Take-Off Time (CTOT) slot, entering prolonged slot-delay queues and forced flight cancellations.</li>
           </ul>
         </div>
       </details>

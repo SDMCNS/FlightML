@@ -686,7 +686,11 @@ def run_ecac_radar_pipeline(
                 "reactionary_delay_minutes": sim.total_reactionary_delay_min if sim else 0.0,
                 "reactionary_multiplier": sim.reactionary_multiplier if sim else 0.0,
                 "cancellation_risks_count": sim.cancellation_risk_count if sim else 0,
-                "curfew_breaches_count": sim.curfew_breaches_count if sim else 0,
+                "curfew_breaches_count": 0,
+                "crew_fdp_timeouts_count": sim.crew_fdp_timeouts_count if sim else 0,
+                "compensated_cells_count": (analysis.cns_joint_summary.get("regimes", {}).get("surveillance_compensated", {}).get("cell_count", 0)) if getattr(analysis, "cns_joint_summary", None) else 0,
+                "compound_deficit_cells_count": (analysis.cns_joint_summary.get("regimes", {}).get("compound_deficit", {}).get("cell_count", 0)) if getattr(analysis, "cns_joint_summary", None) else 0,
+                "traffic_compensated_daily": (analysis.cns_joint_summary.get("regimes", {}).get("surveillance_compensated", {}).get("daily_flights", 0.0)) if getattr(analysis, "cns_joint_summary", None) else 0.0,
                 "fir_report_path": rep_path.name,
                 "evaluated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
             }

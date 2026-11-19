@@ -9,6 +9,9 @@ from flightml.eval.dme_permutations import (
     generate_dme_resilience_html_report,
     create_dme_resilience_map,
     DMEFIRResilienceAnalysis,
+    RNAV_IMPACT_CATEGORIES,
+    RNAV_SCORING_MATRIX,
+    RNAV_CAPABILITY_TOTALS,
 )
 from flightml.cli import app
 
@@ -96,7 +99,7 @@ def test_generate_dme_resilience_html_report(dataset, tmp_path):
     assert "EGTTFIR" in html_content
     assert "<iframe srcdoc=" in html_content
     assert "Air Traffic Micro-Simulation: Direct Separation" in html_content
-    assert "Rotational Delay Knock-on &amp; Night Curfew / Cancellation Mechanics" in html_content
+    assert "Rotational Delay Knock-on &amp; Cancellation Mechanics" in html_content
     assert "cartocdn.com" not in html_content
     assert "Standardized European Assessment Altitude References" in html_content
     assert "FL50" in html_content and "FL95" in html_content and "FL350" in html_content
@@ -165,3 +168,57 @@ def test_cross_border_dme_cascading(dataset, tmp_path):
     assert "Cross-Border Navaid Cascading &amp; Adjacent FIR Compensation" in html_text
     assert "Cross-Border Active Navaid Cascading &amp; Regional Rationalization" in html_text
     assert "Cascaded Active Neighbor DMEs (Cross-Border Infill)" in html_text
+
+
+def test_rnav_operational_scoring_and_curfew_removal(dataset, tmp_path):
+    """Verify 7-dimension RNAV Operational Impact Scoring matrix and elimination of night curfew declarations."""
+    # 1. Verify exact dimensions and totals requested by user
+    expected_categories = [
+        "Route flexibility",
+        "Parallel route capacity",
+        "Crossing traffic management",
+        "Tactical intervention",
+        "Controller workload",
+        "Procedural separation dependency",
+        "Alternative routing requirement",
+    ]
+    assert RNAV_IMPACT_CATEGORIES == expected_categories
+    assert RNAV_CAPABILITY_TOTALS["RNAV 1"] == 0
+    assert RNAV_CAPABILITY_TOTALS["RNAV 2"] == 7
+    assert RNAV_CAPABILITY_TOTALS["RNAV 5"] == 16
+    assert RNAV_CAPABILITY_TOTALS["RNAV 10"] == 31
+
+    # 2. Run simulation and verify scoring outputs
+    analysis = simulate_dme_permutations(
+        dataset=dataset,
+        fir_id="EGTTFIR",
+        period="202510",
+        target_standard="RNAV_5",
+        max_permutations=3,
+    )
+    assert analysis.traffic_simulation is not None
+    sim = analysis.traffic_simulation
+    assert sim.curfew_breaches_count == 0  # No curfew breaches declared
+
+    assert analysis.rnav_scoring_summary is not None
+    rnav_sum = analysis.rnav_scoring_summary
+    assert "total_fleet_score" in rnav_sum
+    assert "avg_flight_score" in rnav_sum
+    assert "category_totals" in rnav_sum
+    assert set(rnav_sum["category_totals"].keys()) == set(expected_categories)
+
+    # 3. Verify sample flights have RNAV capabilities and zero curfew references
+    for f in sim.sample_impacted_flights:
+        assert f.rnav_capability in ("RNAV 1", "RNAV 2", "RNAV 5", "RNAV 10")
+        assert f.rnav_impact_score in (0, 7, 16, 31)
+        assert "CURFEW" not in f.cancellation_risk.upper()
+        assert "CURFEW" not in f.cancellation_reason.upper()
+
+    # 4. Verify HTML report renders RNAV scoring table
+    out_html = tmp_path / "test_rnav_scoring_report.html"
+    rep_path = generate_dme_resilience_html_report(analysis, output_path=out_html, dataset=dataset)
+    html_text = rep_path.read_text(encoding="utf-8")
+    assert "RNAV Operational Impact Scoring" in html_text
+    assert "Procedural separation dependency" in html_text
+    assert "Alternative routing requirement" in html_text
+    assert "curfew breaches" not in html_text.lower()
