@@ -3886,6 +3886,22 @@ def cli_dme_resilience(
         t_ml.add_row("Learning Architecture", str(diag.get("learning_paradigm", "Multi-Task Gradient Boosting")))
         console.print(t_ml)
 
+    # 5. Air Traffic Knock-On & Downstream Delay Simulation
+    if getattr(analysis, "traffic_simulation", None):
+        sim = analysis.traffic_simulation
+        t_sim = Table(title="✈️ Air Traffic Micro-Simulation: Separation Delays & Rotational Knock-On", border_style="magenta")
+        t_sim.add_column("Simulation Metric", style="bold magenta")
+        t_sim.add_column("Value / Operational Outcome", style="white")
+        t_sim.add_row("Simulated Flight Trajectories", f"{sim.total_flights_simulated:,} traversals in {analysis.fir_id}")
+        t_sim.add_row("Directly Impacted by Spacing/Detours", f"{sim.directly_impacted_flights:,} flights (Radar separation expanded to {sim.separation_standard_nm:.1f} NM)")
+        t_sim.add_row("Total Primary Airborne & Terminal Delay", f"+{sim.total_primary_delay_min:,.0f} minutes")
+        t_sim.add_row("Tactical Detour Jet-A Fuel & Emissions", f"+{sim.total_extra_fuel_kg:,.0f} kg fuel (+{sim.total_extra_co2_kg/1000.0:,.1f} tonnes CO2 across {sim.total_detour_distance_nm:,.0f} NM)")
+        t_sim.add_row("Downstream Rotational Legs Delayed", f"{sim.downstream_flights_delayed:,} flights (+{sim.total_reactionary_delay_min:,.0f} min reactionary delay)")
+        t_sim.add_row("Reactionary Knock-On Multiplier", f"×{sim.reactionary_multiplier:.2f} (downstream minutes per primary tactical minute)")
+        canc_style = "[bold red]" if sim.cancellation_risk_count > 0 else "[green]"
+        t_sim.add_row("Downstream Cancellation & Curfew Risks", f"{canc_style}{sim.cancellation_risk_count} flights[/] ({sim.curfew_breaches_count} night curfew breaches, {sim.crew_fdp_timeouts_count} crew FDP timeouts)")
+        console.print(t_sim)
+
     console.print(
         Panel(
             f"[bold green]✓ Standalone HTML Report Successfully Generated:[/bold green]\n"

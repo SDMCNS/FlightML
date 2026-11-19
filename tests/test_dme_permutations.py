@@ -55,6 +55,11 @@ def test_simulate_dme_permutations_egtt(dataset):
     assert analysis.ml_diagnostics["total_samples_learned"] > 0
     assert "EGTTFIR" in analysis.ml_diagnostics["unique_firs_evaluated"]
 
+    # Verify air traffic simulation and rotational knock-on modeling
+    assert analysis.traffic_simulation is not None
+    assert analysis.traffic_simulation.total_flights_simulated > 0
+    assert analysis.traffic_simulation.directly_impacted_flights >= 0
+
 
 def test_generate_dme_resilience_html_report(dataset, tmp_path):
     """Verify standalone HTML report generation with Leaflet OpenStreetMap tiles & appendix."""
@@ -75,6 +80,9 @@ def test_generate_dme_resilience_html_report(dataset, tmp_path):
     assert "DME Network Resilience &amp; Navigation Rationalization" in html_content
     assert "EGTTFIR" in html_content
     assert "<iframe srcdoc=" in html_content
+    assert "Air Traffic Micro-Simulation: Direct Separation" in html_content
+    assert "Rotational Delay Knock-on &amp; Night Curfew / Cancellation Mechanics" in html_content
+    assert "cartocdn.com" not in html_content
     assert "Standardized European Assessment Altitude References" in html_content
     assert "FL50" in html_content and "FL95" in html_content and "FL350" in html_content
     assert "Strict High-Power DME En-Route Filtering" in html_content
@@ -101,4 +109,5 @@ def test_cli_dme_resilience_command(tmp_path):
     assert "Optimal Rationalization Posture" in result.output
     assert "Evaluated Permutations" in result.output
     assert "Self-Reinforcing Multi-FIR Machine Learning Status" in result.output
+    assert "Air Traffic Micro-Simulation: Separation Delays" in result.output
     assert "Standalone HTML Report Successfully Generated" in result.output

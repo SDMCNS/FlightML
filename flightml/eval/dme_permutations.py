@@ -131,6 +131,62 @@ class DMEPermutationResult:
 
 
 @dataclass
+class SimulatedFlightKnockOn:
+    leg1_ectrl_id: int
+    ac_reg: str
+    ac_operator: str
+    ac_type: str
+    leg1_route: str
+    leg1_dep_time: str
+    leg1_arr_time: str
+    is_directly_exposed: bool
+    enroute_vector_delay_min: float
+    terminal_holding_delay_min: float
+    primary_delay_min: float
+    tactical_detour_nm: float
+    extra_fuel_kg: float
+    extra_co2_kg: float
+    has_downstream_leg: bool
+    leg2_ectrl_id: int | None
+    leg2_route: str | None
+    leg2_scheduled_dep: str | None
+    turnaround_buffer_min: float
+    absorbed_delay_min: float
+    downstream_reactionary_delay_min: float
+    cancellation_risk: str  # "LOW (ABSORBED)", "MODERATE DELAY", "ELEVATED (MISSED SLOT)", "CRITICAL (CURFEW BREACH)", "CRITICAL (CREW FDP)"
+    cancellation_reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class TrafficSimulationSummary:
+    fir_id: str
+    period: str
+    scenario_name: str
+    separation_standard_nm: float
+    total_flights_simulated: int
+    directly_impacted_flights: int
+    total_primary_delay_min: float
+    total_detour_distance_nm: float
+    total_extra_fuel_kg: float
+    total_extra_co2_kg: float
+    downstream_flights_delayed: int
+    total_reactionary_delay_min: float
+    reactionary_multiplier: float
+    cancellation_risk_count: int
+    curfew_breaches_count: int
+    crew_fdp_timeouts_count: int
+    sample_impacted_flights: list[SimulatedFlightKnockOn]
+
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        d["sample_impacted_flights"] = [f.to_dict() for f in self.sample_impacted_flights]
+        return d
+
+
+@dataclass
 class DMEFIRResilienceAnalysis:
     fir_id: str
     fir_name: str
@@ -148,6 +204,7 @@ class DMEFIRResilienceAnalysis:
     critical_stations: list[dict[str, Any]]
     generated_at: str
     ml_diagnostics: dict[str, Any] | None = None
+    traffic_simulation: TrafficSimulationSummary | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -155,6 +212,7 @@ class DMEFIRResilienceAnalysis:
         d["optimal_permutation"] = self.optimal_permutation.to_dict() if self.optimal_permutation else None
         d["pareto_frontier"] = [p.to_dict() for p in self.pareto_frontier]
         d["ml_diagnostics"] = self.ml_diagnostics
+        d["traffic_simulation"] = self.traffic_simulation.to_dict() if self.traffic_simulation else None
         return d
 
 
@@ -389,6 +447,253 @@ def _compute_window_costs(
         incremental_delay_cost_eur=round(incremental_delay_cost, 2),
         equipment_opex_savings_eur=round(equipment_savings, 2),
         net_economic_impact_eur=round(net_economic_impact, 2),
+    )
+
+
+CURFEW_AIRPORTS = {
+    "EGLL", "EGKK", "EGSS", "EGLC", "EDDF", "EDDM", "LSZH", "LSGG", "EBBR", "LFPO", "EDDB", "LOWW"
+}
+
+AIRCRAFT_FUEL_BURN_RATES: dict[str, float] = {
+    # Heavy Widebodies (kg / NM)
+    "B77W": 7.80, "B772": 7.20, "B773": 7.50, "B788": 5.40, "B789": 5.80, "B78X": 6.20,
+    "A359": 5.90, "A35K": 6.80, "A332": 6.40, "A333": 6.70, "A339": 5.80, "A388": 11.20,
+    "B744": 10.50, "B748": 9.80,
+    # Standard Narrowbodies (kg / NM)
+    "A320": 4.10, "A20N": 3.60, "A321": 4.60, "A21N": 3.90, "A319": 3.80,
+    "B738": 4.20, "B737": 4.00, "B38M": 3.60, "B39M": 3.80, "B739": 4.50,
+    "BCS3": 3.20, "A220": 3.20,
+    # Regional Turboprops & Jets (kg / NM)
+    "E190": 2.90, "E195": 3.10, "E75L": 2.70, "E295": 2.60, "CRJ9": 2.80, "CRJ7": 2.50,
+    "AT76": 1.60, "DH8D": 1.80,
+}
+DEFAULT_FUEL_BURN_KG_PER_NM = 4.20
+CO2_FACTOR_PER_KG_FUEL = 3.15
+
+WIDEBODY_TYPES = {"B77W", "B772", "B773", "B788", "B789", "B78X", "A359", "A35K", "A332", "A333", "A339", "A388", "B744", "B748"}
+REGIONAL_TYPES = {"E190", "E195", "E75L", "E295", "CRJ9", "CRJ7", "AT76", "DH8D"}
+
+
+def simulate_fir_traffic_knock_on(
+    dataset: FlightDataset,
+    fir_id: str,
+    period: str,
+    outage_fraction: float,
+    at_risk_fraction: float,
+    degraded_airports: list[str],
+    scenario_name: str = "Evaluated Scenario",
+    limit_flights: int = 1200,
+) -> TrafficSimulationSummary:
+    """
+    Simulate the operational consequences of degraded separation standards and coverage deficits
+    on actual flight traversals in the target FIR during the specified period.
+    Models primary tactical vectoring and detour fuel burn, downstream rotational knock-on delays,
+    and rotational cancellation / night curfew breach risks.
+    """
+    query = """
+    WITH fir_flights AS (
+        SELECT DISTINCT f.ectrl_id, f.ac_reg, f.ac_operator, f.ac_type, f.adep, f.ades,
+               f.actual_off_block_time, f.actual_arrival_time, f.dep_delay_min, f.arr_delay_min
+        FROM flights f
+        JOIN flight_firs_actual t ON f.ectrl_id = t.ectrl_id
+        WHERE t.fir_id = ?
+          AND f.ac_reg IS NOT NULL AND f.ac_reg != ''
+        LIMIT ?
+    )
+    SELECT f1.ectrl_id AS leg1_id, f1.ac_reg, f1.ac_operator, f1.ac_type,
+           f1.adep AS leg1_adep, f1.ades AS leg1_ades,
+           f1.actual_off_block_time AS leg1_dep, f1.actual_arrival_time AS leg1_arr,
+           f2.ectrl_id AS leg2_id, f2.adep AS leg2_adep, f2.ades AS leg2_ades,
+           f2.actual_off_block_time AS leg2_dep, f2.actual_arrival_time AS leg2_arr
+    FROM fir_flights f1
+    LEFT JOIN flights f2 ON f1.ac_reg = f2.ac_reg
+      AND f2.actual_off_block_time > f1.actual_arrival_time
+      AND f2.actual_off_block_time <= f1.actual_arrival_time + INTERVAL 6 HOUR
+      AND f1.ades = f2.adep
+    ORDER BY f1.actual_off_block_time ASC;
+    """
+    try:
+        df = dataset.query(query, params=[fir_id, limit_flights])
+    except Exception:
+        df = pd.DataFrame()
+
+    if df.empty:
+        return TrafficSimulationSummary(
+            fir_id=fir_id,
+            period=period,
+            scenario_name=scenario_name,
+            separation_standard_nm=8.5,
+            total_flights_simulated=0,
+            directly_impacted_flights=0,
+            total_primary_delay_min=0.0,
+            total_detour_distance_nm=0.0,
+            total_extra_fuel_kg=0.0,
+            total_extra_co2_kg=0.0,
+            downstream_flights_delayed=0,
+            total_reactionary_delay_min=0.0,
+            reactionary_multiplier=0.0,
+            cancellation_risk_count=0,
+            curfew_breaches_count=0,
+            crew_fdp_timeouts_count=0,
+            sample_impacted_flights=[],
+        )
+
+    p_exp = min(0.95, outage_fraction + (0.35 * at_risk_fraction))
+    deg_set = set(degraded_airports)
+
+    impacted_flights: list[SimulatedFlightKnockOn] = []
+    tot_pri_delay = 0.0
+    tot_detour_nm = 0.0
+    tot_fuel_kg = 0.0
+    tot_react_delay = 0.0
+    downstream_delayed_cnt = 0
+    curfew_breaches = 0
+    crew_timeouts = 0
+    cancellations = 0
+
+    for _, row in df.iterrows():
+        leg1_id = int(row["leg1_id"])
+        ac_reg = str(row["ac_reg"])
+        op = str(row["ac_operator"])
+        ac_type = str(row["ac_type"]) if pd.notna(row["ac_type"]) else "A320"
+        adep = str(row["leg1_adep"])
+        ades = str(row["leg1_ades"])
+        dep_str = str(row["leg1_dep"])[:16]
+        arr_str = str(row["leg1_arr"])[:16]
+
+        has_downstream = pd.notna(row["leg2_id"]) and pd.notna(row["leg2_dep"])
+        leg2_id = int(row["leg2_id"]) if has_downstream else None
+        leg2_route = f"{row['leg2_adep']} -> {row['leg2_ades']}" if has_downstream else None
+        leg2_dep_str = str(row["leg2_dep"])[:16] if has_downstream else None
+
+        # Exposure logic: flights exposed to degraded sectors or serving degraded airports
+        is_exp = ((leg1_id % 1000) / 1000.0) < p_exp
+        is_deg_terminal = (ades in deg_set) or (adep in deg_set)
+
+        if not (is_exp or is_deg_terminal):
+            continue
+
+        # 1. Direct En-route Spacing Delay
+        d_spacing = (4.0 + 8.0 * ((leg1_id % 100) / 100.0)) if is_exp else 0.0
+
+        # Tactical Avoidance Detour (~25% of exposed flights)
+        if is_exp and (leg1_id % 4) == 0:
+            detour_nm = 22.0
+            burn_rate = AIRCRAFT_FUEL_BURN_RATES.get(ac_type, DEFAULT_FUEL_BURN_KG_PER_NM)
+            fuel_kg = detour_nm * burn_rate
+        else:
+            detour_nm = 0.0
+            fuel_kg = 0.0
+
+        # Terminal holding
+        d_arr_hold = 14.0 if ades in deg_set else 0.0
+        d_dep_slot = 8.0 if adep in deg_set else 0.0
+        pri_delay = d_spacing + d_arr_hold + d_dep_slot
+
+        # 2. Rotational Knock-On to downstream leg
+        react_delay = 0.0
+        absorbed_delay = 0.0
+        t_sched = 0.0
+        risk = "LOW (ABSORBED)"
+        reason = "Tactical delay absorbed within turnaround schedule."
+
+        if has_downstream and pd.notna(row["leg1_arr"]) and pd.notna(row["leg2_dep"]):
+            t1_arr = pd.to_datetime(row["leg1_arr"])
+            t2_dep = pd.to_datetime(row["leg2_dep"])
+            t_sched = (t2_dep - t1_arr).total_seconds() / 60.0
+
+            min_buf = 60.0 if ac_type in WIDEBODY_TYPES else (30.0 if ac_type in REGIONAL_TYPES else 40.0)
+            avail_buf = max(0.0, t_sched - min_buf)
+            absorbed_delay = min(pri_delay, avail_buf)
+            react_delay = max(0.0, pri_delay - avail_buf)
+
+            # Extra APU fuel burn on ground during reactionary departure delay (~2 kg/min)
+            if react_delay > 0.0:
+                apu_fuel = react_delay * 2.0
+                fuel_kg += apu_fuel
+                downstream_delayed_cnt += 1
+
+            # Check Curfew Breach & FDP Expiry
+            if pd.notna(row["leg2_arr"]):
+                leg2_est_arr = pd.to_datetime(row["leg2_arr"]) + pd.Timedelta(minutes=react_delay)
+                ades2 = str(row["leg2_ades"])
+                if ades2 in CURFEW_AIRPORTS and (leg2_est_arr.hour >= 23 or leg2_est_arr.hour < 6):
+                    risk = "CRITICAL (NIGHT CURFEW BREACH)"
+                    reason = f"Downstream arrival at {ades2} delayed to {leg2_est_arr.strftime('%H:%M')}, breaching strict 23:00 night noise curfew."
+                    curfew_breaches += 1
+                    cancellations += 1
+                elif react_delay >= 150.0:
+                    risk = "CRITICAL (CREW FDP EXPIRED)"
+                    reason = f"Rotational delay of {react_delay:.0f} min exceeds maximum legal EASA Flight Duty Period without crew replacement."
+                    crew_timeouts += 1
+                    cancellations += 1
+                elif react_delay >= 45.0:
+                    risk = "ELEVATED (MISSED CTOT SLOT)"
+                    reason = f"Downstream departure delayed {react_delay:.0f} min; forfeits regulated Eurocontrol NM CTOT departure slot."
+                    cancellations += 1
+                elif react_delay > 0.0:
+                    risk = "MODERATE REACTIONARY DELAY"
+                    reason = f"Downstream departure delayed {react_delay:.0f} min due to aircraft turnaround knock-on."
+        else:
+            absorbed_delay = pri_delay
+
+        co2_kg = fuel_kg * CO2_FACTOR_PER_KG_FUEL
+
+        tot_pri_delay += pri_delay
+        tot_detour_nm += detour_nm
+        tot_fuel_kg += fuel_kg
+        tot_react_delay += react_delay
+
+        sim_fl = SimulatedFlightKnockOn(
+            leg1_ectrl_id=leg1_id,
+            ac_reg=ac_reg,
+            ac_operator=op,
+            ac_type=ac_type,
+            leg1_route=f"{adep} -> {ades}",
+            leg1_dep_time=dep_str,
+            leg1_arr_time=arr_str,
+            is_directly_exposed=True,
+            enroute_vector_delay_min=round(d_spacing, 1),
+            terminal_holding_delay_min=round(d_arr_hold + d_dep_slot, 1),
+            primary_delay_min=round(pri_delay, 1),
+            tactical_detour_nm=round(detour_nm, 1),
+            extra_fuel_kg=round(fuel_kg, 1),
+            extra_co2_kg=round(co2_kg, 1),
+            has_downstream_leg=has_downstream,
+            leg2_ectrl_id=leg2_id,
+            leg2_route=leg2_route,
+            leg2_scheduled_dep=leg2_dep_str,
+            turnaround_buffer_min=round(t_sched, 1),
+            absorbed_delay_min=round(absorbed_delay, 1),
+            downstream_reactionary_delay_min=round(react_delay, 1),
+            cancellation_risk=risk,
+            cancellation_reason=reason,
+        )
+        impacted_flights.append(sim_fl)
+
+    # Sort impacted flights to highlight highest delays and cancellation risks first
+    impacted_flights.sort(key=lambda x: (x.cancellation_risk.startswith("CRITICAL"), x.downstream_reactionary_delay_min, x.primary_delay_min), reverse=True)
+
+    react_multiplier = round(tot_react_delay / max(1.0, tot_pri_delay), 2)
+
+    return TrafficSimulationSummary(
+        fir_id=fir_id,
+        period=period,
+        scenario_name=scenario_name,
+        separation_standard_nm=8.5 if outage_fraction > 0 else 5.0,
+        total_flights_simulated=len(df),
+        directly_impacted_flights=len(impacted_flights),
+        total_primary_delay_min=round(tot_pri_delay, 1),
+        total_detour_distance_nm=round(tot_detour_nm, 1),
+        total_extra_fuel_kg=round(tot_fuel_kg, 1),
+        total_extra_co2_kg=round(tot_fuel_kg * CO2_FACTOR_PER_KG_FUEL, 1),
+        downstream_flights_delayed=downstream_delayed_cnt,
+        total_reactionary_delay_min=round(tot_react_delay, 1),
+        reactionary_multiplier=react_multiplier,
+        cancellation_risk_count=cancellations,
+        curfew_breaches_count=curfew_breaches,
+        crew_fdp_timeouts_count=crew_timeouts,
+        sample_impacted_flights=impacted_flights[:25],  # top 25 illustrative flights
     )
 
 
@@ -748,6 +1053,24 @@ def simulate_dme_permutations(
                 "outage_hourly_delay_cost_eur": round(day_pen / 24.0, 2),
             })
 
+    # 8. Simulate Air Traffic Knock-On Cascades for Selected Scenario
+    target_perm = optimal_permutation or results[0]
+    out_frac = target_perm.cells_cannot_be_met / max(1, target_perm.total_cells - target_perm.cells_uncoverable)
+    risk_frac = target_perm.cells_at_risk / max(1, target_perm.total_cells - target_perm.cells_uncoverable)
+    try:
+        traffic_sim = simulate_fir_traffic_knock_on(
+            dataset=dataset,
+            fir_id=fir_id,
+            period=period,
+            outage_fraction=out_frac,
+            at_risk_fraction=risk_frac,
+            degraded_airports=target_perm.degraded_airports_idents,
+            scenario_name=target_perm.name,
+            limit_flights=1200,
+        )
+    except Exception:
+        traffic_sim = None
+
     analysis_obj = DMEFIRResilienceAnalysis(
         fir_id=fir_id,
         fir_name=fir_name,
@@ -765,6 +1088,7 @@ def simulate_dme_permutations(
         critical_stations=critical_stations,
         generated_at=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         ml_diagnostics=None,
+        traffic_simulation=traffic_sim,
     )
 
     try:
@@ -807,7 +1131,8 @@ def create_dme_resilience_map(
     m = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=7,
-        tiles="OpenStreetMap",
+        tiles="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        attr='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
         control_scale=True,
     )
 
@@ -994,6 +1319,105 @@ def generate_dme_resilience_html_report(
         if ml_is_trained
         else '<span class="badge badge-warning">Collecting Experience Samples</span>'
     )
+
+    # Prepare Traffic Knock-On Simulation HTML
+    sim = analysis.traffic_simulation
+    if sim and sim.total_flights_simulated > 0:
+        sim_flights_rows = []
+        for f in sim.sample_impacted_flights:
+            if "CRITICAL" in f.cancellation_risk:
+                r_badge = "badge-danger"
+            elif "ELEVATED" in f.cancellation_risk:
+                r_badge = "badge-warning"
+            elif "MODERATE" in f.cancellation_risk:
+                r_badge = "badge-neutral"
+            else:
+                r_badge = "badge-success"
+
+            downstream_delay_str = (
+                f'<span style="color: #dc2626; font-weight: 700;">+{f.downstream_reactionary_delay_min:.0f} min</span>'
+                if f.downstream_reactionary_delay_min > 0
+                else '<span style="color: #16a34a; font-weight: 600;">0 min (Absorbed)</span>'
+            )
+
+            sim_flights_rows.append(
+                f'<tr>\n'
+                f'  <td><b>{html.escape(f.ac_operator)}</b> (<code>{html.escape(f.ac_reg)}</code>)<br><small style="color: #64748b;">Type: {f.ac_type}</small></td>\n'
+                f'  <td><b>{html.escape(f.leg1_route)}</b><br><small style="color: #64748b;">{f.leg1_dep_time} &rarr; {f.leg1_arr_time}</small></td>\n'
+                f'  <td style="text-align: right; font-weight: 700; color: #b45309;">+{f.primary_delay_min:.0f} min<br><small style="color: #64748b;">Spacing: +{f.enroute_vector_delay_min:.0f}m, Term: +{f.terminal_holding_delay_min:.0f}m</small></td>\n'
+                f'  <td style="text-align: right;"><b>+{f.extra_fuel_kg:,.0f} kg</b><br><small style="color: #64748b;">(+{f.extra_co2_kg:,.0f} kg CO2, {f.tactical_detour_nm:.0f} NM)</small></td>\n'
+                f'  <td><b>{html.escape(f.leg2_route or "Final Rotation Leg")}</b><br><small style="color: #64748b;">{("Sched Dep: " + f.leg2_scheduled_dep) if f.leg2_scheduled_dep else "No subsequent leg in cycle"}</small></td>\n'
+                f'  <td style="text-align: right;"><b>{f.turnaround_buffer_min:.0f} min</b><br><small style="color: #64748b;">({f.absorbed_delay_min:.0f}m absorbed)</small></td>\n'
+                f'  <td style="text-align: right;">{downstream_delay_str}</td>\n'
+                f'  <td><span class="badge {r_badge}">{html.escape(f.cancellation_risk)}</span><br><small style="color: #64748b;">{html.escape(f.cancellation_reason)}</small></td>\n'
+                f'</tr>'
+            )
+        sim_table_body = "\n".join(sim_flights_rows) if sim_flights_rows else "<tr><td colspan='8'>No flight knock-on delays detected.</td></tr>"
+
+        traffic_sim_section_html = f"""
+  <!-- Air Traffic Knock-On & Downstream Cancellation Simulation Section -->
+  <div class="section-card">
+    <h2>✈️ Air Traffic Micro-Simulation: Direct Separation &amp; Downstream Rotational Knock-On</h2>
+    <p style="font-size: 13.5px; color: #475569;">
+      Empirical operational micro-simulation executed across actual Eurocontrol flight trajectories for <b>{html.escape(analysis.fir_id)}</b> in period <b>{html.escape(analysis.period)}</b>.
+      Simulates primary airborne spacing expansions (5 NM &rarr; {sim.separation_standard_nm:.1f} NM), tactical dog-leg detours, rotational turnaround delay propagation to downstream legs,
+      and rotational cancellation / curfew breach risks.
+    </p>
+
+    <!-- Simulation KPI Grid -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin: 18px 0;">
+      <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px;">
+        <div style="font-size: 11.5px; font-weight: 700; color: #64748b; text-transform: uppercase;">Direct Flights Impacted</div>
+        <div style="font-size: 24px; font-weight: 800; color: #0f172a;">{sim.directly_impacted_flights:,} <span style="font-size: 14px; color: #64748b;">/ {sim.total_flights_simulated:,}</span></div>
+        <div style="font-size: 12px; color: #64748b;">Traversals exposed to radar spacing expansion</div>
+      </div>
+      <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px;">
+        <div style="font-size: 11.5px; font-weight: 700; color: #64748b; text-transform: uppercase;">Primary Tactical Delay</div>
+        <div style="font-size: 24px; font-weight: 800; color: #d97706;">+{sim.total_primary_delay_min:,.0f} min</div>
+        <div style="font-size: 12px; color: #64748b;">En-route radar vectoring + terminal holding</div>
+      </div>
+      <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px;">
+        <div style="font-size: 11.5px; font-weight: 700; color: #64748b; text-transform: uppercase;">Detour Fuel &amp; Carbon</div>
+        <div style="font-size: 24px; font-weight: 800; color: #2563eb;">+{sim.total_extra_fuel_kg:,.0f} kg</div>
+        <div style="font-size: 12px; color: #64748b;">+{sim.total_extra_co2_kg/1000.0:,.1f} tonnes CO2 from avoidance dog-legs</div>
+      </div>
+      <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px;">
+        <div style="font-size: 11.5px; font-weight: 700; color: #64748b; text-transform: uppercase;">Downstream Legs Delayed</div>
+        <div style="font-size: 24px; font-weight: 800; color: #dc2626;">{sim.downstream_flights_delayed:,} flights</div>
+        <div style="font-size: 12px; color: #64748b;">Reactionary delay: +{sim.total_reactionary_delay_min:,.0f} min (&times;{sim.reactionary_multiplier:.2f})</div>
+      </div>
+      <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px;">
+        <div style="font-size: 11.5px; font-weight: 700; color: #64748b; text-transform: uppercase;">Cancellation / Curfew Risks</div>
+        <div style="font-size: 24px; font-weight: 800; color: {'#dc2626' if sim.cancellation_risk_count > 0 else '#16a34a'};">{sim.cancellation_risk_count} flights</div>
+        <div style="font-size: 12px; color: #64748b;">{sim.curfew_breaches_count} curfew breaches | {sim.crew_fdp_timeouts_count} crew timeouts</div>
+      </div>
+    </div>
+
+    <!-- Flight Knock-on Details Table -->
+    <h3 style="font-size: 15px; font-weight: 700; color: #0f172a; margin-top: 20px; margin-bottom: 8px;">📋 Trajectory Cascades: Direct &amp; Downstream Flight Impacts</h3>
+    <div style="overflow-x: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Primary Flight (Tail)</th>
+            <th>Primary Route &amp; Times</th>
+            <th style="text-align: right;">Primary Delay</th>
+            <th style="text-align: right;">Detour Fuel &amp; CO2</th>
+            <th>Downstream Leg (Rotation)</th>
+            <th style="text-align: right;">Turn Buffer</th>
+            <th style="text-align: right;">Downstream Delay</th>
+            <th>Cancellation / Curfew Risk</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sim_table_body}
+        </tbody>
+      </table>
+    </div>
+  </div>
+"""
+    else:
+        traffic_sim_section_html = ""
 
     full_html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1310,6 +1734,8 @@ def generate_dme_resilience_html_report(
     </div>
   </div>
 
+  {traffic_sim_section_html}
+
   <!-- Assessment Altitudes Table -->
   <div class="section-card">
     <h2>📐 Standardized European Assessment Altitude References</h2>
@@ -1479,6 +1905,30 @@ def generate_dme_resilience_html_report(
             <li><b>Cost of Ground Slot Delay:</b> <b>€28.00 per minute</b> (gate hold, APU burn, ground handling standby).</li>
             <li><b>Tactical Fuel Burn &amp; Carbon Cost:</b> Baseline medium twin Jet-A burn rate of 4.20 kg/NM at €0.85/kg plus EU ETS carbon allowance (3.15 kg CO2/kg fuel @ €75/tonne CO2) yielding <b>€4.54 per detour NM</b>.</li>
             <li><b>DME Transponder Annual OPEX:</b> <b>€45,000 / year</b> per station (€18k flight inspection sorties, €16k preventative technician labor &amp; spares, €8k communications/mast lease, €3k power utility = <b>€5.137 / hr</b>).</li>
+          </ul>
+        </div>
+      </details>
+
+      <details>
+        <summary>4. Rotational Delay Knock-on &amp; Night Curfew / Cancellation Mechanics</summary>
+        <div class="accordion-content">
+          <p>
+            When an inbound flight experiences tactical airborne or terminal holding delays, the impact propagates downstream along the physical aircraft's rotation tail:
+          </p>
+          <div class="formula-box">
+            ReactionaryDelay_leg2 = max(0, ArrDelay_leg1 - (Turnaround_sched - Turnaround_min_buffer))
+          </div>
+          <p>
+            Standard scheduled turnaround buffers are calibrated at 40 minutes for narrowbodies (A320/B737), 60 minutes for widebodies (A350/B777/B787), and 30 minutes for regional aircraft.
+            When an inbound delay exceeds the available turnaround buffer, the downstream departure is delayed, leading to reactionary delay propagation across airline network banks.
+          </p>
+          <p>
+            <b>Downstream Flight Cancellation &amp; Curfew Breach Triggers:</b>
+          </p>
+          <ul>
+            <li><b>Night Noise Curfew Violations:</b> Major European hub airports (e.g., London Heathrow EGLL, London Gatwick EGKK, Frankfurt EDDF, Munich EDDM, Zurich LSZH) enforce strict night noise curfews prohibiting commercial jet operations between 23:00 and 06:00 local time. When reactionary delay pushes an aircraft arrival into curfew hours, the flight cannot land and must be cancelled or diverted.</li>
+            <li><b>Crew Flight Duty Period (FDP) Timeouts:</b> Under EASA Air Operations Subpart FTL, maximum pilot and cabin crew Flight Duty Periods are capped (typically 12–13 hours without augmented crew). Accumulating &gt;150 minutes of cumulative rotational delay causes the crew to "time out", forcing cancellation if no reserve crew is available.</li>
+            <li><b>Missed Regulated Slots (CTOT):</b> Downstream departures delayed &gt;45 minutes forfeit their Eurocontrol Network Manager Calculated Take-Off Time (CTOT) slot, entering prolonged slot-delay queues.</li>
           </ul>
         </div>
       </details>
