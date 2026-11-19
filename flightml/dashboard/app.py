@@ -5682,10 +5682,11 @@ with tab_cat_maps:
                     key=f"ecac_radar_net_filter_period_{selected_period}",
                 )
             with col_f2:
+                default_std_idx = avail_standards.index("VIEW_3") if "VIEW_3" in avail_standards else 0
                 filter_std = st.selectbox(
                     "Filter Target Standard",
                     options=avail_standards,
-                    index=0,
+                    index=default_std_idx,
                     key=f"ecac_radar_net_filter_std_{selected_period}",
                 )
 
