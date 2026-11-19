@@ -3851,18 +3851,24 @@ def cli_dme_resilience(
 
     # 3. Critical Stations Table (if any)
     if analysis.critical_stations:
-        t_crit = Table(title="🚨 Top Critical Single Point of Failure DMEs (Highest N-1 Outage Disruption)", border_style="red")
+        target_name = analysis.optimal_permutation.name if analysis.optimal_permutation else "Chosen Scenario"
+        t_crit = Table(title=f"🚨 Top Critical Single Point of Failure DMEs (Chosen Scenario: {target_name})", border_style="red")
         t_crit.add_column("Station Ident & Name", style="bold red")
         t_crit.add_column("Vicinity / Terminal", style="dim")
         t_crit.add_column("Location", style="dim")
+        t_crit.add_column("N-1 Coverage Loss", justify="center", style="yellow")
         t_crit.add_column("Hourly Delay Penalty", justify="right", style="bold red")
         t_crit.add_column("Daily Delay Impact", justify="right", style="bold red")
 
         for cs in analysis.critical_stations:
+            cov_loss = f"-{cs.get('newly_degraded_cells', 0)} cells"
+            if cs.get("newly_degraded_airports"):
+                cov_loss += f" ({len(cs['newly_degraded_airports'])} apts)"
             t_crit.add_row(
                 f"{cs['name']} [{cs['id']}]",
                 cs["near_airport"],
                 f"{cs['latitude']:.2f}°N, {cs['longitude']:.2f}°E",
+                cov_loss,
                 f"+€{cs['outage_hourly_delay_cost_eur']:,.0f} / h",
                 f"+€{cs['outage_daily_delay_cost_eur']:,.0f} / day",
             )
@@ -4259,16 +4265,22 @@ def cli_radar_resilience(
 
     # 3. Critical Radar Stations Table
     if analysis.critical_stations:
-        t_crit = Table(title="🚨 Top Critical Single Point of Failure Radars (Highest N-1 Outage Disruption)", border_style="red")
+        target_name = analysis.optimal_permutation.name if analysis.optimal_permutation else "Chosen Scenario"
+        t_crit = Table(title=f"🚨 Top Critical Single Point of Failure Radars (Chosen Scenario: {target_name})", border_style="red")
         t_crit.add_column("Radar Ident & Name", style="bold red")
         t_crit.add_column("Vicinity / Location", style="dim")
+        t_crit.add_column("N-1 Surveillance Loss", justify="center", style="yellow")
         t_crit.add_column("Hourly Delay Penalty", justify="right", style="bold red")
         t_crit.add_column("Daily Delay Impact", justify="right", style="bold red")
 
         for cs in analysis.critical_stations:
+            cov_loss = f"-{cs.get('newly_degraded_cells', 0)} cells"
+            if cs.get("newly_degraded_airports"):
+                cov_loss += f" ({len(cs['newly_degraded_airports'])} apts)"
             t_crit.add_row(
                 f"{cs['name']} [{cs['id']}]",
                 f"{cs['latitude']:.2f}°N, {cs['longitude']:.2f}°E ({cs['near_airport']})",
+                cov_loss,
                 f"+€{cs['outage_hourly_delay_cost_eur']:,.0f} / h",
                 f"+€{cs['outage_daily_delay_cost_eur']:,.0f} / day",
             )

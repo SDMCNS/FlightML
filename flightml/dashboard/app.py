@@ -5043,14 +5043,29 @@ with tab_cat_maps:
 
         if res_state_key in st.session_state:
             analysis, report_path = st.session_state[res_state_key]
-            opt = analysis.optimal_permutation or analysis.permutations[0]
 
             st.markdown("---")
-            st.subheader(f"🏆 Optimal Rationalization Posture — {analysis.fir_name}")
+            st.subheader(f"🏆 Operational Resilience & Rationalization Posture — {analysis.fir_name}")
+
+            opt_idx = 0
+            if analysis.optimal_permutation:
+                for idx, p in enumerate(analysis.permutations):
+                    if p.permutation_id == analysis.optimal_permutation.permutation_id:
+                        opt_idx = idx
+                        break
+
+            chosen_perm_id = st.selectbox(
+                "🎯 Select Operational Scenario / Permutation to Inspect:",
+                options=[p.permutation_id for p in analysis.permutations],
+                index=opt_idx,
+                format_func=lambda pid: next((f"{'★ ' if (analysis.optimal_permutation and pid == analysis.optimal_permutation.permutation_id) else ''}{p.name} [{p.category}]" for p in analysis.permutations if p.permutation_id == pid), pid),
+                key=f"dme_chosen_scenario_{selected_period}",
+            )
+            opt = next((p for p in analysis.permutations if p.permutation_id == chosen_perm_id), analysis.optimal_permutation or analysis.permutations[0])
 
             mcol1, mcol2, mcol3, mcol4, mcol5 = st.columns(5)
             mcol1.metric(
-                "Optimal Equipment",
+                "Active Equipment",
                 f"{opt.active_count} / {analysis.baseline_station_count} DMEs",
                 f"-{opt.disabled_count} redundant",
             )
@@ -5065,7 +5080,7 @@ with tab_cat_maps:
                 "Net Benefit" if opt.windows['6h'].net_economic_impact_eur <= 0 else "Net Cost",
             )
             mcol4.metric(
-                "24h Daily Savings",
+                "24h Daily Balance",
                 f"€{abs(opt.windows['24h'].net_economic_impact_eur):,.0f} / day",
                 f"€{opt.disabled_count * 45000:,.0f} / yr OPEX",
             )
@@ -5112,17 +5127,27 @@ with tab_cat_maps:
                 })
             st.dataframe(pd.DataFrame(p_rows), use_container_width=True)
 
-            if analysis.critical_stations:
-                st.markdown("#### 🚨 Top Critical Single Point of Failure Stations")
+            crit_list = analysis.critical_stations
+            if opt and analysis.optimal_permutation and opt.permutation_id != analysis.optimal_permutation.permutation_id:
+                try:
+                    from flightml.eval.dme_permutations import compute_critical_dmes_for_permutation
+                    crit_list = compute_critical_dmes_for_permutation(analysis, opt, dataset=ds)
+                except Exception:
+                    crit_list = analysis.critical_stations
+
+            if crit_list:
+                st.markdown(f"#### 🚨 Top Critical Single Point of Failure Stations ({opt.name})")
+                st.caption(f"Evaluates the operational delay penalty of an N-1 outage for each surviving active DME under the chosen configuration (**{opt.name}**).")
                 crit_rows = [
                     {
                         "Station": f"{cs['name']} [{cs['id']}]",
                         "Terminal / Sector": cs["near_airport"],
                         "Coordinates": f"{cs['latitude']:.2f}°N, {cs['longitude']:.2f}°E",
+                        "N-1 Coverage Loss": f"-{cs.get('newly_degraded_cells', 0)} cells" + (f", -{len(cs.get('newly_degraded_airports', []))} apts" if cs.get("newly_degraded_airports") else ""),
                         "Hourly Delay Penalty (€/h)": f"+€{cs['outage_hourly_delay_cost_eur']:,.0f}/h",
                         "Daily Delay Impact (€/day)": f"+€{cs['outage_daily_delay_cost_eur']:,.0f}/day",
                     }
-                    for cs in analysis.critical_stations
+                    for cs in crit_list
                 ]
                 st.dataframe(pd.DataFrame(crit_rows), use_container_width=True)
 
@@ -5401,14 +5426,29 @@ with tab_cat_maps:
 
         if res_state_key in st.session_state:
             analysis, report_path = st.session_state[res_state_key]
-            opt = analysis.optimal_permutation or analysis.permutations[0]
 
             st.markdown("---")
-            st.subheader(f"🏆 Optimal Rationalization Posture — {analysis.fir_name}")
+            st.subheader(f"🏆 Operational Resilience & Surveillance Posture — {analysis.fir_name}")
+
+            opt_idx = 0
+            if analysis.optimal_permutation:
+                for idx, p in enumerate(analysis.permutations):
+                    if p.permutation_id == analysis.optimal_permutation.permutation_id:
+                        opt_idx = idx
+                        break
+
+            chosen_perm_id = st.selectbox(
+                "🎯 Select Operational Scenario / Permutation to Inspect:",
+                options=[p.permutation_id for p in analysis.permutations],
+                index=opt_idx,
+                format_func=lambda pid: next((f"{'★ ' if (analysis.optimal_permutation and pid == analysis.optimal_permutation.permutation_id) else ''}{p.name} [{p.category}]" for p in analysis.permutations if p.permutation_id == pid), pid),
+                key=f"radar_chosen_scenario_{selected_period}",
+            )
+            opt = next((p for p in analysis.permutations if p.permutation_id == chosen_perm_id), analysis.optimal_permutation or analysis.permutations[0])
 
             mcol1, mcol2, mcol3, mcol4, mcol5 = st.columns(5)
             mcol1.metric(
-                "Optimal Radar Equipment",
+                "Active Radar Equipment",
                 f"{opt.active_count} / {analysis.baseline_station_count} Radars",
                 f"-{opt.disabled_count} redundant",
             )
@@ -5423,7 +5463,7 @@ with tab_cat_maps:
                 "Net Benefit" if opt.windows['6h'].net_economic_impact_eur <= 0 else "Net Cost",
             )
             mcol4.metric(
-                "24h Daily Savings",
+                "24h Daily Balance",
                 f"€{abs(opt.windows['24h'].net_economic_impact_eur):,.0f} / day",
                 f"€{opt.disabled_count * RADAR_ANNUAL_COST_SAVINGS_EUR:,.0f} / yr OPEX",
             )
@@ -5470,16 +5510,26 @@ with tab_cat_maps:
                 })
             st.dataframe(pd.DataFrame(p_rows), use_container_width=True)
 
-            if analysis.critical_stations:
-                st.markdown("#### 🚨 Top Critical Single Point of Failure Radars")
+            crit_list = analysis.critical_stations
+            if opt and analysis.optimal_permutation and opt.permutation_id != analysis.optimal_permutation.permutation_id:
+                try:
+                    from flightml.eval.radar_permutations import compute_critical_radars_for_permutation
+                    crit_list = compute_critical_radars_for_permutation(analysis, opt, dataset=ds)
+                except Exception:
+                    crit_list = analysis.critical_stations
+
+            if crit_list:
+                st.markdown(f"#### 🚨 Top Critical Single Point of Failure Radars ({opt.name})")
+                st.caption(f"Evaluates the operational delay penalty of an N-1 outage for each surviving active radar head under the chosen configuration (**{opt.name}**).")
                 crit_rows = [
                     {
                         "Radar Station": f"{cs['name']} [{cs['id']}]",
                         "Location": f"{cs['latitude']:.2f}°N, {cs['longitude']:.2f}°E ({cs['near_airport']})",
+                        "N-1 Surveillance Loss": f"-{cs.get('newly_degraded_cells', 0)} cells" + (f", -{len(cs.get('newly_degraded_airports', []))} apts" if cs.get("newly_degraded_airports") else ""),
                         "Hourly Delay Penalty (€/h)": f"+€{cs['outage_hourly_delay_cost_eur']:,.0f}/h",
                         "Daily Delay Impact (€/day)": f"+€{cs['outage_daily_delay_cost_eur']:,.0f}/day",
                     }
-                    for cs in analysis.critical_stations
+                    for cs in crit_list
                 ]
                 st.dataframe(pd.DataFrame(crit_rows), use_container_width=True)
 

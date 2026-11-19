@@ -218,7 +218,7 @@ def _evaluate_single_radar_permutation_coverage(
     """
     n_cells = cell_mat_200.shape[0]
 
-    if not active_indices:
+    if len(active_indices) == 0:
         met = 0
         at_risk = 0
         unc = int((~coverable_cells_mask).sum())
@@ -517,6 +517,103 @@ def compute_radar_utilization_and_maintenance(
     )
 
     return utilization_list, maint_summary
+
+
+def _evaluate_critical_radars(
+    target_perm: RadarPermutationResult,
+    inside_stations: list[ECACStation],
+    sta_id_to_idx: dict[str, int],
+    cascaded_indices: list[int],
+    cell_mat_200: np.ndarray,
+    cell_mat_50: np.ndarray,
+    apt_mat_10: np.ndarray,
+    target_standard: str,
+    airports: list[dict[str, Any]],
+    coverable_cells_mask: np.ndarray,
+    n_cells: int,
+    inside_sta_ids: list[str],
+    hourly_moves: float,
+    base_gross_costs: dict[str, float],
+    top_n: int = 8,
+) -> list[dict[str, Any]]:
+    """
+    Evaluate Top Critical Single Point of Failure (SPOF) Radars under the CHOSEN SCENARIO.
+    Specifically tests N-1 outages for each surviving active radar participating in the chosen configuration.
+    """
+    chosen_active_ids = set(target_perm.active_station_ids)
+    scenario_gross_24h = target_perm.windows["24h"].gross_operational_cost_eur
+    scenario_gross_1h = target_perm.windows["1h"].gross_operational_cost_eur
+
+    critical_candidates = []
+    active_scenario_stations = [s for s in inside_stations if s.id in chosen_active_ids]
+
+    for s_obj in active_scenario_stations:
+        outage_active_ids = chosen_active_ids - {s_obj.id}
+        outage_act_indices = [sta_id_to_idx[sid] for sid in outage_active_ids if sid in sta_id_to_idx] + cascaded_indices
+
+        o_met, o_at_risk, o_cannot, o_unc, o_degraded_apts = _evaluate_single_radar_permutation_coverage(
+            active_indices=outage_act_indices,
+            cell_mat_200=cell_mat_200,
+            cell_mat_50=cell_mat_50,
+            apt_mat_10=apt_mat_10,
+            target_standard=target_standard,
+            airports=airports,
+            coverable_cells_mask=coverable_cells_mask,
+        )
+
+        cov_tot = max(1, n_cells - o_unc)
+        o_outage_frac = o_cannot / cov_tot
+        o_risk_frac = o_at_risk / cov_tot
+        o_dis_count = len(inside_sta_ids) - len(outage_active_ids)
+
+        o_win_1h = _compute_radar_window_costs(
+            duration_hours=1.0,
+            window_label="1-Hour Peak Outage",
+            traffic_hourly_avg=hourly_moves,
+            traffic_peak_multiplier=1.30,
+            outage_fraction=o_outage_frac,
+            at_risk_fraction=o_risk_frac,
+            degraded_airports_count=len(o_degraded_apts),
+            disabled_radar_count=o_dis_count,
+            baseline_gross_cost=base_gross_costs["1h"],
+        )
+        o_win_24h = _compute_radar_window_costs(
+            duration_hours=24.0,
+            window_label="1-Day (24-Hour) Outage",
+            traffic_hourly_avg=hourly_moves,
+            traffic_peak_multiplier=1.00,
+            outage_fraction=o_outage_frac,
+            at_risk_fraction=o_risk_frac,
+            degraded_airports_count=len(o_degraded_apts),
+            disabled_radar_count=o_dis_count,
+            baseline_gross_cost=base_gross_costs["24h"],
+        )
+
+        day_penalty = max(0.0, o_win_24h.gross_operational_cost_eur - scenario_gross_24h)
+        hour_penalty = max(0.0, o_win_1h.gross_operational_cost_eur - scenario_gross_1h)
+
+        newly_degraded_cells = max(0, target_perm.cells_met - o_met)
+        newly_degraded_apts = [a for a in o_degraded_apts if a not in target_perm.degraded_airports_idents]
+
+        critical_candidates.append({
+            "id": s_obj.id,
+            "name": s_obj.name,
+            "latitude": s_obj.latitude,
+            "longitude": s_obj.longitude,
+            "elevation_ft": s_obj.elevation_ft,
+            "near_airport": s_obj.nearest_airport_ident or "En-Route",
+            "outage_daily_delay_cost_eur": round(day_penalty, 2),
+            "outage_hourly_delay_cost_eur": round(hour_penalty, 2),
+            "newly_degraded_cells": newly_degraded_cells,
+            "newly_degraded_airports": newly_degraded_apts,
+            "scenario_name": target_perm.name,
+        })
+
+    critical_candidates.sort(
+        key=lambda x: (x["outage_daily_delay_cost_eur"], x["newly_degraded_cells"], len(x["newly_degraded_airports"])),
+        reverse=True,
+    )
+    return critical_candidates[:top_n]
 
 
 def simulate_radar_permutations(
@@ -880,24 +977,27 @@ def simulate_radar_permutations(
             pareto_frontier.append(cand)
             best_cost_seen = cost
 
-    # 7. Identify Critical Radar Heads
-    critical_stations: list[dict[str, Any]] = []
-    for sid, day_pen in sorted(station_disruption_impacts.items(), key=lambda x: x[1], reverse=True)[:6]:
-        matching_sta = next((s for s in inside_stations if s.id == sid), None)
-        if matching_sta:
-            critical_stations.append({
-                "id": sid,
-                "name": matching_sta.name,
-                "latitude": matching_sta.latitude,
-                "longitude": matching_sta.longitude,
-                "elevation_ft": matching_sta.elevation_ft,
-                "near_airport": matching_sta.nearest_airport_ident or "En-Route",
-                "outage_daily_delay_cost_eur": round(day_pen, 2),
-                "outage_hourly_delay_cost_eur": round(day_pen / 24.0, 2),
-            })
-
     target_perm = optimal_permutation or results[0]
     optimal_act_ids = set(target_perm.active_station_ids) | {s.id for s in cascaded_adjacent_stations}
+
+    # 7. Identify Top Critical Radar Heads (Single Points of Failure under the CHOSEN SCENARIO)
+    critical_stations = _evaluate_critical_radars(
+        target_perm=target_perm,
+        inside_stations=inside_stations,
+        sta_id_to_idx=sta_id_to_idx,
+        cascaded_indices=cascaded_indices,
+        cell_mat_200=cell_mat_200,
+        cell_mat_50=cell_mat_50,
+        apt_mat_10=apt_mat_10,
+        target_standard=target_standard,
+        airports=airports,
+        coverable_cells_mask=coverable_cells_mask,
+        n_cells=n_cells,
+        inside_sta_ids=inside_sta_ids,
+        hourly_moves=hourly_moves,
+        base_gross_costs=base_gross_costs,
+        top_n=8,
+    )
 
     # 8. Compute Radar Station Utilization & Maintenance Impact
     try:
@@ -988,6 +1088,103 @@ def simulate_radar_permutations(
         pass
 
     return analysis_obj
+
+
+def compute_critical_radars_for_permutation(
+    analysis: RadarFIRResilienceAnalysis,
+    permutation: RadarPermutationResult,
+    dataset: FlightDataset | None = None,
+    top_n: int = 8,
+) -> list[dict[str, Any]]:
+    """
+    Compute Critical Single Point of Failure (SPOF) Radars specifically under a given chosen scenario.
+    """
+    if analysis.critical_stations and analysis.critical_stations[0].get("scenario_name") == permutation.name:
+        return analysis.critical_stations[:top_n]
+
+    ds = dataset or FlightDataset(period=analysis.period)
+    fir_geom = get_fir_geometry(ds, analysis.fir_id)
+    fir_poly, _, fir_bbox = fir_geom if fir_geom else (None, None, None)
+
+    inside_stations, airports = load_ecac_stations(
+        ds,
+        station_type="RADAR",
+        fir_poly=fir_poly,
+        fir_bbox=fir_bbox,
+        include_adjacent=False,
+    )
+    casc_raw = getattr(analysis, "cascaded_adjacent_stations", None) or []
+    casc_stations = [
+        ECACStation(
+            id=cs["id"],
+            name=cs["name"],
+            type=cs.get("type", "RADAR"),
+            latitude=cs["latitude"],
+            longitude=cs["longitude"],
+            elevation_ft=cs.get("elevation_ft", 100.0),
+            country=cs.get("country", ""),
+            is_airport_station=False,
+            nearest_airport_ident=None,
+            nominal_range_nm=cs.get("nominal_range_nm", 200.0),
+            annual_cost_savings_eur=0.0,
+            annual_power_savings_mwh=0.0,
+        )
+        for cs in casc_raw
+    ]
+    all_eval_stations = list(inside_stations) + casc_stations
+    grid_cells = generate_ecac_grid(step_deg=0.18, fir_poly=fir_poly, fir_bbox=fir_bbox)
+    if not grid_cells or not inside_stations:
+        return []
+
+    sta_id_to_idx = {s.id: i for i, s in enumerate(all_eval_stations)}
+    inside_sta_ids = [s.id for s in inside_stations]
+    cascaded_indices = list(range(len(inside_stations), len(all_eval_stations)))
+
+    cell_matrices, apt_matrices = _compute_coverage_matrices(
+        all_eval_stations, grid_cells, airports, flight_levels=(10, 50, 200)
+    )
+    cell_mat_200 = cell_matrices[200]
+    cell_mat_50 = cell_matrices[50]
+    apt_mat_10 = apt_matrices[10]
+    coverable_cells_mask = cell_mat_200.sum(axis=1) > 0
+
+    _, _, hourly_moves, _ = _fetch_fir_traffic_stats(ds, analysis.fir_id, analysis.period)
+
+    base_all_active_indices = list(range(len(all_eval_stations)))
+    b_met, b_risk, b_cannot, b_unc, b_apts = _evaluate_single_radar_permutation_coverage(
+        active_indices=base_all_active_indices,
+        cell_mat_200=cell_mat_200,
+        cell_mat_50=cell_mat_50,
+        apt_mat_10=apt_mat_10,
+        target_standard=analysis.target_standard,
+        airports=airports,
+        coverable_cells_mask=coverable_cells_mask,
+    )
+    b_cov_tot = max(1, len(grid_cells) - b_unc)
+    b_out_frac = b_cannot / b_cov_tot
+    b_risk_frac = b_risk / b_cov_tot
+    base_gross_costs = {
+        "1h": _compute_radar_window_costs(1.0, "1-Hour Peak", hourly_moves, 1.30, b_out_frac, b_risk_frac, len(b_apts), 0).gross_operational_cost_eur,
+        "24h": _compute_radar_window_costs(24.0, "1-Day (24-Hour)", hourly_moves, 1.00, b_out_frac, b_risk_frac, len(b_apts), 0).gross_operational_cost_eur,
+    }
+
+    return _evaluate_critical_radars(
+        target_perm=permutation,
+        inside_stations=inside_stations,
+        sta_id_to_idx=sta_id_to_idx,
+        cascaded_indices=cascaded_indices,
+        cell_mat_200=cell_mat_200,
+        cell_mat_50=cell_mat_50,
+        apt_mat_10=apt_mat_10,
+        target_standard=analysis.target_standard,
+        airports=airports,
+        coverable_cells_mask=coverable_cells_mask,
+        n_cells=len(grid_cells),
+        inside_sta_ids=inside_sta_ids,
+        hourly_moves=hourly_moves,
+        base_gross_costs=base_gross_costs,
+        top_n=top_n,
+    )
 
 
 def create_radar_resilience_map(
@@ -1247,6 +1444,7 @@ def generate_radar_resilience_html_report(
     analysis: RadarFIRResilienceAnalysis,
     output_path: Path | str | None = None,
     dataset: FlightDataset | None = None,
+    selected_permutation: RadarPermutationResult | None = None,
 ) -> Path:
     """
     Generate a robust, standalone HTML radar resilience report including interactive Folium Leaflet map,
@@ -1262,7 +1460,9 @@ def generate_radar_resilience_html_report(
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    m = create_radar_resilience_map(analysis, dataset=dataset)
+    opt = selected_permutation or analysis.optimal_permutation or analysis.permutations[0]
+
+    m = create_radar_resilience_map(analysis, selected_permutation=opt, dataset=dataset)
     map_iframe_html = _folium_map_to_iframe(
         m,
         height=540,
@@ -1318,20 +1518,32 @@ def generate_radar_resilience_html_report(
 
     permutations_table_html = "\n".join(table_rows)
 
-    # Critical Stations List HTML
+    # Critical Stations List HTML (Evaluated under the Chosen Scenario)
+    if selected_permutation and (not analysis.optimal_permutation or selected_permutation.permutation_id != analysis.optimal_permutation.permutation_id):
+        try:
+            chosen_crit = compute_critical_radars_for_permutation(analysis, selected_permutation, dataset=dataset)
+        except Exception:
+            chosen_crit = analysis.critical_stations
+    else:
+        chosen_crit = analysis.critical_stations
+
     critical_rows = []
-    for cs in analysis.critical_stations:
+    for cs in chosen_crit:
+        cov_loss_str = f"-{cs.get('newly_degraded_cells', 0)} cells"
+        if cs.get("newly_degraded_airports"):
+            cov_loss_str += f" | {len(cs['newly_degraded_airports'])} apt degraded"
         critical_rows.append(
             f'<tr>\n'
             f'  <td><b>{html.escape(cs["name"])}</b> (<code>{cs["id"]}</code>)</td>\n'
             f'  <td>{html.escape(cs["near_airport"])}</td>\n'
             f'  <td>{cs["latitude"]:.3f}°N, {cs["longitude"]:.3f}°E</td>\n'
             f'  <td>{cs["elevation_ft"]:.0f} ft</td>\n'
+            f'  <td style="text-align: right; color: #b91c1c; font-weight: 600;">{cov_loss_str}</td>\n'
             f'  <td style="text-align: right; color: #dc2626; font-weight: 700;">+€{cs["outage_hourly_delay_cost_eur"]:,.0f} / h</td>\n'
             f'  <td style="text-align: right; color: #dc2626; font-weight: 700;">+€{cs["outage_daily_delay_cost_eur"]:,.0f} / day</td>\n'
             f'</tr>'
         )
-    critical_table_html = "\n".join(critical_rows) if critical_rows else "<tr><td colspan='6'>No critical single point of failure radars detected.</td></tr>"
+    critical_table_html = "\n".join(critical_rows) if critical_rows else "<tr><td colspan='7'>No critical single point of failure radars detected under this configuration.</td></tr>"
 
     # Cascaded Active Neighbor Radars Section HTML
     cascaded_section_html = ""
@@ -1837,10 +2049,9 @@ def generate_radar_resilience_html_report(
 
   <!-- Critical Radar Stations Section -->
   <div class="section-card">
-    <h2>🚨 Top Critical Single Point of Failure Radars (Highest N-1 Outage Disruption)</h2>
+    <h2>🚨 Top Critical Single Point of Failure Radars (Chosen Scenario: {html.escape(opt.name)})</h2>
     <p style="font-size: 13.5px; color: #475569;">
-      These radar heads produce the highest operational disruption penalties if taken offline,
-      representing vital surveillance backbones that must be protected.
+      Surviving active radar facilities under <b>{html.escape(opt.name)}</b> whose individual failure (N-1 outage) produces the highest operational disruption and delay cost spike across the rationalized surveillance network:
     </p>
     <div style="overflow-x: auto;">
       <table>
@@ -1850,6 +2061,7 @@ def generate_radar_resilience_html_report(
             <th>Airspace Role / Colocated Facility</th>
             <th>Coordinates</th>
             <th>Elevation</th>
+            <th style="text-align: right;">Surveillance Loss (N-1)</th>
             <th style="text-align: right;">Peak Hourly Outage Penalty</th>
             <th style="text-align: right;">Daily Outage Disruption Cost</th>
           </tr>
