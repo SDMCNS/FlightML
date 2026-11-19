@@ -1058,7 +1058,7 @@ def create_radar_resilience_map(
             tooltip=f"<b>{html.escape(analysis.fir_name)}</b> Boundary",
         ).add_to(m)
 
-    # 2. Sovereign Internal Radars Layer
+    # 2. Airspace Coverage Grid Cells Layer (10 NM Grid Squares)
     stations, airports = load_ecac_stations(
         ds,
         station_type="RADAR",
@@ -1066,6 +1066,103 @@ def create_radar_resilience_map(
         fir_bbox=fir_bbox if fir_geom else None,
         include_adjacent=False,
     )
+    active_set = set(perm.active_station_ids)
+    casc_raw = getattr(analysis, "cascaded_adjacent_stations", None) or []
+    casc_stations = [
+        ECACStation(
+            id=cs["id"],
+            name=cs["name"],
+            type=cs.get("type", "RADAR"),
+            latitude=cs["latitude"],
+            longitude=cs["longitude"],
+            elevation_ft=cs.get("elevation_ft", 100.0),
+            country=cs.get("country", ""),
+            is_airport_station=False,
+            nearest_airport_ident=None,
+            nominal_range_nm=cs.get("nominal_range_nm", 200.0),
+            annual_cost_savings_eur=0.0,
+            annual_power_savings_mwh=0.0,
+        )
+        for cs in casc_raw
+    ]
+    all_eval_stations = list(stations) + casc_stations
+    casc_active_ids = {cs["id"] for cs in casc_raw}
+    all_active_ids = active_set.union(casc_active_ids)
+    act_idx_arr = np.array([i for i, s in enumerate(all_eval_stations) if s.id in all_active_ids], dtype=int)
+
+    grid_cells = generate_ecac_grid(step_deg=0.18, fir_poly=fir_poly if fir_geom else None, fir_bbox=fir_bbox if fir_geom else None)
+    if grid_cells:
+        cell_matrices, _ = _compute_coverage_matrices(
+            all_eval_stations, grid_cells, [], flight_levels=(50, 200)
+        )
+        cell_mat_200 = cell_matrices[200]
+        cell_mat_50 = cell_matrices[50]
+
+        coverable_cells_mask = cell_mat_200.sum(axis=1) > 0
+        n_cells = len(grid_cells)
+
+        if len(act_idx_arr) > 0:
+            cnt_200 = cell_mat_200[:, act_idx_arr].sum(axis=1)
+            cnt_50 = cell_mat_50[:, act_idx_arr].sum(axis=1)
+        else:
+            cnt_200 = np.zeros(n_cells, dtype=int)
+            cnt_50 = np.zeros(n_cells, dtype=int)
+
+        std_label = getattr(analysis, "target_standard", "VIEW_1")
+        std_norm = std_label.upper()
+        if std_norm in ("VIEW_1", "SURV_1", "FL200"):
+            status_met = (cnt_200 >= 1) & coverable_cells_mask
+            status_at_risk = np.zeros(n_cells, dtype=bool)
+            status_cannot = (cnt_200 == 0) & coverable_cells_mask
+        elif std_norm in ("VIEW_2", "SURV_2", "DUAL_ENROUTE"):
+            status_met = (cnt_200 >= 2) & coverable_cells_mask
+            status_at_risk = (cnt_200 == 1) & coverable_cells_mask
+            status_cannot = (cnt_200 == 0) & coverable_cells_mask
+        elif std_norm in ("VIEW_3", "SURV_3", "FL50", "LOW_LEVEL"):
+            status_met = (cnt_50 >= 1) & coverable_cells_mask
+            status_at_risk = (cnt_50 == 0) & (cnt_200 >= 1) & coverable_cells_mask
+            status_cannot = (cnt_50 == 0) & (cnt_200 == 0) & coverable_cells_mask
+        else:
+            status_met = (cnt_200 >= 1) & coverable_cells_mask
+            status_at_risk = np.zeros(n_cells, dtype=bool)
+            status_cannot = (cnt_200 == 0) & coverable_cells_mask
+
+        cell_group = folium.FeatureGroup(name=f"10 NM Airspace Coverage Cells ({std_label})", show=True)
+        d_nm = 10.0
+        for i, (lat, lon) in enumerate(grid_cells):
+            dlat = (d_nm / 60.0) / 2.0
+            dlon = (d_nm / (60.0 * max(0.1, math.cos(math.radians(lat))))) / 2.0
+            c_cnt = int(cnt_200[i])
+
+            if status_met[i]:
+                color = "#10b981"
+                tip = f"🟢 MET: Radar Surveillance Achieved | {c_cnt} active radars"
+                opac = 0.50
+            elif status_at_risk[i]:
+                color = "#f59e0b"
+                tip = f"🟠 AT RISK / MARGINAL: {c_cnt} active radar | Single point of failure"
+                opac = 0.60
+            elif status_cannot[i]:
+                color = "#ef4444"
+                tip = f"🔴 CANNOT BE MET: 0 active radars within line-of-sight"
+                opac = 0.70
+            else:
+                color = "#94a3b8"
+                tip = f"⚪ Uncoverable Gap: Outside baseline radar line-of-sight"
+                opac = 0.20
+
+            folium.Rectangle(
+                bounds=[[lat - dlat, lon - dlon], [lat + dlat, lon + dlon]],
+                color=color,
+                fill=True,
+                fill_color=color,
+                fill_opacity=opac,
+                weight=0.5,
+                tooltip=tip,
+            ).add_to(cell_group)
+        cell_group.add_to(m)
+
+    # 3. Sovereign Internal Radars Layer
 
     active_set = set(perm.active_station_ids)
     sta_group = folium.FeatureGroup(name="Surveillance Radars (Active / Standby)", show=True)

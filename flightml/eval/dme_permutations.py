@@ -1555,7 +1555,7 @@ def create_dme_resilience_map(
             tooltip=f"<b>{html.escape(analysis.fir_name)}</b> Boundary",
         ).add_to(m)
 
-    # 2. DME Stations Layer
+    # 2. Airspace Coverage Grid Cells Layer (10 NM Grid Squares)
     stations, airports = load_ecac_stations(
         ds,
         station_type="DME",
@@ -1563,6 +1563,132 @@ def create_dme_resilience_map(
         fir_bbox=fir_bbox if fir_geom else None,
         include_adjacent=False,
     )
+    active_set = set(perm.active_station_ids)
+    casc_raw = getattr(analysis, "cascaded_adjacent_stations", None) or []
+    casc_stations = [
+        ECACStation(
+            id=cs["id"],
+            name=cs["name"],
+            type=cs.get("type", "DME"),
+            latitude=cs["latitude"],
+            longitude=cs["longitude"],
+            elevation_ft=cs.get("elevation_ft", 100.0),
+            country=cs.get("country", ""),
+            is_airport_station=False,
+            nearest_airport_ident=None,
+            nominal_range_nm=cs.get("nominal_range_nm", 150.0),
+            annual_cost_savings_eur=0.0,
+            annual_power_savings_mwh=0.0,
+        )
+        for cs in casc_raw
+    ]
+    all_eval_stations = list(stations) + casc_stations
+    casc_active_ids = {cs["id"] for cs in casc_raw}
+    all_active_ids = active_set.union(casc_active_ids)
+    act_idx_arr = np.array([i for i, s in enumerate(all_eval_stations) if s.id in all_active_ids], dtype=int)
+
+    grid_cells = generate_ecac_grid(step_deg=0.18, fir_poly=fir_poly if fir_geom else None, fir_bbox=fir_bbox if fir_geom else None)
+    if grid_cells:
+        cell_matrices, _ = _compute_coverage_matrices(
+            all_eval_stations, grid_cells, [], flight_levels=(100, 200)
+        )
+        cell_mat_200 = cell_matrices[200]
+        cell_mat_100 = cell_matrices.get(100, cell_mat_200)
+
+        c_lats = np.array([c[0] for c in grid_cells])
+        c_lons = np.array([c[1] for c in grid_cells])
+        s_lats = np.array([s.latitude for s in all_eval_stations])
+        s_lons = np.array([s.longitude for s in all_eval_stations])
+
+        dlat_c = (c_lats[:, None] - s_lats[None, :]) * 60.0
+        mid_lat_c = np.radians((c_lats[:, None] + s_lats[None, :]) / 2.0)
+        dlon_c = (c_lons[:, None] - s_lons[None, :]) * 60.0 * np.cos(mid_lat_c)
+        dist_cell = np.sqrt(dlat_c**2 + dlon_c**2)
+        bearings_cell = (np.degrees(np.arctan2(dlon_c, dlat_c)) + 360.0) % 360.0
+
+        coverable_cells_mask = cell_mat_200.sum(axis=1) > 0
+        n_cells = len(grid_cells)
+        has_valid_pair = np.zeros(n_cells, dtype=bool)
+        d_max_pair = np.full(n_cells, 9999.0)
+
+        if len(act_idx_arr) >= 2:
+            vis_200_act = cell_mat_200[:, act_idx_arr]
+            cnt_200 = vis_200_act.sum(axis=1)
+            for idx in np.where(cnt_200 >= 2)[0]:
+                act_s_local = np.where(vis_200_act[idx])[0]
+                act_s_global = act_idx_arr[act_s_local]
+                b = bearings_cell[idx, act_s_global]
+                diff = np.abs(b[:, None] - b[None, :])
+                delta = np.minimum(diff, 360.0 - diff)
+                valid = (delta >= 30.0) & (delta <= 150.0)
+                if valid.any():
+                    has_valid_pair[idx] = True
+                    dists = dist_cell[idx, act_s_global]
+                    max_dists = np.maximum(dists[:, None], dists[None, :])
+                    valid_max_dists = np.where(valid, max_dists, 9999.0)
+                    d_max_pair[idx] = float(np.min(valid_max_dists))
+        else:
+            cnt_200 = cell_mat_200[:, act_idx_arr].sum(axis=1) if len(act_idx_arr) > 0 else np.zeros(n_cells, dtype=int)
+
+        std_label = getattr(analysis, "target_standard", "RNAV_5")
+        std_norm = std_label.upper()
+        if std_norm in ("RNAV_5", "VIEW_1"):
+            status_met = has_valid_pair & coverable_cells_mask
+            status_at_risk = (~has_valid_pair) & (cnt_200 >= 1) & coverable_cells_mask
+            status_cannot = (cnt_200 == 0) & coverable_cells_mask
+        elif std_norm in ("RNAV_2", "VIEW_2"):
+            status_met = has_valid_pair & (d_max_pair <= 130.0) & coverable_cells_mask
+            status_at_risk = (~status_met) & (has_valid_pair | (cnt_200 >= 1)) & coverable_cells_mask
+            status_cannot = (cnt_200 == 0) & coverable_cells_mask
+        elif std_norm in ("RNAV_1", "VIEW_3"):
+            vis_100_act = cell_mat_100[:, act_idx_arr] if len(act_idx_arr) > 0 else np.zeros((n_cells, 0))
+            cnt_100 = vis_100_act.sum(axis=1)
+            status_met = (cnt_100 >= 3) & has_valid_pair & (d_max_pair <= 60.0) & coverable_cells_mask
+            status_at_risk = (~status_met) & (has_valid_pair | (cnt_200 >= 1)) & coverable_cells_mask
+            status_cannot = (cnt_200 == 0) & coverable_cells_mask
+        else:
+            vis_100_act = cell_mat_100[:, act_idx_arr] if len(act_idx_arr) > 0 else np.zeros((n_cells, 0))
+            cnt_100 = vis_100_act.sum(axis=1)
+            status_met = (cnt_100 >= 4) & has_valid_pair & (d_max_pair <= 40.0) & coverable_cells_mask
+            status_at_risk = (~status_met) & (has_valid_pair | (cnt_200 >= 1)) & coverable_cells_mask
+            status_cannot = (cnt_200 == 0) & coverable_cells_mask
+
+        cell_group = folium.FeatureGroup(name=f"10 NM Airspace Coverage Cells ({std_label})", show=True)
+        d_nm = 10.0
+        for i, (lat, lon) in enumerate(grid_cells):
+            dlat = (d_nm / 60.0) / 2.0
+            dlon = (d_nm / (60.0 * max(0.1, math.cos(math.radians(lat))))) / 2.0
+            c_cnt = int(cnt_200[i]) if len(act_idx_arr) > 0 else 0
+
+            if status_met[i]:
+                color = "#10b981"
+                tip = f"🟢 MET: Performance Standard Compliant | {c_cnt} active DMEs | Valid geometry"
+                opac = 0.50
+            elif status_at_risk[i]:
+                color = "#f59e0b"
+                tip = f"🟠 AT RISK / MARGINAL: {c_cnt} active DME | Single point of failure"
+                opac = 0.60
+            elif status_cannot[i]:
+                color = "#ef4444"
+                tip = f"🔴 CANNOT BE MET: 0 active DMEs within line-of-sight"
+                opac = 0.70
+            else:
+                color = "#94a3b8"
+                tip = f"⚪ Uncoverable Gap: Outside baseline DME line-of-sight"
+                opac = 0.20
+
+            folium.Rectangle(
+                bounds=[[lat - dlat, lon - dlon], [lat + dlat, lon + dlon]],
+                color=color,
+                fill=True,
+                fill_color=color,
+                fill_opacity=opac,
+                weight=0.5,
+                tooltip=tip,
+            ).add_to(cell_group)
+        cell_group.add_to(m)
+
+    # 3. DME Stations Layer
 
     active_set = set(perm.active_station_ids)
     sta_group = folium.FeatureGroup(name="DME Stations (Active / Standby)", show=True)
