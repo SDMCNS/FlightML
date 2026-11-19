@@ -146,6 +146,16 @@ def test_generate_radar_resilience_html_report(dataset, tmp_path):
     assert "esri.com" in html_content or "arcgisonline.com" in html_content
     assert "cartocdn.com" not in html_content
 
+    # Verify worst-case 1-day SPOF outage traffic impact section placed after Maintenance section
+    assert "Worst-Case Single Point of Failure: 1-Day Outage Traffic Impact" in html_content
+    maint_pos = html_content.index("Maintenance &amp; Planned Outage Reliability Assessment (0.5% Radar Outage Rate)")
+    spof_pos = html_content.index("Worst-Case Single Point of Failure: 1-Day Outage Traffic Impact")
+    assert maint_pos < spof_pos, "Worst-case SPOF 1-day outage section must appear after Maintenance section"
+    assert "Acute 24-Hour SPOF Outage (Worst-Case)" in html_content
+    assert "Worst-Case Single Point of Failure (SPOF) 1-Day Outage Formulation" in html_content
+    if analysis.critical_stations:
+        assert analysis.critical_stations[0]["id"] in html_content
+
 
 def test_cli_radar_resilience_valid_and_invalid():
     """Verify CLI radar-resilience command succeeds for disclosed FIR and blocks undisclosed FIR."""
