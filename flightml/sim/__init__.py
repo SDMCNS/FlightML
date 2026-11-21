@@ -7,6 +7,15 @@ from flightml.sim.gdp_optimizer import (
     GDPResult,
     SlotAssignment,
 )
+from flightml.sim.atc_digital_twin import (
+    get_airport_fids_board,
+    run_atc_digital_twin,
+    load_digital_twin_dataset,
+    analyze_airport_weather_and_capacity,
+    reconstruct_ideal_flight,
+    IdealFlightMetrics,
+    ATCDigitalTwinSummary,
+)
 
 __all__ = [
     "simulate_turnaround_mitigation",
@@ -14,5 +23,12 @@ __all__ = [
     "optimize_ground_delay_program",
     "GDPResult",
     "SlotAssignment",
+    "get_airport_fids_board",
+    "run_atc_digital_twin",
+    "load_digital_twin_dataset",
+    "analyze_airport_weather_and_capacity",
+    "reconstruct_ideal_flight",
+    "IdealFlightMetrics",
+    "ATCDigitalTwinSummary",
 ]
 

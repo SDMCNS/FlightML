@@ -613,6 +613,9 @@ def run_digital_twin_simulation(
     return metrics_df, trajs_df, summary
 
 
+run_atc_digital_twin = run_digital_twin_simulation
+
+
 def load_digital_twin_dataset(
     period: str = "202507",
     date: str | None = None,
@@ -637,3 +640,210 @@ def load_digital_twin_dataset(
         return m_df, sum_obj
     except Exception:
         return None, None
+
+
+def get_airport_fids_board(
+    dataset: FlightDataset,
+    airport_icao: str,
+    target_date: str,
+    period: str | None = None,
+    max_flights: int | None = 250,
+) -> dict[str, pd.DataFrame]:
+    """
+    Generate an airport-level Flight Information Display System (FIDS) board
+    comparing Planned (Filed), Actual (Flown), and ATC Digital Twin (Ideal) trajectories.
+
+    Returns a dictionary with 'departures' and 'arrivals' DataFrames formatted
+    for tabular display with punctuality status badges, delays, and savings.
+    """
+    if period is None:
+        period = getattr(dataset, "period_id", "202507")
+
+    airport_icao = airport_icao.strip().upper()
+
+    # Pre-load precomputed metrics if available to accelerate lookups
+    precomputed_df, _ = load_digital_twin_dataset(period=period, date=target_date)
+    precomputed_map: dict[int, Any] = {}
+    if precomputed_df is not None and not precomputed_df.empty:
+        precomputed_map = {int(row["ectrl_id"]): row for _, row in precomputed_df.iterrows()}
+
+    # Compute hourly weather / capacity states for the airport and day
+    airport_states = analyze_airport_weather_and_capacity(dataset, period=period, date=target_date)
+
+    limit_clause = f"LIMIT {max_flights}" if max_flights else ""
+
+    # 1. Departures Board
+    dep_sql = f"""
+    SELECT ectrl_id, ac_operator, ac_type, adep, ades,
+           filed_off_block_time, actual_off_block_time,
+           filed_arrival_time, actual_arrival_time,
+           dep_delay_min, arr_delay_min,
+           adep_lat, adep_lon, ades_lat, ades_lon, requested_fl
+    FROM flights
+    WHERE adep = '{airport_icao}'
+      AND CAST(COALESCE(actual_off_block_time, filed_off_block_time) AS DATE) = DATE '{target_date}'
+    ORDER BY COALESCE(actual_off_block_time, filed_off_block_time) ASC
+    {limit_clause}
+    """
+    dep_raw = dataset.query(dep_sql)
+
+    dep_rows = []
+    for _, flt in dep_raw.iterrows():
+        flt_dict = flt.to_dict()
+        eid = int(flt_dict["ectrl_id"])
+
+        if eid in precomputed_map:
+            p_met = precomputed_map[eid]
+            callsign = p_met.get("callsign") or f"{flt_dict['ac_operator']}{str(eid)[-4:]}"
+            dep_delay_act = float(p_met.get("dep_delay_actual_min", 0.0))
+            dep_delay_id = float(p_met.get("dep_delay_ideal_min", 0.0))
+            fuel_saved = float(p_met.get("fuel_saved_kg", 0.0))
+            co2_saved = float(p_met.get("co2_saved_kg", 0.0))
+            econ_saved = float(p_met.get("total_economic_savings_eur", 0.0))
+            weather_imp = bool(p_met.get("adep_weather_impacted", False))
+        else:
+            met, _ = reconstruct_ideal_flight(dataset, flt_dict, airport_states=airport_states)
+            callsign = met.callsign
+            dep_delay_act = met.dep_delay_actual_min
+            dep_delay_id = met.dep_delay_ideal_min
+            fuel_saved = met.fuel_saved_kg
+            co2_saved = met.co2_saved_kg
+            econ_saved = met.total_economic_savings_eur
+            weather_imp = met.adep_weather_impacted
+
+        filed_t = flt_dict.get("filed_off_block_time")
+        act_t = flt_dict.get("actual_off_block_time") or filed_t
+        try:
+            filed_dt = pd.to_datetime(filed_t)
+            ideal_dt = filed_dt + timedelta(minutes=dep_delay_id)
+            ideal_t_str = ideal_dt.strftime("%Y-%m-%d %H:%M")
+            filed_t_str = filed_dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            ideal_t_str = str(filed_t)[:16]
+            filed_t_str = str(filed_t)[:16]
+
+        act_t_str = str(act_t)[:16] if act_t else filed_t_str
+        delay_saved = max(0.0, dep_delay_act - dep_delay_id)
+
+        # Status badge
+        if weather_imp:
+            status = "🟡 Weather Metered"
+        elif dep_delay_act <= 5.0 and dep_delay_id <= 0.0:
+            status = "🟢 Flown On-Time"
+        elif dep_delay_act > 5.0 and dep_delay_id <= 0.0:
+            status = "🟢 On-Time (Ideal Optimized)"
+        elif dep_delay_act > 30.0:
+            status = f"🔴 Heavy Delay (+{int(dep_delay_act)}m)"
+        else:
+            status = f"🟠 Flown Delay (+{int(dep_delay_act)}m)"
+
+        dep_rows.append({
+            "ectrl_id": eid,
+            "flight": callsign,
+            "operator": flt_dict.get("ac_operator", ""),
+            "ac_type": flt_dict.get("ac_type", ""),
+            "destination": flt_dict.get("ades", ""),
+            "planned_time": filed_t_str,
+            "actual_time": act_t_str,
+            "ideal_time": ideal_t_str,
+            "actual_delay_min": round(dep_delay_act, 1),
+            "ideal_delay_min": round(dep_delay_id, 1),
+            "delay_saved_min": round(delay_saved, 1),
+            "fuel_saved_kg": round(fuel_saved, 1),
+            "co2_saved_kg": round(co2_saved, 1),
+            "economic_savings_eur": round(econ_saved, 2),
+            "status": status,
+            "weather_restricted": weather_imp,
+        })
+
+    # 2. Arrivals Board
+    arr_sql = f"""
+    SELECT ectrl_id, ac_operator, ac_type, adep, ades,
+           filed_off_block_time, actual_off_block_time,
+           filed_arrival_time, actual_arrival_time,
+           dep_delay_min, arr_delay_min,
+           adep_lat, adep_lon, ades_lat, ades_lon, requested_fl
+    FROM flights
+    WHERE ades = '{airport_icao}'
+      AND CAST(COALESCE(actual_arrival_time, filed_arrival_time) AS DATE) = DATE '{target_date}'
+    ORDER BY COALESCE(actual_arrival_time, filed_arrival_time) ASC
+    {limit_clause}
+    """
+    arr_raw = dataset.query(arr_sql)
+
+    arr_rows = []
+    for _, flt in arr_raw.iterrows():
+        flt_dict = flt.to_dict()
+        eid = int(flt_dict["ectrl_id"])
+
+        if eid in precomputed_map:
+            p_met = precomputed_map[eid]
+            callsign = p_met.get("callsign") or f"{flt_dict['ac_operator']}{str(eid)[-4:]}"
+            arr_delay_act = float(p_met.get("arr_delay_actual_min", 0.0))
+            arr_delay_id = float(p_met.get("arr_delay_ideal_min", 0.0))
+            holding_elim = float(p_met.get("holding_duration_actual_min", 0.0))
+            fuel_saved = float(p_met.get("fuel_saved_kg", 0.0))
+            co2_saved = float(p_met.get("co2_saved_kg", 0.0))
+            econ_saved = float(p_met.get("total_economic_savings_eur", 0.0))
+            weather_imp = bool(p_met.get("ades_weather_impacted", False))
+        else:
+            met, _ = reconstruct_ideal_flight(dataset, flt_dict, airport_states=airport_states)
+            callsign = met.callsign
+            arr_delay_act = met.arr_delay_actual_min
+            arr_delay_id = met.arr_delay_ideal_min
+            holding_elim = met.holding_duration_actual_min
+            fuel_saved = met.fuel_saved_kg
+            co2_saved = met.co2_saved_kg
+            econ_saved = met.total_economic_savings_eur
+            weather_imp = met.ades_weather_impacted
+
+        filed_t = flt_dict.get("filed_arrival_time")
+        act_t = flt_dict.get("actual_arrival_time") or filed_t
+        try:
+            filed_dt = pd.to_datetime(filed_t)
+            ideal_dt = filed_dt + timedelta(minutes=arr_delay_id)
+            ideal_t_str = ideal_dt.strftime("%Y-%m-%d %H:%M")
+            filed_t_str = filed_dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            ideal_t_str = str(filed_t)[:16]
+            filed_t_str = str(filed_t)[:16]
+
+        act_t_str = str(act_t)[:16] if act_t else filed_t_str
+        delay_saved = max(0.0, arr_delay_act - arr_delay_id)
+
+        # Status badge
+        if weather_imp:
+            status = "🟡 Weather Metered"
+        elif arr_delay_act <= 5.0 and arr_delay_id <= 0.0:
+            status = "🟢 Flown On-Time"
+        elif arr_delay_act > 5.0 and arr_delay_id <= 0.0:
+            status = "🟢 On-Time (Ideal Optimized)"
+        elif arr_delay_act > 30.0:
+            status = f"🔴 Heavy Delay (+{int(arr_delay_act)}m)"
+        else:
+            status = f"🟠 Flown Delay (+{int(arr_delay_act)}m)"
+
+        arr_rows.append({
+            "ectrl_id": eid,
+            "flight": callsign,
+            "operator": flt_dict.get("ac_operator", ""),
+            "ac_type": flt_dict.get("ac_type", ""),
+            "origin": flt_dict.get("adep", ""),
+            "planned_time": filed_t_str,
+            "actual_time": act_t_str,
+            "ideal_time": ideal_t_str,
+            "actual_delay_min": round(arr_delay_act, 1),
+            "ideal_delay_min": round(arr_delay_id, 1),
+            "delay_saved_min": round(delay_saved, 1),
+            "holding_eliminated_min": round(holding_elim, 1),
+            "fuel_saved_kg": round(fuel_saved, 1),
+            "co2_saved_kg": round(co2_saved, 1),
+            "economic_savings_eur": round(econ_saved, 2),
+            "status": status,
+            "weather_restricted": weather_imp,
+        })
+
+    return {
+        "departures": pd.DataFrame(dep_rows),
+        "arrivals": pd.DataFrame(arr_rows),
+    }

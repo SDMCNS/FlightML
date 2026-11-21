@@ -534,6 +534,244 @@ def render_page_export_bar(page_key: str, widget_suffix: str) -> None:
             )
 
 
+def render_airport_fids_component(
+    dataset: Any,
+    selected_period: str,
+    default_airport: str = "EGLL",
+    default_date: str | None = None,
+    key_prefix: str = "fids",
+) -> None:
+    """
+    Render an interactive Airport Arrivals & Departures Board comparing
+    Planned (Filed), Flown (Actual), and ATC Digital Twin (Ideal) operations.
+    """
+    from flightml.sim.atc_digital_twin import get_airport_fids_board
+
+    major_hubs = [
+        "EGLL", "LFPG", "EHAM", "EDDF", "LEMD", "LIRF", "EDDM", "LSZH",
+        "LPPT", "EKCH", "EGKK", "LOWW", "EIDW", "LTFM", "LEBL", "EBBR",
+        "ESSA", "ENGM", "EFHK", "EPWA", "LGAV", "LIMC", "LEPA", "GCLP"
+    ]
+    if default_airport.upper() not in major_hubs:
+        major_hubs.insert(0, default_airport.upper())
+
+    # Date bounds
+    ds_min_date, ds_max_date = get_dataset_date_bounds(dataset)
+    try:
+        min_d = pd.to_datetime(ds_min_date).date()
+        max_d = pd.to_datetime(ds_max_date).date()
+        def_d = (
+            pd.to_datetime(default_date).date()
+            if default_date
+            else (min_d + timedelta(days=14) if (max_d - min_d).days >= 14 else min_d)
+        )
+    except Exception:
+        min_d = datetime(2025, 7, 1).date()
+        max_d = datetime(2025, 7, 31).date()
+        def_d = datetime(2025, 7, 15).date()
+
+    col_ctrl1, col_ctrl2, col_ctrl3, col_ctrl4 = st.columns([1.5, 1.2, 1.5, 1.0])
+    with col_ctrl1:
+        sel_hub = st.selectbox(
+            "Select Aerodrome (ICAO):",
+            options=major_hubs,
+            index=major_hubs.index(default_airport.upper()) if default_airport.upper() in major_hubs else 0,
+            key=f"{key_prefix}_hub_{selected_period}",
+        )
+    with col_ctrl2:
+        sel_date = st.date_input(
+            "Operating Date:",
+            value=def_d,
+            min_value=min_d,
+            max_value=max_d,
+            key=f"{key_prefix}_date_{selected_period}",
+        )
+    with col_ctrl3:
+        board_mode = st.radio(
+            "Flight Information Display (FIDS):",
+            options=["🛫 Departures Board", "🛬 Arrivals Board"],
+            horizontal=True,
+            key=f"{key_prefix}_mode_{selected_period}",
+        )
+    with col_ctrl4:
+        max_moves = st.selectbox(
+            "Max Movements:",
+            options=[50, 100, 250, 500, 1000],
+            index=1,
+            key=f"{key_prefix}_limit_{selected_period}",
+        )
+
+    is_dep = "departure" in board_mode.lower()
+    sel_date_str = str(sel_date)
+
+    with st.spinner(f"Loading {board_mode.lower()} and synthesizing ATC Digital Twin for {sel_hub} on {sel_date_str}..."):
+        try:
+            fids_data = get_airport_fids_board(
+                dataset=dataset,
+                airport_icao=sel_hub,
+                target_date=sel_date_str,
+                period=selected_period,
+                max_flights=max_moves,
+            )
+            df_board = fids_data["departures"] if is_dep else fids_data["arrivals"]
+        except Exception as e:
+            st.error(f"Error generating FIDS board for {sel_hub} on {sel_date_str}: {e}")
+            return
+
+    if df_board.empty:
+        st.warning(f"No {board_mode.lower()} found for **{sel_hub}** on **{sel_date_str}** in the active dataset.")
+        return
+
+    # Operational Weather Context Banner
+    has_weather = bool(df_board["weather_restricted"].any())
+    if has_weather:
+        st.warning(
+            f"⚠️ **Empirical Weather Restriction Active at {sel_hub} ({sel_date_str})**: "
+            "Traffic analysis detected hours with >5 delayed flights. The ATC Digital Twin respects observed physical runway throughput limits while eliminating airborne holding and downstream buffer inefficiencies."
+        )
+    else:
+        st.success(
+            f"🟢 **Unconstrained Operations at {sel_hub} ({sel_date_str})**: "
+            "No empirical weather bottleneck detected (all hours had ≤5 delay clusters or <20 movements/hr). "
+            "The ATC Digital Twin recovers 100% of procedural delays, eliminates holding loops, and enforces direct 4D continuous descent/climb profiles."
+        )
+
+    # Scorecard KPIs
+    tot_flts = len(df_board)
+    delayed_flown = int((df_board["actual_delay_min"] > 15).sum())
+    delayed_flown_pct = (delayed_flown / max(1, tot_flts)) * 100.0
+    ontime_ideal = int((df_board["ideal_delay_min"] <= 5).sum())
+    ontime_ideal_pct = (ontime_ideal / max(1, tot_flts)) * 100.0
+    tot_delay_saved = float(df_board["delay_saved_min"].sum())
+    tot_fuel_saved_tonnes = float(df_board["fuel_saved_kg"].sum() / 1000.0)
+    tot_savings_eur = float(df_board["economic_savings_eur"].sum())
+
+    kpi1, kpi2, kpi3, kpi4, kpi5, kpi6 = st.columns(6)
+    kpi1.metric("Total Movements", f"{tot_flts:,}", f"{board_mode.split()[1]}")
+    kpi2.metric("Flown Delay Rate (>15m)", f"{delayed_flown_pct:.1f}%", f"{delayed_flown} flights", delta_color="inverse")
+    kpi3.metric("Ideal Twin On-Time", f"{ontime_ideal_pct:.1f}%", f"{ontime_ideal} flights")
+    kpi4.metric("Delay Time Eliminated", f"-{tot_delay_saved:,.0f} min", f"-{(tot_delay_saved/max(1, tot_flts)):.1f} min/flt")
+    kpi5.metric("Fuel Burn Saved", f"{tot_fuel_saved_tonnes:.1f} tonnes", f"-{tot_fuel_saved_tonnes * 3.15:.1f} t CO2")
+    kpi6.metric("Total Economic Gain", f"€{tot_savings_eur:,.0f}", f"€{(tot_savings_eur/max(1, tot_flts)):.0f}/flt")
+
+    # Search & Punctuality Filter
+    f_col1, f_col2, f_col3 = st.columns([2, 1.5, 1])
+    with f_col1:
+        search_kw = st.text_input(
+            "🔍 Search by Flight, Operator, or Airport:",
+            placeholder="e.g. BAW, A320, LFPG, 2876...",
+            key=f"{key_prefix}_kw_{selected_period}",
+        ).strip().upper()
+    with f_col2:
+        status_filter = st.selectbox(
+            "Filter by Punctuality Status:",
+            options=["All Movements", "Delayed Flown Only (>15 min)", "Ideal Optimized Only (Delay Resolved)", "Weather Metered Only"],
+            key=f"{key_prefix}_status_{selected_period}",
+        )
+    with f_col3:
+        sort_by = st.selectbox(
+            "Sort by:",
+            options=["Scheduled Time", "Flown Delay", "Delay Saved", "Fuel Saved"],
+            key=f"{key_prefix}_sort_{selected_period}",
+        )
+
+    # Apply filters
+    filtered_df = df_board.copy()
+    if search_kw:
+        mask = (
+            filtered_df["flight"].str.upper().str.contains(search_kw)
+            | filtered_df["operator"].str.upper().str.contains(search_kw)
+            | filtered_df["ac_type"].str.upper().str.contains(search_kw)
+            | filtered_df["destination" if is_dep else "origin"].str.upper().str.contains(search_kw)
+        )
+        filtered_df = filtered_df[mask]
+
+    if "Delayed Flown" in status_filter:
+        filtered_df = filtered_df[filtered_df["actual_delay_min"] > 15]
+    elif "Ideal Optimized" in status_filter:
+        filtered_df = filtered_df[(filtered_df["actual_delay_min"] > 5) & (filtered_df["ideal_delay_min"] <= 5)]
+    elif "Weather Metered" in status_filter:
+        filtered_df = filtered_df[filtered_df["weather_restricted"] == True]
+
+    # Sort
+    if sort_by == "Flown Delay":
+        filtered_df = filtered_df.sort_values(by="actual_delay_min", ascending=False)
+    elif sort_by == "Delay Saved":
+        filtered_df = filtered_df.sort_values(by="delay_saved_min", ascending=False)
+    elif sort_by == "Fuel Saved":
+        filtered_df = filtered_df.sort_values(by="fuel_saved_kg", ascending=False)
+    else:
+        filtered_df = filtered_df.sort_values(by="planned_time", ascending=True)
+
+    # Format Display Table
+    route_col = "destination" if is_dep else "origin"
+    route_title = "Destination" if is_dep else "Origin"
+
+    display_table = pd.DataFrame({
+        "Flight": filtered_df["flight"],
+        "Airline": filtered_df["operator"],
+        "Type": filtered_df["ac_type"],
+        route_title: filtered_df[route_col],
+        "Planned (Filed)": filtered_df["planned_time"],
+        "Actual (Flown)": filtered_df["actual_time"],
+        "Flown Delay": filtered_df["actual_delay_min"].apply(lambda x: f"{x:+.0f} min" if x != 0 else "On-Time"),
+        "ATC Twin (Ideal)": filtered_df["ideal_time"],
+        "Ideal Delay": filtered_df["ideal_delay_min"].apply(lambda x: f"{x:+.0f} min" if x != 0 else "0 min"),
+        "Delay Saved": filtered_df["delay_saved_min"].apply(lambda x: f"-{x:.0f} min" if x > 0 else "0 min"),
+        "Fuel Saved": filtered_df["fuel_saved_kg"].apply(lambda x: f"{x:,.0f} kg" if x > 0 else "0 kg"),
+        "Economic Benefit": filtered_df["economic_savings_eur"].apply(lambda x: f"€{x:,.0f}"),
+        "Status": filtered_df["status"],
+    })
+
+    st.dataframe(display_table, use_container_width=True, hide_index=True)
+
+    # Visual Comparison: Hourly Diurnal Schedule vs Flown vs Ideal Twin
+    st.markdown("#### 📈 Diurnal Hourly Flow Profile (Planned vs. Flown vs. Ideal Twin)")
+    try:
+        filtered_df["planned_hour"] = pd.to_datetime(filtered_df["planned_time"]).dt.hour
+        filtered_df["actual_hour"] = pd.to_datetime(filtered_df["actual_time"]).dt.hour
+        filtered_df["ideal_hour"] = pd.to_datetime(filtered_df["ideal_time"]).dt.hour
+
+        hourly_records = []
+        for h in range(24):
+            n_plan = int((filtered_df["planned_hour"] == h).sum())
+            n_act = int((filtered_df["actual_hour"] == h).sum())
+            n_ideal = int((filtered_df["ideal_hour"] == h).sum())
+            if n_plan > 0 or n_act > 0 or n_ideal > 0:
+                hourly_records.append({"hour": f"{h:02d}:00", "Stream": "1. Planned (Filed)", "Movements": n_plan})
+                hourly_records.append({"hour": f"{h:02d}:00", "Stream": "2. Actual (Flown)", "Movements": n_act})
+                hourly_records.append({"hour": f"{h:02d}:00", "Stream": "3. ATC Twin (Ideal)", "Movements": n_ideal})
+
+        if hourly_records:
+            h_df = pd.DataFrame(hourly_records)
+            chart_diurnal = alt.Chart(h_df).mark_line(point=True).encode(
+                x=alt.X("hour:N", title="Hour of Day (UTC)"),
+                y=alt.Y("Movements:Q", title="Flight Movements / Hour"),
+                color=alt.Color(
+                    "Stream:N",
+                    scale=alt.Scale(
+                        domain=["1. Planned (Filed)", "2. Actual (Flown)", "3. ATC Twin (Ideal)"],
+                        range=["#95a5a6", "#e74c3c", "#10b981"],
+                    ),
+                    legend=alt.Legend(title="Trajectory Source"),
+                ),
+                tooltip=["hour", "Stream", "Movements"],
+            ).properties(height=280, title=f"Hourly Flight Distribution across {sel_hub} ({sel_date_str})")
+            st.altair_chart(chart_diurnal, use_container_width=True)
+    except Exception:
+        pass
+
+    # CSV Download Button
+    csv_bytes = filtered_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label=f"📥 Export {sel_hub} {board_mode.split()[1]} ({sel_date_str}) as CSV",
+        data=csv_bytes,
+        file_name=f"fids_{sel_hub}_{board_mode.split()[1].lower()}_{sel_date_str}.csv",
+        mime="text/csv",
+        key=f"{key_prefix}_csv_{selected_period}",
+    )
+
+
 with st.sidebar.expander("📄 Export Static HTML Report (with Images)", expanded=True):
     st.caption("Export any page (or the full executive bundle) to a standalone `.html` file with embedded high-DPI Base64 PNG charts & maps.")
     sb_page_choice = st.selectbox(
@@ -2403,50 +2641,66 @@ with tab_cat_system:
 
                 st.dataframe(f_df, use_container_width=True)
 
+
         elif kpi_tier == "🛫 Airport Level":
-            col_ap_sub1, col_ap_sub2, col_ap_sub3 = st.columns([2, 1, 1])
-            with col_ap_sub1:
-                airport_mode = st.radio(
-                    "Airport Categorization:",
-                    options=["Departure Aerodromes (ADEP)", "Arrival Aerodromes (ADES)"],
-                    horizontal=True,
-                    key=f"ap_mode_{selected_period}",
+            tab_ap_fids, tab_ap_scorecard = st.tabs([
+                "📋 Arrivals & Departures Board (Planned vs. Flown vs. Ideal Twin)",
+                "📊 Hub Performance Scorecard & Network Rankings",
+            ])
+
+            with tab_ap_fids:
+                st.subheader("🛫 Airport Flight Information Display (FIDS) — Planned vs. Flown vs. Ideal Trajectory")
+                st.caption(
+                    "Direct flight-level arrivals and departures schedule for any European aerodrome. "
+                    "Compares filed pre-departure plans against empirical radar flights and the autonomous ATC Digital Twin. "
+                    "Delay clustering (>5 delays/hr) triggers empirical weather-metering, preserving safety buffers while unconstrained hours eliminate procedural holding."
                 )
-            with col_ap_sub2:
-                ap_min_flts = st.slider("Min Flights Threshold", 10, 500, 50, key=f"ap_min_{selected_period}")
-            with col_ap_sub3:
-                ap_top_n = st.slider("Top Hubs Count", 5, 50, 15, key=f"ap_top_{selected_period}")
+                render_airport_fids_component(ds, selected_period, default_airport="EGLL", key_prefix="kpi_fids")
 
-            grp_key = "departure" if "departure" in airport_mode.lower() else "arrival"
-            fir_scope_desc = f" (Scoped to {selected_fir_id})" if selected_fir_id else ""
-            with st.spinner(f"Aggregating airport KPIs by {airport_mode}..."):
-                airport_summary = query_multi_level_kpis(
-                    ds,
-                    level="airport",
-                    group_by=grp_key,
-                    fir_filter=selected_fir_id,
-                    start_date=filter_start_str,
-                    end_date=filter_end_str,
-                    hour_start=h_start,
-                    hour_end=h_end,
-                    min_flights=ap_min_flts,
-                    limit=ap_top_n,
-                )
+            with tab_ap_scorecard:
+                col_ap_sub1, col_ap_sub2, col_ap_sub3 = st.columns([2, 1, 1])
+                with col_ap_sub1:
+                    airport_mode = st.radio(
+                        "Airport Categorization:",
+                        options=["Departure Aerodromes (ADEP)", "Arrival Aerodromes (ADES)"],
+                        horizontal=True,
+                        key=f"ap_mode_{selected_period}",
+                    )
+                with col_ap_sub2:
+                    ap_min_flts = st.slider("Min Flights Threshold", 10, 500, 50, key=f"ap_min_{selected_period}")
+                with col_ap_sub3:
+                    ap_top_n = st.slider("Top Hubs Count", 5, 50, 15, key=f"ap_top_{selected_period}")
 
-            st.subheader(f"🛫 Airport Performance Scorecard — {airport_summary.group_by}{fir_scope_desc}")
-            st.info(f"📅 **Timeframe:** `{airport_summary.time_window}` | **Diurnal Window:** `{airport_summary.hour_window}` | **Analyzed Hubs:** `{len(airport_summary.records)}` (≥{ap_min_flts} flights)")
+                grp_key = "departure" if "departure" in airport_mode.lower() else "arrival"
+                fir_scope_desc = f" (Scoped to {selected_fir_id})" if selected_fir_id else ""
+                with st.spinner(f"Aggregating airport KPIs by {airport_mode}..."):
+                    airport_summary = query_multi_level_kpis(
+                        ds,
+                        level="airport",
+                        group_by=grp_key,
+                        fir_filter=selected_fir_id,
+                        start_date=filter_start_str,
+                        end_date=filter_end_str,
+                        hour_start=h_start,
+                        hour_end=h_end,
+                        min_flights=ap_min_flts,
+                        limit=ap_top_n,
+                    )
 
-            if airport_summary.records:
-                ap_df = pd.DataFrame(airport_summary.records)
-                delay_col = "avg_dep_delay_min" if grp_key == "departure" else "avg_arr_delay_min"
-                chart_ap = alt.Chart(ap_df).mark_bar(color="#e67e22").encode(
-                    x=alt.X("entity_id:N", title="Aerodrome ICAO", sort="-y"),
-                    y=alt.Y(f"{delay_col}:Q", title=f"Avg {'Departure' if grp_key == 'departure' else 'Arrival'} Delay (min)"),
-                    tooltip=["entity_id", "total_flights", "avg_dep_delay_min", "avg_arr_delay_min", "pct_severe_arr_30m", "total_excess_fuel_cost_eur"],
-                ).properties(height=260, title=f"Top {len(ap_df)} Aerodromes Ranked by Delay ({airport_summary.group_by})")
-                st.altair_chart(chart_ap, use_container_width=True)
+                st.subheader(f"🛫 Airport Performance Scorecard — {airport_summary.group_by}{fir_scope_desc}")
+                st.info(f"📅 **Timeframe:** `{airport_summary.time_window}` | **Diurnal Window:** `{airport_summary.hour_window}` | **Analyzed Hubs:** `{len(airport_summary.records)}` (≥{ap_min_flts} flights)")
 
-                st.dataframe(ap_df, use_container_width=True)
+                if airport_summary.records:
+                    ap_df = pd.DataFrame(airport_summary.records)
+                    delay_col = "avg_dep_delay_min" if grp_key == "departure" else "avg_arr_delay_min"
+                    chart_ap = alt.Chart(ap_df).mark_bar(color="#e67e22").encode(
+                        x=alt.X("entity_id:N", title="Aerodrome ICAO", sort="-y"),
+                        y=alt.Y(f"{delay_col}:Q", title=f"Avg {'Departure' if grp_key == 'departure' else 'Arrival'} Delay (min)"),
+                        tooltip=["entity_id", "total_flights", "avg_dep_delay_min", "avg_arr_delay_min", "pct_severe_arr_30m", "total_excess_fuel_cost_eur"],
+                    ).properties(height=260, title=f"Top {len(ap_df)} Aerodromes Ranked by Delay ({airport_summary.group_by})")
+                    st.altair_chart(chart_ap, use_container_width=True)
+
+                    st.dataframe(ap_df, use_container_width=True)
 
         else: # 🔍 Flight Level
             fir_scope_desc = f" traversing {selected_fir_id}" if selected_fir_id else ""
@@ -3958,6 +4212,14 @@ with tab_cat_system:
                 if not cols_to_plot:
                     cols_to_plot = [c for c in hour_df.columns if c != idx_col]
                 st.bar_chart(hour_df.set_index(idx_col)[cols_to_plot])
+
+            st.divider()
+            st.markdown(f"### 📋 Daily Flight Operations Board for {sel_apt} (Planned vs. Flown vs. Ideal Twin)")
+            st.caption(
+                f"Interactive Flight Information Display (FIDS) comparing filed flight plans (Planned), "
+                f"actual radar arrivals/departures (Flown), and the autonomous ATC Digital Twin (Ideal) for {sel_apt} on any selected operating day."
+            )
+            render_airport_fids_component(ds, selected_period, default_airport=sel_apt, key_prefix=f"sys_apt_{selected_period}")
 
     with sys_sub2:
         st.header("Macro Evolution, FRA Structural Shift, Weather Correlation & AIRAC Diffing")
@@ -5835,7 +6097,6 @@ with tab_cat_maps:
                 filter_std = st.selectbox(
                     "Filter Target Standard",
                     options=avail_standards,
-                    index=0,
                     index=default_std_idx,
                     key=f"ecac_radar_net_filter_std_{selected_period}",
                 )

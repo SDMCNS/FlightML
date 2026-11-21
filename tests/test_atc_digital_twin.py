@@ -8,6 +8,7 @@ from flightml.data.dataset import FlightDataset
 from flightml.sim.atc_digital_twin import (
     AirportOperationalState,
     analyze_airport_weather_and_capacity,
+    get_airport_fids_board,
     get_or_compute_ideal_flight,
     reconstruct_ideal_flight,
     resolve_optimal_cruise_fl,
@@ -118,3 +119,36 @@ def test_cli_atc_twin_subset():
     assert res.exit_code == 0
     assert "FlightML ATC Digital Twin: 4D Trajectory Rebuild" in res.stdout
     assert "ATC Digital Twin Execution Complete" in res.stdout
+
+
+def test_airport_fids_board(dataset):
+    """Verify airport-level arrivals and departures FIDS board generation."""
+    # Find a major airport and date with flights in 202510
+    row = dataset.query("SELECT adep, CAST(actual_off_block_time AS DATE) as d FROM flights WHERE actual_off_block_time IS NOT NULL LIMIT 1").iloc[0]
+    apt = row["adep"]
+    d_str = str(row["d"])
+
+    fids = get_airport_fids_board(dataset, airport_icao=apt, target_date=d_str, period="202510", max_flights=10)
+    assert "departures" in fids
+    assert "arrivals" in fids
+
+    dep_df = fids["departures"]
+    assert not dep_df.empty
+    expected_cols = [
+        "ectrl_id", "flight", "operator", "ac_type", "destination",
+        "planned_time", "actual_time", "ideal_time",
+        "actual_delay_min", "ideal_delay_min", "delay_saved_min",
+        "fuel_saved_kg", "co2_saved_kg", "economic_savings_eur",
+        "status", "weather_restricted"
+    ]
+    for col in expected_cols:
+        assert col in dep_df.columns
+
+    # Verify times and delays
+    sample_flight = dep_df.iloc[0]
+    assert sample_flight["destination"] is not None
+    assert sample_flight["actual_delay_min"] is not None
+    # For flights with delays, ideal delay should be <= actual delay
+    delayed_flights = dep_df[dep_df["actual_delay_min"] > 0]
+    for _, r in delayed_flights.iterrows():
+        assert r["ideal_delay_min"] <= r["actual_delay_min"] + 0.1
