@@ -96,6 +96,44 @@ def spherical_midpoint(lat1: float, lon1: float, lat2: float, lon2: float) -> tu
     return round(mid_lat, 5), round(mid_lon, 5)
 
 
+def spherical_intermediate_point(
+    lat1: float, lon1: float, lat2: float, lon2: float, fraction: float
+) -> tuple[float, float]:
+    """
+    Calculate an intermediate coordinate at fractional distance `fraction` [0.0, 1.0]
+    along the great-circle path from point 1 to point 2.
+    """
+    if fraction <= 0.0:
+        return round(lat1, 5), round(normalize_longitude_deg(lon1), 5)
+    if fraction >= 1.0:
+        return round(lat2, 5), round(normalize_longitude_deg(lon2), 5)
+
+    phi1, lambda1 = math.radians(lat1), math.radians(lon1)
+    phi2, lambda2 = math.radians(lat2), math.radians(lon2)
+
+    # Angular distance
+    sin_dphi2 = math.sin((phi2 - phi1) / 2.0)
+    sin_dlam2 = math.sin(math.radians(angular_difference_deg(lon1, lon2)) / 2.0)
+    a = sin_dphi2 * sin_dphi2 + math.cos(phi1) * math.cos(phi2) * sin_dlam2 * sin_dlam2
+    delta = 2.0 * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1.0 - a)))
+
+    if delta < 1e-9:
+        return round(lat1, 5), round(normalize_longitude_deg(lon1), 5)
+
+    sin_delta = math.sin(delta)
+    f1 = math.sin((1.0 - fraction) * delta) / sin_delta
+    f2 = math.sin(fraction * delta) / sin_delta
+
+    x = f1 * math.cos(phi1) * math.cos(lambda1) + f2 * math.cos(phi2) * math.cos(lambda2)
+    y = f1 * math.cos(phi1) * math.sin(lambda1) + f2 * math.cos(phi2) * math.sin(lambda2)
+    z = f1 * math.sin(phi1) + f2 * math.sin(phi2)
+
+    int_lat = math.atan2(z, math.sqrt(x * x + y * y))
+    int_lon = math.atan2(y, x)
+
+    return round(math.degrees(int_lat), 5), round(normalize_longitude_deg(math.degrees(int_lon)), 5)
+
+
 def circular_mean_longitude(lons: Sequence[float]) -> float:
     """
     Calculate circular vector mean longitude for a series of coordinates.

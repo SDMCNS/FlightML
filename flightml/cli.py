@@ -4559,5 +4559,141 @@ def radar_ecac_pipeline_cmd(
     )
 
 
+@app.command(name="atc-twin")
+def atc_twin_cmd(
+    period: str = typer.Option("202507", help="Eurocontrol traffic cycle period to evaluate (default: 202507 peak summer)"),
+    max_flights: Optional[int] = typer.Option(None, help="Maximum number of flights to rebuild (default: all flights in period)"),
+    date: Optional[str] = typer.Option(None, help="Filter to specific date (YYYY-MM-DD)"),
+    summary_only: bool = typer.Option(False, "--summary", help="Display existing precomputed ATC Digital Twin summary without re-running"),
+) -> None:
+    """
+    Execute the Pan-European ATC Digital Twin optimization pipeline.
+    Rebuilds commercial flights in fully safe 4D trajectories, optimizing delays, route, FL, and holding,
+    inferring airport weather and capacity from delay clustering (>5 delays/hr = weather; <20 moves/hr = unconstrained).
+    """
+    from flightml.sim.atc_digital_twin import (
+        run_digital_twin_simulation,
+        load_digital_twin_dataset,
+        DIGITAL_TWIN_DIR,
+    )
+
+    console.print(
+        Panel(
+            f"[bold blue]✈️ FlightML ATC Digital Twin: 4D Trajectory Rebuild & Network Optimization[/bold blue]\n\n"
+            f"[dim]Data Cycle:[/dim] [bold cyan]{period}[/bold cyan]  |  "
+            f"[dim]Date Filter:[/dim] [bold yellow]{date if date else 'Full Cycle Period'}[/bold yellow]  |  "
+            f"[dim]Max Flights:[/dim] [bold]{max_flights if max_flights else 'All Traffic'}[/bold]\n"
+            f"[dim]Axioms:[/dim] Airport movements < 20/hr &rarr; [green]Unconstrained Headroom[/green]  |  "
+            f"Hourly delays > 5 &rarr; [red]Weather Capacity Cap[/red] (Zero external API dependencies)",
+            title="🌐 [bold]Autonomous Prescriptive Airspace Simulator[/bold]",
+            border_style="blue",
+        )
+    )
+
+    if summary_only:
+        m_df, sum_obj = load_digital_twin_dataset(period=period, date=date)
+        if sum_obj is None or m_df is None:
+            console.print(f"[bold red]No precomputed ATC Digital Twin dataset found for period {period}. Run without --summary first.[/bold red]")
+            raise typer.Exit(code=1)
+
+        t_stats = Table(title=f"📊 ATC Digital Twin Network Optimization Summary ({period})", border_style="green")
+        t_stats.add_column("Key Performance Indicator", style="bold")
+        t_stats.add_column("Achieved Improvement", justify="right", style="bold green")
+
+        t_stats.add_row("Total Flights Rebuilt & Deconflicted", f"{sum_obj.total_flights_evaluated:,} flights")
+        t_stats.add_row("Total Flight Air Time Saved", f"-{sum_obj.total_air_time_saved_min:,.0f} minutes")
+        t_stats.add_row("Total Delay Minutes Eliminated", f"-{sum_obj.total_delay_minutes_saved:,.0f} minutes")
+        t_stats.add_row("Airborne Holding Stacks Eliminated", f"-{sum_obj.total_holding_minutes_eliminated:,.0f} holding minutes (100% eliminated)")
+        t_stats.add_row("Aviation Jet Fuel Saved", f"-{sum_obj.total_fuel_saved_kg:,.0f} kg ({sum_obj.total_fuel_saved_kg/1000.0:,.1f} tonnes)")
+        t_stats.add_row("CO₂ Emissions Avoided", f"-{sum_obj.total_co2_saved_tonnes:,.1f} tonnes CO₂")
+        t_stats.add_row("Fuel Cost Savings", f"€{sum_obj.total_fuel_cost_saved_eur:,.2f}")
+        t_stats.add_row("EU261 Passenger Delay Compensation Saved", f"€{sum_obj.total_eu261_saved_eur:,.2f}")
+        t_stats.add_row("Turnaround & Reactionary Delay Costs Saved", f"€{sum_obj.total_operational_cost_saved_eur:,.2f}")
+        t_stats.add_row("Total Economic Value Unlocked", f"€{sum_obj.total_economic_benefit_eur:,.2f}")
+        console.print(t_stats)
+        return
+
+    dataset = FlightDataset(period=period)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("[bold cyan]Reconstructing ideal trajectories...", total=100)
+
+        def _on_progress(curr: int, tot: int, msg: str) -> None:
+            pct = int((curr / max(1, tot)) * 100)
+            progress.update(task, completed=pct, description=f"[bold cyan]ATC Digital Twin: {msg}")
+
+        metrics_df, trajs_df, summary = run_digital_twin_simulation(
+            dataset=dataset,
+            period=period,
+            max_flights=max_flights,
+            date=date,
+            progress_callback=_on_progress,
+        )
+        progress.update(task, completed=100, description="[bold green]✓ Network Rebuild Complete!")
+
+    # Summary table
+    t_res = Table(title=f"🚀 ATC Digital Twin Optimization Outcomes ({period})", border_style="green")
+    t_res.add_column("Metric", style="bold")
+    t_res.add_column("Baseline Actual Flown", justify="right", style="dim")
+    t_res.add_column("ATC Digital Twin Ideal", justify="right", style="bold cyan")
+    t_res.add_column("Net Improvement", justify="right", style="bold green")
+
+    t_res.add_row(
+        "Total Flight Air Time",
+        f"{metrics_df['actual_air_time_min'].sum():,.0f} min",
+        f"{metrics_df['ideal_air_time_min'].sum():,.0f} min",
+        f"-{summary.total_air_time_saved_min:,.0f} min ({round((summary.total_air_time_saved_min / max(1, metrics_df['actual_air_time_min'].sum()))*100, 1)}%)",
+    )
+    t_res.add_row(
+        "Arrival Delay Minutes",
+        f"{metrics_df['arr_delay_actual_min'].sum():,.0f} min",
+        f"{metrics_df['arr_delay_ideal_min'].sum():,.0f} min",
+        f"-{summary.total_delay_minutes_saved:,.0f} min ({round((summary.total_delay_minutes_saved / max(1, metrics_df['arr_delay_actual_min'].sum()))*100, 1)}%)",
+    )
+    t_res.add_row(
+        "Airborne Holding Stacks",
+        f"{summary.total_holding_minutes_eliminated:,.0f} min",
+        "0.0 min",
+        "-100.0% (Holding Stacks Eliminated)",
+    )
+    t_res.add_row(
+        "Jet Fuel Consumption",
+        f"{metrics_df['actual_fuel_kg'].sum():,.0f} kg",
+        f"{metrics_df['ideal_fuel_kg'].sum():,.0f} kg",
+        f"-{summary.total_fuel_saved_kg:,.0f} kg (-{summary.total_co2_saved_tonnes:,.1f} t CO₂)",
+    )
+    t_res.add_row(
+        "Total Economic Cost",
+        "—",
+        "—",
+        f"€{summary.total_economic_benefit_eur:,.2f} Saved",
+    )
+    console.print(t_res)
+
+    out_prefix = f"{period}_{date}" if date else period
+    parquet_path = DIGITAL_TWIN_DIR / f"atc_twin_{out_prefix}.parquet"
+    summary_path = DIGITAL_TWIN_DIR / f"atc_twin_summary_{out_prefix}.json"
+
+    console.print(
+        Panel(
+            f"[bold green]✓ ATC Digital Twin Dataset Successfully Stored:[/bold green]\n"
+            f"[link=file:///{parquet_path.as_posix()}]{parquet_path.as_posix()}[/link]\n"
+            f"[link=file:///{summary_path.as_posix()}]{summary_path.as_posix()}[/link]\n\n"
+            f"[dim]Weather-Restricted Hub Hours Identified: [bold red]{summary.total_weather_impacted_airport_hours:,}[/bold red]  |  "
+            f"Unconstrained Small Airport Hours: [bold green]{summary.total_unconstrained_airport_hours:,}[/bold green]\n"
+            f"Integrated into Streamlit Dashboard: [bold]4D Trajectory Tab[/bold] (Single Flight) and [bold]Network Level Tab[/bold] (Network Scorecard).[/dim]",
+            title="✈️ [bold]ATC Digital Twin Execution Complete[/bold]",
+            border_style="green",
+        )
+    )
+
+
 if __name__ == "__main__":
     app()

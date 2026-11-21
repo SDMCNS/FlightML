@@ -52,6 +52,7 @@ def create_trajectory_map(
     show_navaids: bool = True,
     contrail_segments: list[Any] | None = None,
     show_contrails: bool = True,
+    ideal_df: pd.DataFrame | None = None,
 ) -> folium.Map:
     """
     Generate an interactive Leaflet/Folium map visualizing:
@@ -155,6 +156,17 @@ def create_trajectory_map(
             weight=4,
             opacity=0.95,
             tooltip=f"Actual Flown Track ({metrics.actual_distance_nm:.1f} nm)",
+        ).add_to(m)
+
+    # Add ideal trajectory line (ATC Digital Twin)
+    if ideal_df is not None and not ideal_df.empty:
+        ideal_coords = list(zip(ideal_df["latitude"], ideal_df["longitude"]))
+        create_safe_polyline(
+            ideal_coords,
+            color="#10b981",
+            weight=4,
+            opacity=0.95,
+            tooltip=f"✨ ATC Digital Twin: Ideal Trajectory ({len(ideal_df)} waypoints, 0 min holding)",
         ).add_to(m)
 
         # Mark ADEP

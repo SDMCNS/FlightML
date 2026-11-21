@@ -700,7 +700,7 @@ with tab_cat_single:
             m4.metric("Inefficiency Ratio", f"{metrics.horizontal_extension_ratio:.3f}x")
             m5.metric("Holding Duration", f"{metrics.total_holding_duration_min:.1f} min")
 
-            col_nav_tog1, col_nav_tog2 = st.columns([1, 2])
+            col_nav_tog1, col_nav_tog2, col_nav_tog3 = st.columns([1, 1.4, 1.4])
             with col_nav_tog1:
                 show_route_navaids = st.toggle(
                     "📡 Show Active Route Navaids on Map",
@@ -716,6 +716,13 @@ with tab_cat_single:
                     disabled=not show_route_navaids,
                     key=f"flt_route_navaids_{selected_period}",
                 )
+            with col_nav_tog3:
+                show_ideal_twin = st.toggle(
+                    "✨ Show ATC Digital Twin: Ideal Trajectory",
+                    value=True,
+                    key=f"tog_ideal_twin_{selected_period}_{active_flight_id}",
+                    help="Overlay the reconstructed ideal 4D flight path (solid green) minimizing delays, holding, and fuel burn.",
+                )
 
             filtered_route_navaids = (
                 [n for n in nav_rnp_rep.active_navaids if n.nav_type in route_nav_type_filter]
@@ -723,10 +730,20 @@ with tab_cat_single:
                 else []
             )
 
+            ideal_met = None
+            ideal_df = None
+            if show_ideal_twin:
+                try:
+                    from flightml.sim.atc_digital_twin import get_or_compute_ideal_flight
+                    ideal_met, ideal_df = get_or_compute_ideal_flight(ds, int(active_flight_id))
+                except Exception:
+                    ideal_met, ideal_df = None, None
+
             st.caption(
-                "🗺️ **Interactive 4D Route & Active Navaids Map:** Colored dots show ground radio navigation aids auto-tuned along the entire corridor "
-                "(🔵 **VOR-DME / VORTAC** | 🔷 **DME / TACAN** | 🟢 **VOR** | 🟣 **ILS/LOC** | 🟠 **NDB**), "
-                "with dashed sightlines to the aircraft's closest 4D trajectory pass and persistent contrail (ISSR) layers. Use the toggle above to switch navaid icons on or off."
+                "🗺️ **Interactive 4D Route, Active Navaids & Digital Twin Map:** "
+                "Planned flight plan (dashed blue), actual radar trajectory (solid purple), "
+                "and **ATC Digital Twin ideal trajectory (solid emerald green)**. "
+                "Colored dots show tuned ground radio aids with slant-range sightlines and persistent contrail (ISSR) layers."
             )
             contrail_rep = analyze_flight_wind_and_contrails(ds, int(active_flight_id))
             m = create_trajectory_map(
@@ -736,14 +753,61 @@ with tab_cat_single:
                 active_navaids=filtered_route_navaids,
                 show_navaids=show_route_navaids,
                 contrail_segments=contrail_rep.issr_segments if contrail_rep else None,
+                ideal_df=ideal_df if show_ideal_twin else None,
             )
             st_folium(
                 m,
                 width=1200,
                 height=540,
                 returned_objects=[],
-                key=f"traj_map_{selected_period}_{active_flight_id}_{int(show_route_navaids)}_{len(filtered_route_navaids)}",
+                key=f"traj_map_{selected_period}_{active_flight_id}_{int(show_route_navaids)}_{len(filtered_route_navaids)}_{int(show_ideal_twin)}",
             )
+
+            if show_ideal_twin and ideal_met:
+                st.markdown("#### 🤖 ATC Digital Twin: 3-Way Trajectory Optimization Scorecard")
+                st.caption(
+                    "Side-by-side comparison of **Filed Flight Plan (Planned)**, **Historical Flown Track (Actual)**, "
+                    "and the **ATC Digital Twin (Ideal Rebuild)** with Free Route Airspace (FRA) direct routing, CCO/CDO, and zero airborne holding:"
+                )
+
+                tw1, tw2, tw3, tw4, tw5 = st.columns(5)
+                tw1.metric(
+                    "Trajectory Distance",
+                    f"{ideal_met.ideal_distance_nm:.0f} nm",
+                    f"-{ideal_met.distance_saved_nm:.0f} nm vs flown ({round((ideal_met.distance_saved_nm / max(1, ideal_met.actual_distance_nm))*100, 1)}%)",
+                )
+                tw2.metric(
+                    "Flight Air Time",
+                    f"{ideal_met.ideal_air_time_min:.0f} min",
+                    f"-{ideal_met.air_time_saved_min:.0f} min vs flown",
+                )
+                tw3.metric(
+                    "Arrival Punctuality",
+                    f"{ideal_met.arr_delay_ideal_min:.0f} min delay",
+                    f"-{ideal_met.arr_delay_saved_min:.0f} min delay saved",
+                )
+                tw4.metric(
+                    "Fuel & CO₂ Savings",
+                    f"{ideal_met.fuel_saved_kg:.0f} kg Jet-A",
+                    f"-{ideal_met.co2_saved_kg:.0f} kg CO₂",
+                )
+                tw5.metric(
+                    "Total Economic Savings",
+                    f"€{ideal_met.total_economic_savings_eur:,.0f} EUR",
+                    f"€{ideal_met.fuel_cost_saved_eur:,.0f} fuel + delays",
+                )
+
+                cmp_data = [
+                    {"Metric": "Routing Distance (NM)", "Planned (Filed)": f"{ideal_met.planned_distance_nm:.1f} nm", "Actual Flown Track": f"{ideal_met.actual_distance_nm:.1f} nm", "ATC Digital Twin (Ideal)": f"{ideal_met.ideal_distance_nm:.1f} nm", "Net Improvement": f"-{ideal_met.distance_saved_nm:.1f} nm"},
+                    {"Metric": "Air Time (min)", "Planned (Filed)": f"{ideal_met.planned_air_time_min:.1f} min", "Actual Flown Track": f"{ideal_met.actual_air_time_min:.1f} min", "ATC Digital Twin (Ideal)": f"{ideal_met.ideal_air_time_min:.1f} min", "Net Improvement": f"-{ideal_met.air_time_saved_min:.1f} min"},
+                    {"Metric": "Departure Delay (min)", "Planned (Filed)": "0.0 min", "Actual Flown Track": f"{ideal_met.dep_delay_actual_min:.1f} min", "ATC Digital Twin (Ideal)": f"{ideal_met.dep_delay_ideal_min:.1f} min", "Net Improvement": f"-{max(0.0, ideal_met.dep_delay_actual_min - ideal_met.dep_delay_ideal_min):.1f} min"},
+                    {"Metric": "Arrival Delay (min)", "Planned (Filed)": "0.0 min", "Actual Flown Track": f"{ideal_met.arr_delay_actual_min:.1f} min", "ATC Digital Twin (Ideal)": f"{ideal_met.arr_delay_ideal_min:.1f} min", "Net Improvement": f"-{ideal_met.arr_delay_saved_min:.1f} min"},
+                    {"Metric": "Airborne Holding Duration", "Planned (Filed)": "0.0 min", "Actual Flown Track": f"{ideal_met.holding_duration_actual_min:.1f} min", "ATC Digital Twin (Ideal)": "0.0 min", "Net Improvement": f"-{ideal_met.holding_duration_actual_min:.1f} min (100% eliminated)"},
+                    {"Metric": "Fuel Burn (kg Jet-A)", "Planned (Filed)": f"{ideal_met.planned_fuel_kg:,.0f} kg", "Actual Flown Track": f"{ideal_met.actual_fuel_kg:,.0f} kg", "ATC Digital Twin (Ideal)": f"{ideal_met.ideal_fuel_kg:,.0f} kg", "Net Improvement": f"-{ideal_met.fuel_saved_kg:,.0f} kg"},
+                    {"Metric": "CO₂ Emissions (kg CO₂)", "Planned (Filed)": f"{ideal_met.planned_fuel_kg * 3.15:,.0f} kg", "Actual Flown Track": f"{ideal_met.actual_co2_kg:,.0f} kg", "ATC Digital Twin (Ideal)": f"{ideal_met.ideal_co2_kg:,.0f} kg", "Net Improvement": f"-{ideal_met.co2_saved_kg:,.0f} kg"},
+                    {"Metric": "Cruising Flight Level", "Planned (Filed)": f"FL{ideal_met.flown_cruise_fl}", "Actual Flown Track": f"FL{ideal_met.flown_cruise_fl}", "ATC Digital Twin (Ideal)": f"FL{ideal_met.optimal_cruise_fl}", "Net Improvement": "Optimum Aerodynamic CCO/CDO"},
+                ]
+                st.dataframe(pd.DataFrame(cmp_data), use_container_width=True, hide_index=True)
 
             if nav_rnp_rep and nav_rnp_rep.profile_points:
                 st.markdown("#### 📡 Active Route Navaids & Anticipated RNP/RNAV Capability vs. Vertical Profile")
@@ -2073,6 +2137,91 @@ with tab_cat_system:
                 bf2.metric("Airport Arrivals", f"{net_fir_seg.arrivals_count:,}", f"{net_fir_seg.arrivals_pct:.1f}% share")
                 bf3.metric("Airport Departures", f"{net_fir_seg.departures_count:,}", f"{net_fir_seg.departures_pct:.1f}% share")
                 bf4.metric("Internal / Domestic", f"{net_fir_seg.internal_count:,}", f"{net_fir_seg.internal_pct:.1f}% share")
+
+            # ATC Digital Twin Pan-European Optimization Section
+            st.markdown("---")
+            st.subheader("🤖 ATC Digital Twin: Network-Wide 4D Trajectory Rebuild & Optimization")
+            st.caption(
+                "Aggregated network improvements from the autonomous ATC Digital Twin simulator: "
+                "rebuilds all commercial flights in safe 4D trajectories, optimizes cruise FL, eliminates holding loops, "
+                "and enforces empirical airport weather and capacity thresholds (>5 delays/hr = weather; <20 moves/hr = unconstrained)."
+            )
+
+            from flightml.sim.atc_digital_twin import load_digital_twin_dataset, run_digital_twin_simulation
+
+            twin_df, twin_sum = load_digital_twin_dataset(selected_period)
+
+            if twin_sum is None or twin_df is None:
+                st.info(
+                    f"ℹ️ No precomputed ATC Digital Twin dataset found for period `{selected_period}`. "
+                    "You can generate the complete dataset via CLI command `flightml atc-twin` or trigger a rapid simulation below:"
+                )
+                col_btn_tw1, col_btn_tw2 = st.columns([1, 2])
+                with col_btn_tw1:
+                    if st.button("🚀 Run ATC Digital Twin Simulation (Top 250 Flights)", key=f"btn_run_twin_{selected_period}", type="primary"):
+                        with st.spinner("Reconstructing 4D safe trajectories and optimizing network flow..."):
+                            twin_df, _, twin_sum = run_digital_twin_simulation(ds, period=selected_period, max_flights=250)
+                            st.rerun()
+
+            if twin_sum is not None and twin_df is not None:
+                twk1, twk2, twk3, twk4 = st.columns(4)
+                twk1.metric(
+                    "Network Delay Eliminated",
+                    f"-{twin_sum.total_delay_minutes_saved:,.0f} min",
+                    f"{round((twin_sum.total_delay_minutes_saved / max(1, twin_df['arr_delay_actual_min'].sum()))*100, 1)}% delay reduction",
+                )
+                twk2.metric(
+                    "Airborne Holding Eliminated",
+                    f"-{twin_sum.total_holding_minutes_eliminated:,.0f} min",
+                    "-100% (Holding Stacks Eliminated)",
+                )
+                twk3.metric(
+                    "Aviation Fuel Saved",
+                    f"-{twin_sum.total_fuel_saved_kg/1000.0:,.1f} tonnes",
+                    f"-{twin_sum.total_co2_saved_tonnes:,.1f} tonnes CO₂",
+                )
+                twk4.metric(
+                    "Total Economic Savings",
+                    f"€{twin_sum.total_economic_benefit_eur/1e6:,.2f}M EUR",
+                    f"{twin_sum.total_flights_evaluated:,} flights rebuilt",
+                )
+
+                tw_c1, tw_c2 = st.columns([3, 2])
+                with tw_c1:
+                    st.markdown("##### 🛫 Top Optimized City Pairs (Largest Fuel & Delay Reductions)")
+                    top_routes_df = pd.DataFrame(twin_sum.top_optimized_routes)
+                    if not top_routes_df.empty:
+                        top_routes_df = top_routes_df.rename(columns={
+                            "adep": "Origin",
+                            "ades": "Destination",
+                            "flight_count": "Flights",
+                            "total_fuel_saved_kg": "Fuel Saved (kg)",
+                            "total_delay_saved_min": "Delay Saved (min)",
+                            "total_savings_eur": "Economic Savings (€)",
+                        })
+                        top_routes_df["Fuel Saved (kg)"] = top_routes_df["Fuel Saved (kg)"].map(lambda x: f"{x:,.0f} kg")
+                        top_routes_df["Delay Saved (min)"] = top_routes_df["Delay Saved (min)"].map(lambda x: f"-{x:,.0f} min")
+                        top_routes_df["Economic Savings (€)"] = top_routes_df["Economic Savings (€)"].map(lambda x: f"€{x:,.0f}")
+                        st.dataframe(top_routes_df, use_container_width=True, hide_index=True)
+
+                with tw_c2:
+                    st.markdown("##### 🌦️ Airport Weather & Capacity Classification")
+                    st.caption(
+                        "Inferred directly from empirical delay clusters without external weather APIs: "
+                        "airports with `<20 movements/hr` are unconstrained; hours with `>5 delayed flights` declare weather bottlenecks."
+                    )
+                    w_box1, w_box2 = st.columns(2)
+                    w_box1.metric("Weather-Impacted Hub Hours", f"{twin_sum.total_weather_impacted_airport_hours:,}", ">5 delays/hr (throttled)")
+                    w_box2.metric("Unconstrained Small Airport Hours", f"{twin_sum.total_unconstrained_airport_hours:,}", "<20 moves/hr (headroom)")
+
+                    if twin_sum.airport_weather_summary:
+                        st.dataframe(pd.DataFrame(twin_sum.airport_weather_summary).rename(columns={
+                            "airport": "Airport",
+                            "total_movements": "Movements",
+                            "weather_restricted_hours": "Weather Restricted Hours",
+                            "total_hours_evaluated": "Total Hours",
+                            "weather_restriction_pct": "Restriction %",
+                        }), use_container_width=True, hide_index=True)
 
         elif kpi_tier == "📡 FIR Airspace Tier":
             active_fir = selected_fir_id or (avail_firs[0]["fir_id"] if avail_firs else "EGTTFIR")
@@ -5686,6 +5835,7 @@ with tab_cat_maps:
                 filter_std = st.selectbox(
                     "Filter Target Standard",
                     options=avail_standards,
+                    index=0,
                     index=default_std_idx,
                     key=f"ecac_radar_net_filter_std_{selected_period}",
                 )
