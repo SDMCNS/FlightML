@@ -45,26 +45,32 @@ $$\text{delayed\_flights}(A, H) \le 5 \implies \text{Operational / Procedural / 
 
 ## 2. Ideal Trajectory Reconstruction Physics
 
-Each flight's ideal trajectory is reconstructed across four operational phases:
+Each flight's ideal trajectory is reconstructed across four operational phases, adhering to a fundamental aviation constraint: **Standard Instrument Departures (SIDs) and Standard Terminal Arrival Routes (STARs) are mandatory terminal procedures that cannot be bypassed**:
 
-### Phase 1: Departure Scheduling & Gate Operations
-* **Pushback**: Scheduled on-time ($t_{\text{ideal}} = t_{\text{sched}}$) unless the departure hub is in a weather-restricted hour, in which case departure is scheduled into the next available runway slot.
-* **Taxi-Out**: Modeled with zero queue holding, saving $50-150\text{ kg}$ of ground idle fuel.
+### Phase 1: Mandatory Departure SID Procedure
+* Aircraft departing an airport must adhere strictly to the published departure runway geometry and SID waypoints up to the designated **SID exit fix** ($P_{\text{sid\_exit}}$, typically $FL \le 180$, $d \le \min(50\text{ NM}, 0.22 \times \text{dist})$).
+* Continuous Climb Operations (CCO) are modeled along the SID climb corridor with optimal climb thrust.
+* Pushback is scheduled on-time ($t_{\text{ideal}} = t_{\text{sched}}$) unless the departure hub is in a weather-restricted hour, in which case departure is scheduled into the next available runway slot.
+* Taxi-out delay is eliminated, saving $50-150\text{ kg}$ of ground idle fuel.
 
-### Phase 2: Lateral Free Route Airspace (FRA) Geodesy
-* Replaces legacy airway doglegs and zig-zags with an orthodromic **Great Circle Geodesic** from departure fix to arrival fix:
-  $$s = 2 R \arcsin \left( \sqrt{\sin^2\left(\frac{\Delta \phi}{2}\right) + \cos \phi_1 \cos \phi_2 \sin^2\left(\frac{\Delta \lambda}{2}\right)} \right)$$
-* Intermediate 4D coordinates are synthesized at regular intervals using spherical linear interpolation (Slerp), preserving continuous spatial fidelity.
+### Phase 2: En-Route Free Route Airspace (FRA) Geodesy
+* **Reconstruction Domain**: Only the airspace strictly *between* the departure SID exit fix ($P_{\text{sid\_exit}}$) and the arrival STAR entry fix ($P_{\text{star\_entry}}$) is subject to Free Route Airspace orthodromic reconstruction.
+* Tactical ATC doglegs, military danger area bypasses, and airway zigzagging between these two fixes are replaced with an orthodromic **Great Circle Geodesic arc**:
+  $$s_{\text{enroute}} = 2 R \arcsin \left( \sqrt{\sin^2\left(\frac{\Delta \phi}{2}\right) + \cos \phi_{\text{sid}} \cos \phi_{\text{star}} \sin^2\left(\frac{\Delta \lambda}{2}\right)} \right)$$
+* Intermediate 4D coordinates along this bridge are synthesized using spherical linear interpolation (Slerp) at cruise altitude.
+* Total reconstructed path distance is:
+  $$\text{dist}_{\text{ideal}} = \text{dist}_{\text{SID}} + s_{\text{enroute}} + \text{dist}_{\text{STAR}}$$
 
-### Phase 3: Vertical Profile (Continuous Climb & Descent)
-* **Continuous Climb Operations (CCO)**: Uninterrupted climb to optimal cruising flight level ($FL_{\text{opt}}$) determined by aircraft category (e.g., A320/B737 at FL360–FL390; widebodies at FL390–FL410), respecting RVSM cruising directions (Eastbound Odd, Westbound Even).
-* **Continuous Descent Operations (CDO)**: Unpowered idle descent directly from Top of Descent ($ToD$) to the runway threshold.
-* **Airborne Holding Elimination**: Holding duration is reduced to $0.0\text{ min}$ by metering destination arrival times before descent.
+### Phase 3: Mandatory Arrival STAR Procedure & Holding Elimination
+* Arrival aircraft join the published arrival runway transition at the **STAR entry fix** ($P_{\text{star\_entry}}$, typically $FL \le 200$, $d \le \min(60\text{ NM}, 0.25 \times \text{dist})$) and follow the published terminal procedure waypoints down to runway touchdown ($FL=0$).
+* **Holding Stacks Eliminated**: While the spatial geometry of the STAR procedure is preserved, airborne holding loops and tactical circling inside terminal stacks (e.g. Bovingdon, Lambourne, Ockham, Biggin for London Heathrow) are eliminated:
+  $$\text{holding\_duration}_{\text{ideal}} = 0.0\text{ min}$$
+* **Continuous Descent Operations (CDO)**: Aircraft fly a smooth, low-noise, idle descent profile along the published STAR waypoints rather than stepped level-offs.
 
-### Phase 4: Strategic 4D Deconfliction & Separation Assurance
+### Phase 4: Vertical Profile Optimization & 4D Deconfliction
+* **Optimal Cruise FL**: Flights cruise at their optimal flight level determined by aircraft category (e.g., A320/B737 at FL360–FL390; widebodies at FL390–FL410), strictly respecting ICAO semicircular rules (Eastbound Odd FL, Westbound Even FL).
 * All flights are cross-checked against a 4D spatial separation grid:
   $$\Delta d_{\text{horizontal}} \ge 5.0\text{ NM} \quad \text{or} \quad |\Delta z| \ge 1,000\text{ ft RVSM}$$
-* Tactical deconfliction resolves crossing conflicts via altitude step assignments or minor speed control adjustments ($\pm 0.02\text{ Mach}$).
 
 ---
 

@@ -86,12 +86,73 @@ def test_reconstruct_ideal_flight(dataset):
     assert metrics.total_economic_savings_eur >= 0.0
 
     # 4D Trajectory DataFrame checks
-    assert len(ideal_df) == 21
+    assert len(ideal_df) >= 15
     for col in ["period_id", "ectrl_id", "seq_num", "time_over", "flight_level", "latitude", "longitude"]:
         assert col in ideal_df.columns
     assert ideal_df.iloc[0]["flight_level"] == 0
     assert ideal_df.iloc[-1]["flight_level"] == 0
     assert ideal_df["flight_level"].max() == metrics.optimal_cruise_fl
+
+
+def test_mandatory_sid_and_star_preservation(dataset):
+    """
+    Verify that the ATC Digital Twin preserves mandatory departure SIDs and arrival STARs:
+    1. Initial trajectory points follow the departure SID procedure up to the SID exit fix.
+    2. Final trajectory points follow the arrival STAR procedure from the STAR entry fix to the runway.
+    3. Only the intermediate en-route segment between SID exit and STAR entry is reconstructed.
+    """
+    from flightml.sim.atc_digital_twin import extract_mandatory_sid_and_star
+
+    flight_id = int(dataset.query("SELECT ectrl_id FROM flights LIMIT 1").iloc[0]["ectrl_id"])
+    flt = dataset.get_flight(flight_id)
+    trajs = dataset.get_trajectory(flight_id)
+    ref_df = trajs["actual"] if not trajs["actual"].empty else trajs["planned"]
+
+    adep_lat = float(flt.get("adep_lat") or 50.0)
+    adep_lon = float(flt.get("adep_lon") or 10.0)
+    ades_lat = float(flt.get("ades_lat") or 52.0)
+    ades_lon = float(flt.get("ades_lon") or 13.0)
+    fl_dist = float(flt.get("flt_plan_distance_flown_nm", 500.0) or 500.0)
+
+    sid_points, star_points, sid_exit, star_entry, sid_dist, star_dist = extract_mandatory_sid_and_star(
+        ref_df, adep_lat, adep_lon, ades_lat, ades_lon, fl_dist, 360
+    )
+
+    # Must extract non-empty SID and STAR legs
+    assert len(sid_points) >= 2
+    assert len(star_points) >= 2
+    assert sid_dist > 0.0
+    assert star_dist > 0.0
+
+    metrics, ideal_df = get_or_compute_ideal_flight(dataset, flight_id)
+
+    # First SID waypoint must match the first ideal waypoint (departure airport/threshold)
+    assert ideal_df.iloc[0]["flight_level"] == 0
+    assert abs(ideal_df.iloc[0]["latitude"] - sid_points[0]["latitude"]) < 1e-4
+    assert abs(ideal_df.iloc[0]["longitude"] - sid_points[0]["longitude"]) < 1e-4
+
+    # Last STAR waypoint must match the last ideal waypoint (arrival airport/threshold)
+    assert ideal_df.iloc[-1]["flight_level"] == 0
+    assert abs(ideal_df.iloc[-1]["latitude"] - star_points[-1]["latitude"]) < 1e-4
+    assert abs(ideal_df.iloc[-1]["longitude"] - star_points[-1]["longitude"]) < 1e-4
+
+    # The SID exit point must be represented at the transition to en-route
+    sid_exit_pt = sid_points[-1]
+    matching_sid_exit = ideal_df.iloc[len(sid_points) - 1]
+    assert abs(matching_sid_exit["latitude"] - sid_exit_pt["latitude"]) < 1e-4
+    assert abs(matching_sid_exit["longitude"] - sid_exit_pt["longitude"]) < 1e-4
+
+    # The STAR entry point must match the start of the terminal arrival segment
+    star_entry_pt = star_points[0]
+    matching_star_entry = ideal_df.iloc[-len(star_points)]
+    assert abs(matching_star_entry["latitude"] - star_entry_pt["latitude"]) < 1e-4
+    assert abs(matching_star_entry["longitude"] - star_entry_pt["longitude"]) < 1e-4
+
+    # Intermediate waypoints strictly at optimal cruise FL
+    enroute_slice = ideal_df.iloc[len(sid_points) : -len(star_points)]
+    assert len(enroute_slice) > 0
+    for _, row in enroute_slice.iterrows():
+        assert row["flight_level"] == metrics.optimal_cruise_fl
 
 
 def test_create_trajectory_map_with_ideal(dataset):

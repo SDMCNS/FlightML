@@ -251,6 +251,124 @@ def resolve_optimal_cruise_fl(ac_type: str, distance_nm: float, bearing_deg: flo
     return base_fl
 
 
+def extract_mandatory_sid_and_star(
+    traj_df: pd.DataFrame | None,
+    adep_lat: float,
+    adep_lon: float,
+    ades_lat: float,
+    ades_lon: float,
+    total_dist_nm: float,
+    optimal_cruise_fl: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], tuple[float, float], tuple[float, float], float, float]:
+    """
+    Extract or synthesize mandatory Standard Instrument Departure (SID) and
+    Standard Terminal Arrival Route (STAR) procedures for a flight.
+
+    SIDs and STARs are mandatory terminal procedures that cannot be bypassed:
+    - Departure SID: Flown from departure runway threshold to the SID exit fix.
+    - Arrival STAR: Flown from the STAR entry fix down to the destination runway threshold.
+    - En-route: Only the airspace between the SID exit and STAR entry is subject
+      to Free Route Airspace (FRA) direct orthodromic reconstruction.
+
+    Returns:
+        (sid_points, star_points, sid_exit_coord, star_entry_coord, sid_dist_nm, star_dist_nm)
+    """
+    N = len(traj_df) if traj_df is not None else 0
+
+    if N >= 4 and traj_df is not None:
+        sid_max_dist = min(50.0, total_dist_nm * 0.22)
+        star_max_dist = min(60.0, total_dist_nm * 0.25)
+
+        # 1. Identify SID Exit index
+        s_idx = 0
+        for i in range(N):
+            r = traj_df.iloc[i]
+            d = haversine_nm(adep_lat, adep_lon, float(r["latitude"]), float(r["longitude"]))
+            fl = int(r["flight_level"])
+            if d <= sid_max_dist and (fl <= min(180, optimal_cruise_fl) or d <= 18.0):
+                s_idx = i
+            else:
+                break
+        s_idx = max(1, min(s_idx, N // 3))
+
+        # 2. Identify STAR Entry index
+        e_idx = N - 1
+        for i in range(N - 1, -1, -1):
+            r = traj_df.iloc[i]
+            d = haversine_nm(ades_lat, ades_lon, float(r["latitude"]), float(r["longitude"]))
+            fl = int(r["flight_level"])
+            if d <= star_max_dist and (fl <= min(200, optimal_cruise_fl) or d <= 22.0):
+                e_idx = i
+            else:
+                break
+        e_idx = min(N - 2, max(e_idx, (N * 2) // 3))
+
+        # Ensure non-overlapping boundaries
+        if s_idx >= e_idx:
+            s_idx = max(0, min(1, N - 2))
+            e_idx = min(N - 1, max(s_idx + 1, N - 2))
+
+        # Extract raw points
+        raw_sid = traj_df.iloc[:s_idx + 1]
+        raw_star = traj_df.iloc[e_idx:]
+
+        # Clean STAR to eliminate holding loops (ensure monotonic approach to destination)
+        cleaned_star_rows = []
+        min_d_so_far = float("inf")
+        for _, r in raw_star.iloc[::-1].iterrows():
+            d_dest = haversine_nm(ades_lat, ades_lon, float(r["latitude"]), float(r["longitude"]))
+            if not cleaned_star_rows or d_dest >= min_d_so_far - 1.0:
+                cleaned_star_rows.append(r.to_dict())
+                min_d_so_far = d_dest
+        cleaned_star = cleaned_star_rows[::-1]
+        if len(cleaned_star) < 2:
+            cleaned_star = raw_star.to_dict(orient="records")
+
+        sid_points = raw_sid.to_dict(orient="records")
+        star_points = cleaned_star
+
+    else:
+        # Synthesize realistic published-like SID and STAR legs if no radar points exist
+        sid_leg_dist = min(30.0, total_dist_nm * 0.15)
+        star_leg_dist = min(35.0, total_dist_nm * 0.18)
+
+        # SID: 4 procedural climb waypoints
+        sid_points = []
+        for frac, fl in [(0.0, 0), (0.2, 30), (0.55, 80), (1.0, min(140, optimal_cruise_fl))]:
+            plat, plon = spherical_intermediate_point(
+                adep_lat, adep_lon, ades_lat, ades_lon,
+                fraction=(frac * sid_leg_dist) / max(1.0, total_dist_nm)
+            )
+            sid_points.append({"latitude": plat, "longitude": plon, "flight_level": int(fl)})
+
+        # STAR: 4 procedural CDO descent waypoints
+        star_points = []
+        for frac, fl in [(0.0, min(160, optimal_cruise_fl)), (0.45, 90), (0.8, 35), (1.0, 0)]:
+            eff_frac = 1.0 - ((1.0 - frac) * star_leg_dist) / max(1.0, total_dist_nm)
+            plat, plon = spherical_intermediate_point(
+                adep_lat, adep_lon, ades_lat, ades_lon,
+                fraction=max(0.0, min(1.0, eff_frac))
+            )
+            star_points.append({"latitude": plat, "longitude": plon, "flight_level": int(fl)})
+
+    # Compute distances
+    sid_dist_nm = sum(
+        haversine_nm(sid_points[i]["latitude"], sid_points[i]["longitude"],
+                     sid_points[i+1]["latitude"], sid_points[i+1]["longitude"])
+        for i in range(len(sid_points) - 1)
+    )
+    star_dist_nm = sum(
+        haversine_nm(star_points[i]["latitude"], star_points[i]["longitude"],
+                     star_points[i+1]["latitude"], star_points[i+1]["longitude"])
+        for i in range(len(star_points) - 1)
+    )
+
+    sid_exit_coord = (sid_points[-1]["latitude"], sid_points[-1]["longitude"])
+    star_entry_coord = (star_points[0]["latitude"], star_points[0]["longitude"])
+
+    return sid_points, star_points, sid_exit_coord, star_entry_coord, sid_dist_nm, star_dist_nm
+
+
 def reconstruct_ideal_flight(
     dataset: FlightDataset,
     flight_dict: dict[str, Any],
@@ -259,11 +377,13 @@ def reconstruct_ideal_flight(
 ) -> tuple[IdealFlightMetrics, pd.DataFrame]:
     """
     Reconstruct an Ideal 4D flight trajectory for a single flight:
-    1. Departure Timing: On-time pushback unless ADEP is weather-impacted.
-    2. Lateral Route: Orthodromic Great Circle with realistic SID/STAR terminal infill (~1.02x GC).
-    3. Vertical Profile: Continuous Climb (CCO) to optimal FL and Continuous Descent (CDO).
-    4. Airborne Holding: Reduced to 0.0 min.
-    5. Environmental & Economic Accounting: Fuel saved, CO2 prevented, EU261 & delay costs saved.
+    1. Departure & Arrival Procedures: Follows mandatory SID and STAR terminal legs.
+       Only the en-route elements between the SID exit and STAR entry are reconstructed.
+    2. En-Route Routing: Free Route Airspace (FRA) direct orthodromic Great Circle bridge.
+    3. Departure Timing: On-time pushback unless ADEP is weather-impacted (>5 delays/hr).
+    4. Vertical Profile: Continuous Climb (CCO) along SID to optimal cruise FL and Continuous Descent (CDO) along STAR.
+    5. Airborne Holding: Reduced to 0.0 min (holding stacks in STAR eliminated).
+    6. Environmental & Economic Accounting: Fuel saved, CO2 prevented, EU261 & delay costs saved.
     """
     ectrl_id = int(flight_dict.get("ectrl_id", 0))
     period = str(flight_dict.get("period_id", "202507"))
@@ -278,10 +398,37 @@ def reconstruct_ideal_flight(
     ades_lat = float(flight_dict.get("ades_lat") or 52.0)
     ades_lon = float(flight_dict.get("ades_lon") or 13.0)
 
-    # 1. Great Circle Distance & Bearing
+    # 1. Great Circle Distance, Bearing & Mandatory SID/STAR Procedure Extraction
     gc_dist_nm = max(20.0, haversine_nm(adep_lat, adep_lon, ades_lat, ades_lon))
     initial_bearing = initial_bearing_deg(adep_lat, adep_lon, ades_lat, ades_lon)
-    ideal_dist_nm = round(gc_dist_nm * 1.025, 1)  # 2.5% terminal SID/STAR procedure buffer
+    cruise_fl = resolve_optimal_cruise_fl(ac_type, gc_dist_nm, initial_bearing)
+
+    # Retrieve existing trajectory if available to preserve mandatory SID and STAR routes
+    trajs = dataset.get_trajectory(ectrl_id)
+    raw_actual = trajs.get("actual", pd.DataFrame())
+    raw_planned = trajs.get("planned", pd.DataFrame())
+    raw_traj = raw_actual if not raw_actual.empty else raw_planned
+
+    (
+        sid_points,
+        star_points,
+        sid_exit,
+        star_entry,
+        sid_dist_nm,
+        star_dist_nm,
+    ) = extract_mandatory_sid_and_star(
+        traj_df=raw_traj,
+        adep_lat=adep_lat,
+        adep_lon=adep_lon,
+        ades_lat=ades_lat,
+        ades_lon=ades_lon,
+        total_dist_nm=gc_dist_nm,
+        optimal_cruise_fl=cruise_fl,
+    )
+
+    # Reconstruct only the elements between the SID exit fix and the STAR entry fix
+    enroute_direct_dist_nm = haversine_nm(sid_exit[0], sid_exit[1], star_entry[0], star_entry[1])
+    ideal_dist_nm = round(sid_dist_nm + enroute_direct_dist_nm + star_dist_nm, 1)
 
     # Actual and planned metrics from dataset
     act_dist_nm = float(flight_dict.get("actual_distance_nm") or gc_dist_nm * 1.12)
@@ -292,7 +439,6 @@ def reconstruct_ideal_flight(
     plan_air_time_min = float(flight_dict.get("filed_air_time_min") or (plan_dist_nm / 415.0 * 60.0))
 
     # Standard cruise speed for aircraft category
-    cruise_fl = resolve_optimal_cruise_fl(ac_type, gc_dist_nm, initial_bearing)
     tas_kts = 440.0 if cruise_fl >= 300 else 320.0
     ideal_air_time_min = round(max(15.0, (ideal_dist_nm / tas_kts) * 60.0 + 8.0), 1)  # +8m for climb/descent deceleration
 
@@ -342,12 +488,13 @@ def reconstruct_ideal_flight(
 
     # 3. Trajectory Physics & Holding Elimination
     holding_actual = 0.0
-    try:
-        trajs = dataset.get_trajectory(ectrl_id)
-        if not trajs["actual"].empty:
-            met = analyze_trajectory(trajs["actual"], trajs["planned"])
+    if not raw_actual.empty:
+        try:
+            met = analyze_trajectory(raw_actual, raw_planned if not raw_planned.empty else raw_actual)
             holding_actual = met.total_holding_duration_min
-    except Exception:
+        except Exception:
+            holding_actual = max(0.0, (act_air_time_min - ideal_air_time_min) * 0.3) if act_air_time_min > ideal_air_time_min + 15 else 0.0
+    else:
         holding_actual = max(0.0, (act_air_time_min - ideal_air_time_min) * 0.3) if act_air_time_min > ideal_air_time_min + 15 else 0.0
 
     holding_ideal = 0.0
@@ -434,34 +581,66 @@ def reconstruct_ideal_flight(
     )
 
     # 6. Synthesize 4D Ideal Waypoints
-    # Generate 20 points along the Great Circle arc with continuous vertical profile
-    num_pts = 21
-    ideal_rows = []
+    # Assembles:
+    # 1. Mandatory Departure SID leg (runway threshold to SID exit fix)
+    # 2. Reconstructed Direct En-route leg (Free Route Airspace Great Circle arc at cruise FL)
+    # 3. Mandatory Arrival STAR leg (STAR entry fix to destination runway threshold, holding eliminated)
+    num_enroute = 12
+    enroute_pts = []
+    for k in range(1, num_enroute):
+        frac = k / float(num_enroute)
+        plat, plon = spherical_intermediate_point(sid_exit[0], sid_exit[1], star_entry[0], star_entry[1], fraction=frac)
+        enroute_pts.append({"latitude": plat, "longitude": plon, "flight_level": cruise_fl})
+
+    all_coords = []
+    # 1. SID points (mandatory departure procedure)
+    for pt in sid_points:
+        all_coords.append({
+            "latitude": float(pt["latitude"]),
+            "longitude": float(pt["longitude"]),
+            "flight_level": int(pt["flight_level"]),
+        })
+    # 2. Reconstructed direct en-route points
+    for pt in enroute_pts:
+        all_coords.append({
+            "latitude": float(pt["latitude"]),
+            "longitude": float(pt["longitude"]),
+            "flight_level": int(pt["flight_level"]),
+        })
+    # 3. STAR points (mandatory arrival procedure)
+    for pt in star_points:
+        all_coords.append({
+            "latitude": float(pt["latitude"]),
+            "longitude": float(pt["longitude"]),
+            "flight_level": int(pt["flight_level"]),
+        })
+
+    # Cumulative distance along reconstructed path
+    cum_dist = [0.0]
+    for i in range(len(all_coords) - 1):
+        step_d = haversine_nm(
+            all_coords[i]["latitude"], all_coords[i]["longitude"],
+            all_coords[i+1]["latitude"], all_coords[i+1]["longitude"],
+        )
+        cum_dist.append(cum_dist[-1] + step_d)
+    tot_path_d = max(0.001, cum_dist[-1])
+
     base_time = (
         pd.to_datetime(actual_off_block) if actual_off_block else pd.to_datetime("2025-07-15 12:00:00")
     ) + timedelta(minutes=dep_delay_ideal + 12.0)  # +12m taxi-out to takeoff
 
-    for idx in range(num_pts):
-        frac = idx / float(num_pts - 1)
-        pt_lat, pt_lon = spherical_intermediate_point(adep_lat, adep_lon, ades_lat, ades_lon, fraction=frac)
-        pt_time = base_time + timedelta(minutes=(frac * ideal_air_time_min))
-
-        # Vertical profile: CCO climb (0.0 to 0.2), Cruise (0.2 to 0.8), CDO descent (0.8 to 1.0)
-        if frac <= 0.20:
-            fl = round((frac / 0.20) * cruise_fl)
-        elif frac <= 0.80:
-            fl = cruise_fl
-        else:
-            fl = round(((1.0 - frac) / 0.20) * cruise_fl)
-
+    ideal_rows = []
+    for idx, (coord, d_c) in enumerate(zip(all_coords, cum_dist), start=1):
+        frac = d_c / tot_path_d
+        pt_time = base_time + timedelta(minutes=frac * ideal_air_time_min)
         ideal_rows.append({
             "period_id": period,
             "ectrl_id": ectrl_id,
-            "seq_num": idx + 1,
+            "seq_num": idx,
             "time_over": pt_time.strftime("%Y-%m-%d %H:%M:%S"),
-            "flight_level": int(max(0, fl)),
-            "latitude": round(pt_lat, 5),
-            "longitude": round(pt_lon, 5),
+            "flight_level": int(coord["flight_level"]),
+            "latitude": round(coord["latitude"], 5),
+            "longitude": round(coord["longitude"], 5),
         })
 
     ideal_df = pd.DataFrame(ideal_rows)
