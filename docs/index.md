@@ -24,6 +24,7 @@ Welcome to the **FlightML** documentation. FlightML is a high-performance Python
 - [**REST API Reference**](rest_api.md): Complete catalog of FastAPI endpoints, query parameters, response schemas (`€ EUR`), and Swagger docs.
 - [**Architecture & Methodology**](architecture.md): Deep dive into DuckDB columnar execution, ICAO GANP & Eurocontrol PRU formulas, OpenAP & ICAO EDB v32B physics, Eurocontrol CRCO charges (`€`), and operations research models.
 - [**Free Route Airspace (FRA) Analysis & Forecaster**](free_route_airspace.md): FIR boundary inefficiency analytics, 7 prime choke points, multi-season synthesis, 11.12M Eurocontrol baseline reconciliation, detour/CO₂ % deviations, and 20-year ReFuelEU SAF forecasting.
+- [**ATC Digital Twin & 4D Airspace Rebuilder**](atc_digital_twin.md): Autonomous prescriptive simulation rebuilding safe 4D trajectories with mandatory departure SIDs, arrival STARs, Free Route Airspace (FRA) direct en-route geodesy, Ukrainian/Russian conflict airspace compliance, holding stack elimination, airport weather/capacity classification, and airport-level arrivals/departures board (FIDS).
 - [**Contrail Climate Science & Eco-Trajectory Optimization**](contrail_climate_science.md): Upper-air atmospheric thermodynamics, Schmidt-Appleman Criterion (SAC), Murphy & Koop (2005) ice supersaturation (ISSR), GWP₁₀₀ contrail cirrus radiative forcing (18.5 kg CO₂e/nm), multi-objective eco-trajectory Pareto optimization, and worked numerical examples.
 - [**EuroAvia LLM: Fine-Tuning, MCP Tools & 5-Stage Evaluation**](llm_training_and_evaluation.md): Domain-specific aeronautical LLM training corpus engine, QLoRA 4-bit fine-tuning pipeline, MCP server tool coverage, and 5-stage benchmark evaluation.
 - [**Model Context Protocol (MCP) Server Guide**](mcp_server.md): Exposing FlightML as an AI tool to local LLMs (LM Studio, Claude Desktop, Cursor).
@@ -53,13 +54,13 @@ Welcome to the **FlightML** documentation. FlightML is a high-performance Python
 │    NEURAL AIRSPACE       │   COUNTERFACTUAL &       │   LOCAL LLM AGENTS &             │
 │    INTELLIGENCE (v4)     │   GAME THEORY SIMULATION │   MODEL CONTEXT PROTOCOL (MCP)   │
 ├──────────────────────────┼──────────────────────────┼──────────────────────────────────┤
-│ • 128D Flight2Vec Twins  │ • 4D Airspace Closure    │ • FastMCP Server Architecture    │
-│ • Deterministic Weights  │ • Detour NM & Fuel Waste │ • LM Studio, Claude & Cursor     │
-│ • Commercial Taxonomy    │ • Non-Linear Backlog     │ • 9 Tools & Travel Copilot       │
-│ • PINN Mass Inversion    │ • MARL ATFM Slot Gaming  │ • Zero-Hallucination Radar Search│
-│ • Contrail Fast Surrogate│ • 10-Step Decision Trace │ • Multi-Turn Context Retention   │
-│ • ST-GNN Delay Contagion │ • Infilled Assumptions   │ • Disruption Briefing Prompts    │
-│ • Runway Saturation Queues│ • Balance Sheet (€ EUR) │ • JSON-RPC stdio & SSE Transports│
+│ • 128D Flight2Vec Twins  │ • ATC Digital Twin Rebuild │ • FastMCP Server Architecture    │
+│ • Deterministic Weights  │ • 4D Airspace Closure      │ • LM Studio, Claude & Cursor     │
+│ • Commercial Taxonomy    │ • Airport FIDS Boards      │ • 9 Tools & Travel Copilot       │
+│ • PINN Mass Inversion    │ • MARL ATFM Slot Gaming    │ • Zero-Hallucination Radar Search│
+│ • Contrail Fast Surrogate│ • 10-Step Decision Trace   │ • Multi-Turn Context Retention   │
+│ • ST-GNN Delay Contagion │ • Infilled Assumptions     │ • Disruption Briefing Prompts    │
+│ • Runway Saturation Queues│ • Balance Sheet (€ EUR)   │ • JSON-RPC stdio & SSE Transports│
 └──────────────────────────┴──────────────────────────┴──────────────────────────────────┘
 ```
 

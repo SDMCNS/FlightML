@@ -129,3 +129,16 @@ flightml atc-twin --period 202507 --summary
 * Dedicated section: **🤖 ATC Digital Twin: Pan-European Airspace Rebuild & Optimization**.
 * Executive KPI scorecards displaying total delay minutes saved, fuel tons saved, CO₂ tons avoided, and net economic savings.
 * Interactive chart: **Airport Demand Smoothing & Weather Capacity Bounds**, highlighting hours where airports were weather-impacted ($>5$ delays/hr) versus non-weather inefficiencies.
+
+### 5.3 Airport Arrivals & Departures Board (FIDS)
+* Real-time tri-state Flight Information Display System (**FIDS**) component available for any airport and date.
+* Displays dedicated **Departures** and **Arrivals** boards comparing:
+  * **Planned**: Filed scheduled off-block time / filed arrival time.
+  * **Actual**: Real-world radar off-block / touchdown time with empirical delay.
+  * **Ideal**: Digital Twin reconstructed on-time or metered slot time.
+* Per-flight KPIs:
+  * Delay minutes eliminated ($\Delta t_{\text{delay}}$).
+  * Fuel saved ($\text{kg}$) & $\text{CO}_2$ avoided ($\text{kg}$).
+  * Economic savings in Euros ($€$).
+  * Weather restriction indicator (`⚡ Weather Restricted` when $>5$ delays/hr at the hub).
+* Quick-filter buttons for major European hubs: London Heathrow (`EGLL`), Paris Charles de Gaulle (`LFPG`), Frankfurt (`EDDF`), Amsterdam Schiphol (`EHAM`), Madrid Barajas (`LEMD`), Rome Fiumicino (`LIRF`), etc.

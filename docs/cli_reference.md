@@ -706,5 +706,40 @@ flightml generate-demo --count 100000 --name demo_custom --tail-prefix AIR- --ma
 python scripts/generate_synthetic_demo_dataset.py --count 1000000 --name demo_1m
 ```
 
+---
+
+## 34. ATC Digital Twin: 4D Trajectory Rebuild
+
+### `flightml atc-twin`
+Autonomous prescriptive simulation rebuilding every commercial flight into an ideal 4D flight trajectory:
+- **Mandatory Departure SIDs**: Follows published runway threshold and SID procedure waypoints from takeoff ($FL=0$) to the SID exit fix ($P_{\text{sid\_exit}}$).
+- **Mandatory Arrival STARs**: Follows published STAR transition waypoints from STAR entry fix ($P_{\text{star\_entry}}$) down to touchdown ($FL=0$), eliminating terminal holding loops.
+- **En-Route Free Route Airspace (FRA)**: Reconstructs only the segment between SID exit and STAR entry via orthodromic Great Circle arcs at optimal cruise FL.
+- **Conflict Airspace Compliance**: Strictly avoids closed Ukrainian and Russian FIRs unless legitimately filed in the flight plan, routing along compliant European bypass corridors via line-of-sight shortcutting.
+- **Zero-API Weather & Capacity Rules**: Derives airport weather disruptions and runway capacity directly from empirical delay clustering ($>5$ delays/hr = weather; $<20$ moves/hr = unconstrained).
+- **Three-Way Accounting**: Planned vs Actual vs Ideal metrics for delays, air time, fuel burn, $\text{CO}_2$, and airline operational savings.
+
+```bash
+# Long-run processing of an entire monthly period
+flightml atc-twin --period 202510
+
+# Single calendar date batch with flight limit
+flightml atc-twin --period 202510 --date 2025-10-15 --max-flights 500
+
+# Machine-readable JSON output for automated pipelines
+flightml atc-twin --period 202510 --max-flights 10 --json
+```
+
+```text
+               🤖 FlightML ATC Digital Twin: 4D Trajectory Rebuild (Synthetic Sample)
+┌────────────┬───────────┬──────────┬──────────┬───────────┬─────────────┬─────────────┬─────────────┬───────────┐
+│ Flight ID  │ Callsign  │ Route    │ AC Type  │ Opt FL    │ Actual Dist │ Ideal Dist  │ Delay Saved │ Saved (€) │
+├────────────┼───────────┼──────────┼──────────┼───────────┼─────────────┼─────────────┼─────────────┼───────────┤
+│ 291262109  │ SYN2109   │ EYVI-LGAV│ A320     │ FL360     │ 1,140.0 NM  │ 1,116.6 NM  │ 24.0 min    │ €2,184 EUR│
+│ 291263506  │ SYN3506   │ EFHK-LGRP│ B738     │ FL370     │ 1,542.0 NM  │ 1,489.2 NM  │ 18.0 min    │ €1,850 EUR│
+│ 291264812  │ SYN4812   │ EGLL-LFPG│ A321     │ FL270     │   224.0 NM  │   208.4 NM  │ 35.0 min    │ €3,120 EUR│
+└────────────┴───────────┴──────────┴──────────┴───────────┴─────────────┴─────────────┴─────────────┴───────────┘
+```
+
 
 

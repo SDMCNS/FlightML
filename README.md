@@ -31,6 +31,7 @@ Detailed manuals and developer guides are located in the [**`docs/`**](docs/inde
 - 🌐 [**REST API Reference**](docs/rest_api.md): Complete FastAPI endpoints catalog, request/response schemas, and Swagger docs.
 - 🏛️ [**Architecture & Methodology**](docs/architecture.md): DuckDB columnar execution, ICAO GANP & Eurocontrol PRU formulas, OpenAP & ICAO EDB v32B physics, Eurocontrol CRCO charges (`€`), operations research models, and v4 neural architectures.
 - 🛣️ [**Free Route Airspace (FRA) Analysis & Forecaster**](docs/free_route_airspace.md): FIR boundary inefficiency analytics, 7 prime choke points, multi-season synthesis, 11.12M Eurocontrol baseline reconciliation, detour/CO₂ % deviations, and 20-year ReFuelEU SAF forecasting.
+- 🤖 [**ATC Digital Twin & 4D Airspace Rebuilder**](docs/atc_digital_twin.md): Autonomous prescriptive simulation rebuilding safe 4D trajectories with mandatory departure SIDs, arrival STARs, Free Route Airspace (FRA) direct en-route geodesy, Ukrainian/Russian conflict airspace compliance, holding stack elimination, airport weather/capacity classification, and airport-level arrivals/departures board (FIDS).
 - 🤖 [**EuroAvia LLM: Fine-Tuning, MCP Tools & 5-Stage Evaluation**](docs/llm_training_and_evaluation.md): Domain-specific aeronautical LLM training corpus engine, QLoRA 4-bit fine-tuning pipeline, complete MCP server tool coverage, and 5-stage benchmark evaluation.
 - 🤖 [**Model Context Protocol (MCP) Server Guide**](docs/mcp_server.md): Exposing FlightML tools to local LLMs (LM Studio, Claude Desktop, Cursor) via MCP.
 - 💬 [**LM Studio + Qwen 2.5 Coder Example Transcript**](docs/mcp_example_lmstudio.md): End-to-end multi-turn transcript querying flight telemetry, calculating punctuality, and rendering markdown tables.
@@ -43,6 +44,8 @@ Detailed manuals and developer guides are located in the [**`docs/`**](docs/inde
 FlightML fuses multi-gigabyte 4D trajectories, global aeronautical navigation databases (**86,280 5-letter RNAV waypoints**, **17,090 VHF navaids**, **48,405 runways**, **30,192 VHF radio frequencies**), aircraft performance models (**OpenAP** & **ICAO Engine Emissions Databank v32B**), **Eurocontrol CRCO en-route unit rates (`€`)**, and historical **IEM ASOS/METAR & Open-Meteo ERA5 upper-air meteorology**:
 
 - **🛣️ Free Route Airspace (FRA) FIR Boundary Inefficiency & Forecasting Engine**: Quantifies lateral and vertical routing inefficiencies at national FIR boundaries, identifies boundaries already operating cross-border directness (NEFRA, SECSI, SEE FRA), pinpoints the **7 Prime Bottlenecks** (`EGTT_LFFF`, `EDUU_EDVV`, `LFFF_LFMM`, `LFFF_LSAS`, `EGTT_EISN`, `LFMM_LIRR`, `LIRR_LIBB`), reconciles full-year Eurocontrol traffic across **12 contiguous monthly archives (202411 to 202510, 10.2M DDR2 trajectories; 11,124,247 European flights in 2025; ~6.4M boundary crossings on prime choke points)**, tracks lateral detour and carbon percentage deviations, models **EU ReFuelEU Aviation SAF blending mandates** (2% in 2025 -> 42% in 2045), and evaluates 1, 5, and 20-year multi-horizon benefits across 4 energy price regimes with both empirical 12-month and 3-season baseline extrapolation.
+- **🤖 ATC Digital Twin & 4D Airspace Rebuilder Engine**: Prescriptive airspace simulation that synthesizes pre-departure filed flight plans and empirical radar tracks to rebuild every commercial flight into an ideal 4D flight trajectory. Enforces mandatory departure SIDs up to the SID exit fix, mandatory arrival STARs down to touchdown (eliminating circular holding loops), and reconstructs en-route segments via Free Route Airspace (FRA) orthodromic Great Circle arcs at optimal cruising flight levels ($FL_{\text{opt}}$). Strictly respects closed Ukrainian and Russian FIRs unless legitimately filed, routing along compliant European bypass corridors. Classifies airport weather and capacity bottlenecks directly from empirical delay clustering ($>5$ delays/hr = weather; $<20$ moves/hr = unconstrained) without external meteorological APIs, calculating three-way Planned vs Actual vs Ideal metrics for delays, air time, fuel, $\text{CO}_2$, and airline operational savings.
+- **🛫 Airport-Level Arrivals & Departures Board (FIDS)**: Interactive airport flight information display system providing tri-state comparisons (Planned, Flown, Ideal) for any European airport on any calendar day. Tracks scheduled vs actual vs ideal off-block/touchdown times, delay minutes eliminated, weather disruption alerts, and fuel/carbon savings per flight.
 - **🤖 EuroAvia LLM Corpus, QLoRA Fine-Tuning & 5-Stage Benchmark Evaluation**: Built-in automated domain instruction corpus generator covering all FlightML modules; parameter-efficient 4-bit QLoRA fine-tuning for consumer GPUs; and a 5-stage evaluation benchmark (`scripts/run_5stage_eval.py`) rigorously testing pure deterministic CLI math vs base foundation models vs domain fine-tuned models vs MCP tool-calling agents.
 - **🔌 Full-Coverage Model Context Protocol (MCP) Server & CLI `--json` Support**: Complete end-user tool coverage exposing single-flight telemetry, CDO/CCO profiling, fuel/emissions, CRCO fees, taxi-out delays, PRU KPIs, FRA boundaries, and prescriptive tail swaps directly to AI agents (LM Studio, Claude Desktop, Cursor) with structured JSON serialization across all terminal commands.
 - **📄 High-DPI Offline Static HTML Exporter**: Generates self-contained, publication-ready offline HTML reports with embedded high-DPI Base64 charts, KPI scorecards in Euros (`€`), styled league tables, and full Eurocontrol 12-month calendar figures.
@@ -301,6 +304,25 @@ flightml fra-forecast --year 2025 --scope prime_only --growth 0.02 --realization
 
 ---
 
+### 9. ATC Digital Twin 4D Trajectory Rebuild (`flightml atc-twin`)
+
+```bash
+flightml atc-twin --period 202510 --max-flights 3
+```
+
+```text
+               🤖 FlightML ATC Digital Twin: 4D Trajectory Rebuild (Synthetic Sample)
+┌────────────┬───────────┬──────────┬──────────┬───────────┬─────────────┬─────────────┬─────────────┬───────────┐
+│ Flight ID  │ Callsign  │ Route    │ AC Type  │ Opt FL    │ Actual Dist │ Ideal Dist  │ Delay Saved │ Saved (€) │
+├────────────┼───────────┼──────────┼──────────┼───────────┼─────────────┼─────────────┼─────────────┼───────────┤
+│ 291262109  │ SYN2109   │ EYVI-LGAV│ A320     │ FL360     │ 1,140.0 NM  │ 1,116.6 NM  │ 24.0 min    │ €2,184 EUR│
+│ 291263506  │ SYN3506   │ EFHK-LGRP│ B738     │ FL370     │ 1,542.0 NM  │ 1,489.2 NM  │ 18.0 min    │ €1,850 EUR│
+│ 291264812  │ SYN4812   │ EGLL-LFPG│ A321     │ FL270     │   224.0 NM  │   208.4 NM  │ 35.0 min    │ €3,120 EUR│
+└────────────┴───────────┴──────────┴──────────┴───────────┴─────────────┴─────────────┴─────────────┴───────────┘
+```
+
+---
+
 ## 🖥️ Interactive Simulation Workbench (`flightml dashboard`)
 
 Launch the simulation workbench:
@@ -312,12 +334,14 @@ flightml dashboard
 Opens at **`http://localhost:8501`** organized into **8 primary operational categories**:
 
 ### 1. ✈️ Single Aircraft / Flight Views
-- 🗺️ **4D Trajectory & Holdings**: Single-flight 4D radar track vs. filed plan map, `KPI04 KEP` / `KPI05 KEA` / `KPI08 ASMA` / `KPI19` scorecard, `FRA` vs. ATS airway snapping, and FIR/AUA sector dwell tables.
+- 🗺️ **4D Trajectory & Holdings**: Single-flight 4D radar track vs. filed plan vs. **ATC Digital Twin Ideal Trajectory** overlay, mandatory SID/STAR preservation, holding elimination, `KPI04 KEP` / `KPI05 KEA` / `KPI08 ASMA` / `KPI19` scorecard, and FIR dwell tables.
 - 📉 **Vertical Profile: CDO & CCO**: Continuous Descent Operations (`CDO`) and Continuous Climb Operations (`CCO`) intermediate level-off detection, vertical profile charts, and network-wide cruise level-capping corridors.
 - 🩺 **Delay & Diagnostics**: Multi-factor delay root-cause attribution and arrival runway braking action, density altitude, and stopping safety margins.
 - 🌱 **Fuel & Emissions**: 3-way cruise altitude optimization, upper-air winds (`ESAD`), and ICAO Engine Emissions Databank (EDB v32B) LTO pollutants ($\text{NO}_x, \text{CO}, \text{nvPM}$).
 
 ### 2. 🌐 System-Level Summary & Analysis Views
+- 🤖 **ATC Digital Twin Network Level View**: Pan-European macro scorecard aggregating total delay minutes saved, fuel tons conserved, $\text{CO}_2$ avoided, and net economic savings across all reconstructed flights, with hourly airport weather capacity bounds.
+- 🛫 **Airport Arrivals & Departures Board (FIDS)**: Real-time tri-state flight board (Planned, Flown, Ideal) for any European hub (e.g. Heathrow, Charles de Gaulle, Frankfurt, Schiphol, Barajas) on any date, tracking delays eliminated, weather disruption flags, and fuel saved.
 - 🌐 **Network Overview & Airspace Map**: Interactive **$5^\circ \times 5^\circ$ European Airspace Hourly Saturation & Complexity Map**, FIR & AUA saturation, `KPI02 ATOT` surface taxi delays, and VHF radio occupancy.
 - 🛣️ **Free Route Airspace (FRA) Adherence**: Free Route directness metrics and ATS airway snapping.
 - 📻 **VHF Frequency & ATC Workload**: Sector voice channel congestion and transmission occupancy models.
