@@ -155,6 +155,44 @@ def test_mandatory_sid_and_star_preservation(dataset):
         assert row["flight_level"] == metrics.optimal_cruise_fl
 
 
+def test_conflict_airspace_closed_firs_avoidance(dataset):
+    """
+    Verify that in conflict periods (post-Feb 2022), Ukrainian and Russian FIRs are
+    treated as closed and non-viable for routing unless the filed plan traversed them.
+    A flight whose direct path crosses Ukraine (e.g. Vilnius EYVI -> Athens LGAV 291262109)
+    must route around closed airspace, and zero ideal waypoints may fall within closed FIRs.
+    """
+    from shapely.geometry import LineString, Point
+    from flightml.sim.atc_digital_twin import get_closed_firs_prepped
+
+    prepped_closed = get_closed_firs_prepped()
+    assert prepped_closed is not None
+
+    flight_id = 291262109  # EYVI -> LGAV in period 202510
+    flt = dataset.get_flight(flight_id)
+    trajs = dataset.get_trajectory(flight_id)
+    p_df = trajs["planned"]
+
+    # Verify that the direct line across endpoints penetrates closed FIRs (Ukraine)
+    direct_line = LineString([
+        (float(flt["adep_lon"]), float(flt["adep_lat"])),
+        (float(flt["ades_lon"]), float(flt["ades_lat"])),
+    ])
+    assert prepped_closed.intersects(direct_line) is True, "Direct line between EYVI and LGAV must cross Ukraine"
+
+    # Verify that the real filed flight plan avoided closed FIRs
+    p_pts = [Point(float(r["longitude"]), float(r["latitude"])) for _, r in p_df.iterrows()]
+    assert any(prepped_closed.intersects(pt) for pt in p_pts) is False, "Filed flight plan did not cross closed FIRs"
+
+    # Reconstruct ideal flight
+    metrics, ideal_df = get_or_compute_ideal_flight(dataset, flight_id)
+
+    # Verify that the ideal flight respects the closure: NONE of its waypoints intersect closed FIRs
+    ideal_pts = [Point(float(r["longitude"]), float(r["latitude"])) for _, r in ideal_df.iterrows()]
+    assert any(prepped_closed.intersects(pt) for pt in ideal_pts) is False, "Ideal trajectory must NOT penetrate closed FIRs"
+    assert metrics.ideal_distance_nm <= metrics.actual_distance_nm + 0.1
+
+
 def test_create_trajectory_map_with_ideal(dataset):
     """Verify Leaflet map builder incorporates ideal trajectory layer."""
     flight_id = int(dataset.query("SELECT ectrl_id FROM flights LIMIT 1").iloc[0]["ectrl_id"])

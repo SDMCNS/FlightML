@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 import altair as alt
@@ -5744,7 +5744,7 @@ with tab_cat_maps:
             with arch_col1:
                 rep_records = []
                 for rf in saved_reports:
-                    mtime_dt = datetime.datetime.fromtimestamp(rf.stat().st_mtime, tz=datetime.timezone.utc)
+                    mtime_dt = datetime.fromtimestamp(rf.stat().st_mtime, tz=timezone.utc)
                     size_kb = round(rf.stat().st_size / 1024.0, 1)
                     rep_records.append({
                         "Filename": rf.name,
@@ -6194,7 +6194,7 @@ with tab_cat_maps:
             with arch_col1:
                 rep_records = []
                 for rf in saved_reports:
-                    mtime_dt = datetime.datetime.fromtimestamp(rf.stat().st_mtime, tz=datetime.timezone.utc)
+                    mtime_dt = datetime.fromtimestamp(rf.stat().st_mtime, tz=timezone.utc)
                     size_kb = round(rf.stat().st_size / 1024.0, 1)
                     rep_records.append({
                         "Filename": rf.name,

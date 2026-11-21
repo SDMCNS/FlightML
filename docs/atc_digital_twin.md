@@ -53,13 +53,17 @@ Each flight's ideal trajectory is reconstructed across four operational phases, 
 * Pushback is scheduled on-time ($t_{\text{ideal}} = t_{\text{sched}}$) unless the departure hub is in a weather-restricted hour, in which case departure is scheduled into the next available runway slot.
 * Taxi-out delay is eliminated, saving $50-150\text{ kg}$ of ground idle fuel.
 
-### Phase 2: En-Route Free Route Airspace (FRA) Geodesy
-* **Reconstruction Domain**: Only the airspace strictly *between* the departure SID exit fix ($P_{\text{sid\_exit}}$) and the arrival STAR entry fix ($P_{\text{star\_entry}}$) is subject to Free Route Airspace orthodromic reconstruction.
-* Tactical ATC doglegs, military danger area bypasses, and airway zigzagging between these two fixes are replaced with an orthodromic **Great Circle Geodesic arc**:
+### Phase 2: En-Route Free Route Airspace (FRA) & Conflict Airspace Compliance
+* **Reconstruction Domain**: Only the airspace strictly *between* the departure SID exit fix ($P_{\text{sid\_exit}}$) and the arrival STAR entry fix ($P_{\text{star\_entry}}$) is subject to en-route optimization.
+* **Ukrainian & Russian Closed FIR Compliance**:
+  * For conflict periods (February 2022 onwards, under EASA CZIB and sovereign airspace closures), Ukrainian FIRs (`UKBVFIR`, `UKDVFIR`, `UKFVFIR`, `UKLVFIR`, `UKOVFIR`), Russian FIRs (`UU*`, `UL*`, `UR*`, `US*`, `UN*`, `UE*`, `UH*`, `UI*`, `UW*`, `UMKK`), and Belarusian FIRs (`UMMV`) are essentially closed to international traffic.
+  * **Violation Guard**: The ATC Digital Twin never treats closed FIRs as viable routing space *unless the flight plan legitimately took the aircraft over one of these FIRs to begin with*.
+  * If a naive direct Great Circle arc intersects a closed FIR (e.g. Vilnius $\to$ Athens cutting across Western Ukraine) but the filed flight plan navigated around it, the direct penetration is declared non-viable. The ATC Digital Twin reconstructs the flight along the compliant European bypass corridor (via Poland, Slovakia, Hungary, Romania, Bulgaria, Serbia, etc.) using greedy line-of-sight shortcutting within open airspace at optimal cruise flight level ($FL_{\text{opt}}$).
+* **Orthodromic Geodesy in Open Airspace**: Where no closed airspace is crossed, tactical ATC doglegs and airway zigzagging are replaced with a direct **Great Circle Geodesic arc**:
   $$s_{\text{enroute}} = 2 R \arcsin \left( \sqrt{\sin^2\left(\frac{\Delta \phi}{2}\right) + \cos \phi_{\text{sid}} \cos \phi_{\text{star}} \sin^2\left(\frac{\Delta \lambda}{2}\right)} \right)$$
-* Intermediate 4D coordinates along this bridge are synthesized using spherical linear interpolation (Slerp) at cruise altitude.
+* Intermediate 4D coordinates along this bridge are synthesized at cruise altitude with continuous spatial fidelity.
 * Total reconstructed path distance is:
-  $$\text{dist}_{\text{ideal}} = \text{dist}_{\text{SID}} + s_{\text{enroute}} + \text{dist}_{\text{STAR}}$$
+  $$\text{dist}_{\text{ideal}} = \text{dist}_{\text{SID}} + \text{dist}_{\text{enroute}} + \text{dist}_{\text{STAR}}$$
 
 ### Phase 3: Mandatory Arrival STAR Procedure & Holding Elimination
 * Arrival aircraft join the published arrival runway transition at the **STAR entry fix** ($P_{\text{star\_entry}}$, typically $FL \le 200$, $d \le \min(60\text{ NM}, 0.25 \times \text{dist})$) and follow the published terminal procedure waypoints down to runway touchdown ($FL=0$).

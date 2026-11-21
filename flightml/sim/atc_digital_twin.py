@@ -369,6 +369,89 @@ def extract_mandatory_sid_and_star(
     return sid_points, star_points, sid_exit_coord, star_entry_coord, sid_dist_nm, star_dist_nm
 
 
+_CLOSED_FIR_PREPPED: Any = None
+_CLOSED_FIR_CHECKED: bool = False
+
+
+def get_closed_firs_prepped() -> Any:
+    """
+    Return a prepared Shapely geometry of closed Ukrainian, Russian, and Belarusian FIRs.
+    Caches the prepped geometry for sub-millisecond point and line queries.
+    """
+    global _CLOSED_FIR_PREPPED, _CLOSED_FIR_CHECKED
+    if _CLOSED_FIR_CHECKED:
+        return _CLOSED_FIR_PREPPED
+
+    _CLOSED_FIR_CHECKED = True
+    try:
+        from shapely.ops import unary_union
+        from shapely.prepared import prep
+        from flightml.geo.fir_engine import FIREngine
+
+        engine = FIREngine()
+        # Ukrainian FIRs (UK**), Russian FIRs (UU**, UL**, UR**, US**, UN**, UE**, UH**, UI**, UW**, UMKK), Belarusian (UMMV)
+        closed_prefixes = ("UK", "UU", "UL", "UR", "US", "UN", "UE", "UH", "UI", "UW", "UMKK", "UMMV")
+        closed_polys = [s.polygon for s in engine.sectors if s.airspace_id.startswith(closed_prefixes)]
+        if closed_polys:
+            u = unary_union(closed_polys)
+            _CLOSED_FIR_PREPPED = prep(u)
+    except Exception:
+        _CLOSED_FIR_PREPPED = None
+
+    return _CLOSED_FIR_PREPPED
+
+
+def is_conflict_airspace_closed_period(period_id: str | None) -> bool:
+    """
+    Ukrainian and Russian FIRs are essentially closed to international/ECAC traffic
+    from February 2022 onwards (EASA CZIB and Russian airspace closures).
+    """
+    if not period_id:
+        return True
+    p = str(period_id).strip()
+    digits = "".join(ch for ch in p if ch.isdigit())
+    if len(digits) >= 4:
+        year = int(digits[:4])
+        return year >= 2022
+    return True
+
+
+def check_flight_plan_traversed_closed_firs(
+    planned_df: pd.DataFrame | None,
+    actual_df: pd.DataFrame | None,
+    prepped_closed: Any,
+) -> bool:
+    """
+    Check if the filed flight plan (or actual radar track) legitimately
+    traversed Ukrainian or Russian closed airspace to begin with.
+    """
+    if prepped_closed is None:
+        return False
+    from shapely.geometry import LineString, Point
+
+    # Check planned flight plan first
+    if planned_df is not None and not planned_df.empty:
+        coords = [(float(r["longitude"]), float(r["latitude"])) for _, r in planned_df.iterrows()]
+        if len(coords) >= 2:
+            if prepped_closed.intersects(LineString(coords)):
+                return True
+        elif len(coords) == 1:
+            if prepped_closed.intersects(Point(coords[0])):
+                return True
+
+    # If planned is not available or empty, check actual track
+    if actual_df is not None and not actual_df.empty:
+        coords = [(float(r["longitude"]), float(r["latitude"])) for _, r in actual_df.iterrows()]
+        if len(coords) >= 2:
+            if prepped_closed.intersects(LineString(coords)):
+                return True
+        elif len(coords) == 1:
+            if prepped_closed.intersects(Point(coords[0])):
+                return True
+
+    return False
+
+
 def reconstruct_ideal_flight(
     dataset: FlightDataset,
     flight_dict: dict[str, Any],
@@ -426,8 +509,83 @@ def reconstruct_ideal_flight(
         optimal_cruise_fl=cruise_fl,
     )
 
-    # Reconstruct only the elements between the SID exit fix and the STAR entry fix
-    enroute_direct_dist_nm = haversine_nm(sid_exit[0], sid_exit[1], star_entry[0], star_entry[1])
+    # Reconstruct only the elements between the SID exit fix and the STAR entry fix,
+    # strictly respecting closed Ukrainian, Russian, and Belarusian FIRs.
+    is_closed_period = is_conflict_airspace_closed_period(period)
+    prepped_closed = get_closed_firs_prepped() if is_closed_period else None
+
+    from shapely.geometry import LineString
+    direct_line = LineString([(sid_exit[1], sid_exit[0]), (star_entry[1], star_entry[0])]) if prepped_closed is not None else None
+    direct_crosses_closed = bool(prepped_closed and direct_line and prepped_closed.intersects(direct_line))
+
+    # Unless a flight plan would have taken an aircraft over one of these FIR to begin with:
+    plan_flew_closed = False
+    if direct_crosses_closed:
+        plan_flew_closed = check_flight_plan_traversed_closed_firs(raw_planned, raw_actual, prepped_closed)
+
+    enroute_pts: list[dict[str, Any]] = []
+    if direct_crosses_closed and not plan_flew_closed:
+        # Ukrainian and Russian FIRs are closed and the flight plan avoided them:
+        # The direct path across the closed FIRs is NOT viable.
+        # Reconstruct along the compliant avoidance corridor using greedy line-of-sight shortcutting.
+        ref_df = raw_planned if not raw_planned.empty else raw_actual
+        if not ref_df.empty and len(ref_df) >= 3:
+            c_coords = [(float(r["longitude"]), float(r["latitude"])) for _, r in ref_df.iterrows()]
+            s_best_i = min(range(len(c_coords)), key=lambda i: haversine_nm(sid_exit[0], sid_exit[1], c_coords[i][1], c_coords[i][0]))
+            e_best_i = min(range(len(c_coords)), key=lambda i: haversine_nm(star_entry[0], star_entry[1], c_coords[i][1], c_coords[i][0]))
+
+            sub_coords = [(sid_exit[1], sid_exit[0])] + c_coords[s_best_i + 1 : e_best_i] + [(star_entry[1], star_entry[0])]
+
+            # Line of sight simplification
+            simplified = [sub_coords[0]]
+            curr_i = 0
+            while curr_i < len(sub_coords) - 1:
+                next_i = len(sub_coords) - 1
+                while next_i > curr_i + 1:
+                    seg = LineString([sub_coords[curr_i], sub_coords[next_i]])
+                    if not prepped_closed.intersects(seg):
+                        break
+                    next_i -= 1
+                simplified.append(sub_coords[next_i])
+                curr_i = next_i
+
+            # Densify segments so waypoint spacing is smooth (approx 80-100 NM)
+            densified: list[tuple[float, float]] = []
+            for i in range(len(simplified) - 1):
+                p1_lon, p1_lat = simplified[i]
+                p2_lon, p2_lat = simplified[i + 1]
+                d_seg = haversine_nm(p1_lat, p1_lon, p2_lat, p2_lon)
+                n_sub = max(1, int(round(d_seg / 90.0)))
+                for k in range(1, n_sub):
+                    frac = k / float(n_sub)
+                    plat, plon = spherical_intermediate_point(p1_lat, p1_lon, p2_lat, p2_lon, frac)
+                    densified.append((plat, plon))
+                if i < len(simplified) - 2:
+                    densified.append((p2_lat, p2_lon))
+
+            for plat, plon in densified:
+                enroute_pts.append({"latitude": plat, "longitude": plon, "flight_level": cruise_fl})
+
+        if not enroute_pts:
+            num_enroute = 12
+            for k in range(1, num_enroute):
+                frac = k / float(num_enroute)
+                plat, plon = spherical_intermediate_point(sid_exit[0], sid_exit[1], star_entry[0], star_entry[1], fraction=frac)
+                enroute_pts.append({"latitude": plat, "longitude": plon, "flight_level": cruise_fl})
+    else:
+        # Direct orthodromic route is completely viable
+        num_enroute = 12
+        for k in range(1, num_enroute):
+            frac = k / float(num_enroute)
+            plat, plon = spherical_intermediate_point(sid_exit[0], sid_exit[1], star_entry[0], star_entry[1], fraction=frac)
+            enroute_pts.append({"latitude": plat, "longitude": plon, "flight_level": cruise_fl})
+
+    # Reconstruct en-route distance along the viable enroute path
+    enroute_chain = [(sid_exit[0], sid_exit[1])] + [(pt["latitude"], pt["longitude"]) for pt in enroute_pts] + [(star_entry[0], star_entry[1])]
+    enroute_direct_dist_nm = sum(
+        haversine_nm(enroute_chain[i][0], enroute_chain[i][1], enroute_chain[i+1][0], enroute_chain[i+1][1])
+        for i in range(len(enroute_chain) - 1)
+    )
     ideal_dist_nm = round(sid_dist_nm + enroute_direct_dist_nm + star_dist_nm, 1)
 
     # Actual and planned metrics from dataset
@@ -583,15 +741,8 @@ def reconstruct_ideal_flight(
     # 6. Synthesize 4D Ideal Waypoints
     # Assembles:
     # 1. Mandatory Departure SID leg (runway threshold to SID exit fix)
-    # 2. Reconstructed Direct En-route leg (Free Route Airspace Great Circle arc at cruise FL)
+    # 2. Reconstructed En-route leg (FRA direct or conflict-avoidance corridor at cruise FL)
     # 3. Mandatory Arrival STAR leg (STAR entry fix to destination runway threshold, holding eliminated)
-    num_enroute = 12
-    enroute_pts = []
-    for k in range(1, num_enroute):
-        frac = k / float(num_enroute)
-        plat, plon = spherical_intermediate_point(sid_exit[0], sid_exit[1], star_entry[0], star_entry[1], fraction=frac)
-        enroute_pts.append({"latitude": plat, "longitude": plon, "flight_level": cruise_fl})
-
     all_coords = []
     # 1. SID points (mandatory departure procedure)
     for pt in sid_points:
